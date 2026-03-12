@@ -2,12 +2,11 @@
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-REPO_CLONE_URL_BASE="https://github.com/ferriolimidias/agenteos.git"
+REPO_URL="https://github.com/ferriolimidias/agenteos.git"
 PROJECT_NAME="agenteos"
 PROJECT_DIR=""
-DOMAIN=""
-SSL_EMAIL=""
-GITHUB_TOKEN=""
+DOMAIN="${DOMAIN:-}"
+SSL_EMAIL="${SSL_EMAIL:-}"
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -15,98 +14,153 @@ else
   SUDO="sudo"
 fi
 
+# Primeira acao: aguardar locks do apt e atualizacoes de primeiro boot.
+while true; do
+  if pgrep -fa "unattended-upgrades?|apt.systemd.daily|apt-get|apt |dpkg" >/dev/null 2>&1; then
+    echo "Aguardando processos de atualizacao do sistema liberarem..."
+    sleep 5
+    continue
+  fi
+
+  locked=0
+  for lock_file in \
+    /var/lib/dpkg/lock \
+    /var/lib/dpkg/lock-frontend \
+    /var/cache/apt/archives/lock \
+    /var/lib/apt/lists/lock; do
+    if [ -e "${lock_file}" ] && ! ${SUDO} flock -n "${lock_file}" -c true >/dev/null 2>&1; then
+      locked=1
+      break
+    fi
+  done
+
+  if [ "${locked}" -eq 0 ]; then
+    break
+  fi
+
+  echo "Aguardando lock files do apt/dpkg serem liberados..."
+  sleep 5
+done
+
 log() {
   echo
   echo "==> $1"
 }
 
+fail() {
+  echo "ERRO: $1" >&2
+  exit 1
+}
+
 require_command() {
   local cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Erro: comando obrigatorio nao encontrado: ${cmd}"
-    exit 1
-  fi
+  command -v "${cmd}" >/dev/null 2>&1 || fail "Comando obrigatorio nao encontrado: ${cmd}"
 }
 
-ask_inputs() {
-  read -r -p "Informe o dominio do sistema (ex: agents.ferriolimidias.com): " DOMAIN
-  read -r -p "Informe o e-mail para SSL (Certbot): " SSL_EMAIL
-  if [ -z "${DOMAIN}" ] || [ -z "${SSL_EMAIL}" ]; then
-    echo "Erro: dominio e e-mail sao obrigatorios."
-    exit 1
-  fi
+on_error() {
+  local line="$1"
+  fail "Falha na linha ${line}. Abortando."
+}
+trap 'on_error $LINENO' ERR
+
+update_os() {
+  log "Atualizando o sistema operacional por completo"
+  ${SUDO} apt-get update
+  ${SUDO} apt-get upgrade -y
 }
 
-update_system_and_install_basics() {
-  log "Atualizando sistema e instalando pacotes basicos"
-  require_command apt-get
-
-  $SUDO apt-get update -y
-  $SUDO apt-get install -y \
-    git \
-    curl \
-    nginx \
-    certbot \
-    python3-certbot-nginx
-
-  $SUDO systemctl enable --now nginx
+install_base_dependencies() {
+  log "Instalando dependencias basicas"
+  ${SUDO} apt-get install -y git curl ca-certificates certbot python3-certbot-nginx
 }
 
-install_docker() {
-  if command -v docker >/dev/null 2>&1; then
-    log "Docker ja esta instalado. Pulando instalacao."
+install_nginx_if_needed() {
+  if command -v nginx >/dev/null 2>&1; then
+    log "Nginx ja instalado"
   else
-    log "Instalando Docker via script oficial get.docker.com"
-    curl -fsSL https://get.docker.com | sh
+    log "Instalando Nginx"
+    ${SUDO} apt-get install -y nginx
   fi
-
-  $SUDO systemctl enable --now docker
-
-  if ! $SUDO docker compose version >/dev/null 2>&1; then
-    echo "Erro: Docker Compose nao esta disponivel. Verifique a instalacao do Docker."
-    exit 1
-  fi
+  ${SUDO} systemctl enable --now nginx
 }
 
-clone_repository_main() {
-  log "Clonando/atualizando repositorio na branch main"
-  require_command git
+install_docker_if_needed() {
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker ja instalado"
+  else
+    log "Instalando Docker"
+    curl -fsSL https://get.docker.com | ${SUDO} sh
+  fi
 
-  PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
+  ${SUDO} systemctl enable --now docker
 
-  if [ -d "${PROJECT_DIR}/.git" ]; then
-    echo "Clone existente detectado em ${PROJECT_DIR}. Atualizando..."
-    cd "${PROJECT_DIR}"
-    git remote set-url origin "${REPO_CLONE_URL_BASE}"
-    git fetch origin main
-    git checkout -B main origin/main
+  if ! ${SUDO} docker compose version >/dev/null 2>&1; then
+    log "Instalando plugin docker compose"
+    ${SUDO} apt-get install -y docker-compose-plugin
+  fi
+
+  ${SUDO} docker compose version >/dev/null 2>&1 || fail "Docker Compose indisponivel apos instalacao."
+}
+
+resolve_project_directory() {
+  local current_basename
+  current_basename="$(basename "$(pwd)")"
+
+  if [ -d ".git" ] && [ "${current_basename}" = "${PROJECT_NAME}" ]; then
+    PROJECT_DIR="$(pwd)"
+    log "Repositorio local detectado em ${PROJECT_DIR}. Pulando clone."
     return
   fi
 
-  if [ -d "${PROJECT_DIR}" ]; then
-    echo "Erro: diretorio ${PROJECT_DIR} ja existe e nao e um clone Git valido."
-    exit 1
+  if [ -d "$(pwd)/${PROJECT_NAME}/.git" ]; then
+    PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
+    log "Repositorio detectado em ${PROJECT_DIR}. Pulando clone."
+    return
   fi
 
-  read -r -s -p "Informe o GitHub Personal Access Token (PAT): " GITHUB_TOKEN
-  echo
-  if [ -z "${GITHUB_TOKEN}" ]; then
-    echo "Erro: token obrigatorio para primeiro clone."
-    exit 1
+  PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
+  if [ -d "${PROJECT_DIR}" ] && [ ! -d "${PROJECT_DIR}/.git" ]; then
+    fail "Diretorio ${PROJECT_DIR} existe, mas nao e um repositorio Git valido."
   fi
 
-  git clone "https://${GITHUB_TOKEN}@github.com/ferriolimidias/agenteos.git" "${PROJECT_DIR}"
-  cd "${PROJECT_DIR}"
-  git remote set-url origin "${REPO_CLONE_URL_BASE}"
-  git fetch origin main
-  git checkout -B main origin/main
+  if [ ! -d "${PROJECT_DIR}/.git" ]; then
+    log "Clonando repositorio ${PROJECT_NAME}"
+    local clone_url="${REPO_URL}"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+      clone_url="https://${GITHUB_TOKEN}@github.com/ferriolimidias/agenteos.git"
+    fi
+
+    git clone "${clone_url}" "${PROJECT_DIR}" || fail "Falha no clone. Se o repo for privado, exporte GITHUB_TOKEN e execute novamente."
+  fi
 }
 
-configure_nginx_proxy() {
+apply_env_file() {
+  cd "${PROJECT_DIR}"
+
+  if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+    log "Aplicando variaveis: criando .env a partir de .env.example"
+    cp .env.example .env
+  fi
+
+  if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+  fi
+
+  DOMAIN="${DOMAIN:-}"
+  SSL_EMAIL="${SSL_EMAIL:-}"
+
+  [ -n "${DOMAIN}" ] || fail "Defina DOMAIN (env do shell ou .env) para configurar Nginx/Certbot."
+  [ -n "${SSL_EMAIL}" ] || fail "Defina SSL_EMAIL (env do shell ou .env) para executar Certbot."
+}
+
+configure_nginx() {
   local nginx_conf="/etc/nginx/sites-available/agenteos"
 
-  log "Configurando Nginx como proxy reverso"
-  $SUDO tee "${nginx_conf}" >/dev/null <<EOF
+  log "Configurando Nginx para frontend 8080 e backend 8000"
+  ${SUDO} tee "${nginx_conf}" >/dev/null <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -136,50 +190,66 @@ server {
 }
 EOF
 
-  $SUDO ln -sfn /etc/nginx/sites-available/agenteos /etc/nginx/sites-enabled/agenteos
-  if [ -f /etc/nginx/sites-enabled/default ]; then
-    $SUDO rm -f /etc/nginx/sites-enabled/default
-  fi
-
-  $SUDO nginx -t
-  $SUDO systemctl reload nginx
+  ${SUDO} ln -sfn /etc/nginx/sites-available/agenteos /etc/nginx/sites-enabled/agenteos
+  ${SUDO} rm -f /etc/nginx/sites-enabled/default
+  ${SUDO} nginx -t
+  ${SUDO} systemctl reload nginx
 }
 
-run_compose_build() {
-  log "Limpando stack Docker antiga"
+build_and_start_stack() {
   cd "${PROJECT_DIR}"
-  $SUDO docker compose down -v --remove-orphans || true
+  require_command git
 
-  log "Executando build limpo (sem cache)"
-  $SUDO docker compose build --no-cache
-
-  log "Subindo aplicacao com Docker Compose"
-  $SUDO docker compose up -d --remove-orphans
+  log "Executando build blindado do ambiente Docker"
+  ${SUDO} docker compose down -v --remove-orphans || true
+  ${SUDO} docker compose build --no-cache
+  ${SUDO} docker compose up -d --remove-orphans
 }
 
-configure_ssl() {
+wait_for_database() {
+  cd "${PROJECT_DIR}"
+  log "Aguardando banco de dados ficar pronto"
+
+  local max_attempts=90
+  local attempt=1
+  local db_user="${POSTGRES_USER:-postgres}"
+
+  until ${SUDO} docker compose exec -T db pg_isready -U "${db_user}" >/dev/null 2>&1; do
+    if [ "${attempt}" -ge "${max_attempts}" ]; then
+      fail "Banco nao ficou pronto no tempo esperado."
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
+run_certbot() {
+  log "Executando Certbot"
+
   if [ -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
-    log "Certificado SSL ja existe para ${DOMAIN}. Pulando emissao."
+    echo "Certificado para ${DOMAIN} ja existe. Pulando emissao."
     return
   fi
 
-  log "Configurando SSL com Certbot"
-  $SUDO certbot --nginx \
-    -d "${DOMAIN}" \
+  ${SUDO} certbot --nginx \
     --non-interactive \
     --agree-tos \
-    -m "${SSL_EMAIL}" \
-    --redirect
+    --redirect \
+    -d "${DOMAIN}" \
+    -m "${SSL_EMAIL}"
 }
 
 main() {
-  ask_inputs
-  update_system_and_install_basics
-  install_docker
-  clone_repository_main
-  configure_nginx_proxy
-  run_compose_build
-  configure_ssl
+  update_os
+  install_base_dependencies
+  install_nginx_if_needed
+  install_docker_if_needed
+  resolve_project_directory
+  apply_env_file
+  configure_nginx
+  build_and_start_stack
+  wait_for_database
+  run_certbot
 
   echo
   echo "Deploy concluido com sucesso."
