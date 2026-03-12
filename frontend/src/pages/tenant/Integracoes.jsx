@@ -16,7 +16,7 @@ export default function Integracoes() {
     const fetchWebhook = async () => {
       if (!empresa_id) return;
       try {
-        const res = await axios.get(`http://localhost:8000/api/empresas/${empresa_id}/webhooks`);
+        const res = await axios.get(`/api/empresas/${empresa_id}/webhooks`);
         if (res.data && res.data.url) {
           setWebhookUrl(res.data.url);
           setAtivo(res.data.ativo);
@@ -34,7 +34,7 @@ export default function Integracoes() {
     setLoading(true);
     setMessage(null);
     try {
-      await axios.post(`http://localhost:8000/api/empresas/${empresa_id}/webhooks`, {
+      await axios.post(`/api/empresas/${empresa_id}/webhooks`, {
         url: webhookUrl,
         ativo: ativo
       });

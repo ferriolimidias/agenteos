@@ -3,11 +3,17 @@ FROM node:18-alpine as build
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY package.json yarn.lock ./
+RUN npm install -g yarn
+
+# Limpa qualquer resíduo de cache/artefato que possa contaminar o build Linux
+RUN rm -rf node_modules package-lock.json /root/.npm /root/.cache /tmp/*
 
 COPY . .
-RUN npm run build
+RUN rm -rf node_modules package-lock.json /root/.npm /root/.cache /tmp/* \
+  && yarn install --frozen-lockfile --network-timeout 600000 \
+  && yarn cache clean \
+  && yarn build
 
 # Stage 2: Serve
 FROM nginx:alpine

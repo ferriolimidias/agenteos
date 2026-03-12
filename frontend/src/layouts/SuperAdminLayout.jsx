@@ -8,7 +8,7 @@ export default function SuperAdminLayout() {
 
   const fetchConfig = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/admin/configuracoes");
+      const response = await axios.get("/api/admin/configuracoes");
       if (response.data && response.data.nome_sistema) {
         setNomeSistema(response.data.nome_sistema);
       } else {

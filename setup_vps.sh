@@ -31,11 +31,8 @@ require_command() {
 ask_inputs() {
   read -r -p "Informe o dominio do sistema (ex: agents.ferriolimidias.com): " DOMAIN
   read -r -p "Informe o e-mail para SSL (Certbot): " SSL_EMAIL
-  read -r -s -p "Informe o GitHub Personal Access Token (PAT): " GITHUB_TOKEN
-  echo
-
-  if [ -z "${DOMAIN}" ] || [ -z "${SSL_EMAIL}" ] || [ -z "${GITHUB_TOKEN}" ]; then
-    echo "Erro: dominio, e-mail e token sao obrigatorios."
+  if [ -z "${DOMAIN}" ] || [ -z "${SSL_EMAIL}" ]; then
+    echo "Erro: dominio e e-mail sao obrigatorios."
     exit 1
   fi
 }
@@ -56,13 +53,17 @@ update_system_and_install_basics() {
 }
 
 install_docker() {
-  log "Instalando Docker via script oficial get.docker.com"
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker ja esta instalado. Pulando instalacao."
+  else
+    log "Instalando Docker via script oficial get.docker.com"
+    curl -fsSL https://get.docker.com | sh
+  fi
 
-  curl -fsSL https://get.docker.com | sh
   $SUDO systemctl enable --now docker
 
   if ! $SUDO docker compose version >/dev/null 2>&1; then
-    echo "Erro: Docker Compose nao foi disponibilizado apos a instalacao do Docker."
+    echo "Erro: Docker Compose nao esta disponivel. Verifique a instalacao do Docker."
     exit 1
   fi
 }
@@ -87,6 +88,13 @@ clone_repository_main() {
     exit 1
   fi
 
+  read -r -s -p "Informe o GitHub Personal Access Token (PAT): " GITHUB_TOKEN
+  echo
+  if [ -z "${GITHUB_TOKEN}" ]; then
+    echo "Erro: token obrigatorio para primeiro clone."
+    exit 1
+  fi
+
   git clone "https://${GITHUB_TOKEN}@github.com/ferriolimidias/agenteos.git" "${PROJECT_DIR}"
   cd "${PROJECT_DIR}"
   git remote set-url origin "${REPO_CLONE_URL_BASE}"
@@ -104,8 +112,19 @@ server {
     listen [::]:80;
     server_name ${DOMAIN};
 
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -127,12 +146,23 @@ EOF
 }
 
 run_compose_build() {
-  log "Subindo aplicacao com Docker Compose"
+  log "Limpando stack Docker antiga"
   cd "${PROJECT_DIR}"
-  $SUDO docker compose up --build -d
+  $SUDO docker compose down -v --remove-orphans || true
+
+  log "Executando build limpo (sem cache)"
+  $SUDO docker compose build --no-cache
+
+  log "Subindo aplicacao com Docker Compose"
+  $SUDO docker compose up -d --remove-orphans
 }
 
 configure_ssl() {
+  if [ -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+    log "Certificado SSL ja existe para ${DOMAIN}. Pulando emissao."
+    return
+  fi
+
   log "Configurando SSL com Certbot"
   $SUDO certbot --nginx \
     -d "${DOMAIN}" \

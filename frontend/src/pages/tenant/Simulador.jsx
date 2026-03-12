@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Send, Bot, RefreshCw } from "lucide-react";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 90000; // 90s max wait
 

@@ -34,7 +34,7 @@ services:
       - db
       - redis
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       # O compose resolve o host "db" para o container PostgreSQL e "redis" pro Redis
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-agent_os}
@@ -52,7 +52,8 @@ services:
     depends_on:
       - backend
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:80"
+    volumes: []
 
 volumes:
   postgres_data:

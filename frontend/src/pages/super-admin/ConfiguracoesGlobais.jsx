@@ -17,7 +17,7 @@ export default function ConfiguracoesGlobais() {
 
   const carregarConfiguracoes = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/admin/configuracoes");
+      const response = await axios.get("/api/admin/configuracoes");
       setFormData({
         nome_sistema: response.data.nome_sistema || "",
         cor_primaria: response.data.cor_primaria || "",
@@ -44,7 +44,7 @@ export default function ConfiguracoesGlobais() {
     setSaving(true);
     setMessage(null);
     try {
-      await axios.put("http://localhost:8000/api/admin/configuracoes", formData);
+      await axios.put("/api/admin/configuracoes", formData);
       setMessage({ type: "success", text: "Configurações salvas com sucesso!" });
       // Evento opcional para notificar o layout se quiser atualizar o DOM em tempo real
       window.dispatchEvent(new Event("configuracoesUpdated"));
