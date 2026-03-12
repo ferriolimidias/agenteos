@@ -1,0 +1,1014 @@
+import os
+import asyncio
+from typing import TypedDict, List, Optional, Literal, Any
+from langgraph.graph import StateGraph, END
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+# Removido LLM global: será instanciado via get_llm
+embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+
+async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -> Any:
+    api_key = None
+    if empresa_id:
+        try:
+            import uuid
+            if isinstance(empresa_id, str):
+                empresa_uuid = uuid.UUID(empresa_id)
+            else:
+                empresa_uuid = empresa_id
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa = result.scalars().first()
+                if empresa:
+                    if empresa.credenciais_canais:
+                        api_key = empresa.credenciais_canais.get("openai_api_key")
+                    if not modelo_ia:
+                        modelo_ia = empresa.modelo_ia
+        except Exception as e:
+            print(f"Erro ao buscar credenciais IA: {e}")
+            pass
+            
+    from app.api.utils import get_llm_model
+    try:
+        return get_llm_model(modelo_ia or "gpt-4o-mini", api_key=api_key)
+    except Exception as e:
+        print(f"Erro instanciando modelo {modelo_ia}: {e}")
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+
+from db.database import AsyncSessionLocal
+from db.models import Conhecimento, Especialista, Empresa, CRMLead, CRMFunil, CRMEtapa, FerramentaAPI
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
+from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_from_json_schema
+from langchain_core.tools import StructuredTool
+from langgraph.prebuilt import create_react_agent, ToolNode
+import httpx
+
+async def disparar_webhook_saida(lead_id: str):
+    import uuid
+    from db.models import WebhookSaida
+    try:
+        lead_uuid = uuid.UUID(lead_id)
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead)
+                .where(CRMLead.id == lead_uuid)
+                .options(selectinload(CRMLead.etapa))
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                return
+                
+            result_wh = await session.execute(
+                select(WebhookSaida).where(
+                    WebhookSaida.empresa_id == lead.empresa_id,
+                    WebhookSaida.ativo == True
+                )
+            )
+            webhook = result_wh.scalars().first()
+            
+            if webhook and webhook.url:
+                payload = {
+                    "evento": "lead_atualizado",
+                    "telefone": lead.telefone_contato,
+                    "nome": lead.nome_contato,
+                    "etapa_crm": lead.etapa.nome if lead.etapa else None
+                }
+                async with httpx.AsyncClient() as client:
+                    await client.post(webhook.url, json=payload, timeout=5.0)
+    except Exception as e:
+        print(f"Erro ao disparar webhook: {e}")
+
+# Mapeamento de funções Nativas para as Ferramentas do banco (FerramentaAPI)
+async def avancar_etapa_crm(lead_id: str, nova_etapa_id: str) -> str:
+    import uuid
+    try:
+        lead_uuid = uuid.UUID(lead_id)
+        etapa_uuid = uuid.UUID(nova_etapa_id)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(CRMLead).where(CRMLead.id == lead_uuid).values(etapa_id=etapa_uuid)
+            )
+            await session.commit()
+            
+        asyncio.create_task(disparar_webhook_saida(lead_id))
+        
+        return f"Sucesso: o lead de ID {lead_id} foi movido para a etapa {nova_etapa_id}."
+    except Exception as e:
+        return f"Erro ao atualizar etapa do CRM: {str(e)}"
+
+async def consultar_agenda(data_inicio: str, data_fim: str) -> str:
+    return f"Busca realizada de {data_inicio} até {data_fim}. Resposta Mock: A agenda está livre."
+
+async def transferir_para_humano(telefone: str, empresa_id: str) -> str:
+    import uuid
+    from datetime import datetime, timedelta
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CRMLead).where(CRMLead.telefone_contato == telefone, CRMLead.empresa_id == empresa_uuid)
+            )
+            lead = result.scalars().first()
+            if lead:
+                # Update bot_pausado_ate to +24h
+                lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+                
+                # Fetch standard funil
+                result_funil = await session.execute(
+                    select(CRMFunil).where(CRMFunil.empresa_id == empresa_uuid)
+                )
+                funil = result_funil.scalars().first()
+                if funil:
+                    # Find etapa 'Aguardando Humano'
+                    result_etapa = await session.execute(
+                        select(CRMEtapa).where(
+                            CRMEtapa.funil_id == funil.id,
+                            CRMEtapa.nome == 'Aguardando Humano'
+                        )
+                    )
+                    etapa = result_etapa.scalars().first()
+                    if not etapa:
+                        nova_etapa = CRMEtapa(funil_id=funil.id, nome="Aguardando Humano", ordem=99)
+                        session.add(nova_etapa)
+                        await session.flush()
+                        lead.etapa_id = nova_etapa.id
+                    else:
+                        lead.etapa_id = etapa.id
+                
+                await session.commit()
+                
+                asyncio.create_task(disparar_webhook_saida(str(lead.id)))
+                
+                return "Transferência solicitada internamente com sucesso. Avise o cliente de forma amigável que um especialista humano assumirá o atendimento em breve."
+            return "Lead não encontrado para realizar a transferência."
+    except Exception as e:
+        return f"Erro ao transferir para humano: {str(e)}"
+
+MAP_FUNCOES_NATIVAS = {
+    "avancar_etapa_crm": avancar_etapa_crm,
+    "consultar_agenda": consultar_agenda,
+    "transferir_para_humano": transferir_para_humano
+}
+
+async def ler_dados_empresa(empresa_uuid) -> tuple:
+    if not empresa_uuid:
+        return "Empresa Padrão", ""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+        empresa = result.scalars().first()
+        if empresa:
+            return empresa.nome_empresa, empresa.area_atuacao or ""
+        return "Empresa Padrão", ""
+from langgraph.prebuilt import create_react_agent
+
+async def buscar_conhecimento(pergunta: str, empresa_uuid):
+    print(f"[RAG] Buscando conhecimento para a pergunta: '{pergunta}' na empresa {empresa_uuid}")
+    pergunta_embedding = await embeddings_model.aembed_query(pergunta)
+    
+    async with AsyncSessionLocal() as session:
+        # Busca vetorial filtrada por empresa e ordenada pela distância de cosseno
+        query = select(Conhecimento).where(
+            Conhecimento.empresa_id == empresa_uuid
+        ).order_by(
+            Conhecimento.embedding.cosine_distance(pergunta_embedding)
+        ).limit(3)
+        
+        resultado = await session.execute(query)
+        trechos = resultado.scalars().all()
+        
+        if not trechos:
+            return "Nenhum contexto adicional encontrado na base de conhecimento."
+            
+        contexto = "\n\n".join([f"Contexto {i+1}:\n{t.conteudo}" for i, t in enumerate(trechos)])
+        return contexto
+
+# 1. Definir o Estado
+class AgentState(TypedDict):
+    empresa_id: str
+    identificador_origem: str
+    canal: str
+    mensagens: list
+    historico_bd: str          # Histórico real do PostgreSQL, formatado
+    nome_contato: Optional[str]
+    intencao: List[str]
+    respostas_especialistas: List[str]
+    handoff_requested: bool
+    resposta_final: Optional[str]
+    status_conversa: Optional[str]
+    lead_id: Optional[str]
+
+# 1.5. Modelos de Estruturação
+class DecisaoAtendente(BaseModel):
+    precisa_roteamento: bool = Field(description="True se a solicitação exigir buscar dados de terceiros (preços, agenda, sistema, técnicos, etc) ou repasse humano. False se for uma interação que você pode responder apenas com o histórico e seu contexto (ex: saudações, small talk).")
+    resposta: Optional[str] = Field(description="A mensagem formulada para o cliente caso não precise rotear. Nula caso precisa_roteamento seja True.")
+    status_conversa: Literal['ABERTA', 'ENCERRADA'] = Field(description="ENCERRADA se o cliente encerrou a conversa com clareza, senão ABERTA.")
+
+class AnaliseRoteador(BaseModel):
+    intencao: List[str] = Field(description="Lista OBRIGATÓRIA com a(s) intenção(ões) principal(is) do usuário. Deve conter o nome exato dos especialistas relevantes. Ex: ['Comercial', 'Suporte'].")
+    handoff_requested: bool = Field(description="True se o usuário pediu explicitamente para falar com humano ou atendente.")
+
+# 2. Nós
+async def node_crm(state: AgentState):
+    print(f"[NODE CRM] Consultando banco para o identificador: {state['identificador_origem']} ({state['canal']})")
+    
+    origem = state.get("identificador_origem", "")
+    empresa_id = state.get("empresa_id")
+    
+    # 1. Verifica se já existe um Lead para este telefone nesta empresa
+    async with AsyncSessionLocal() as session:
+        # Busca lead
+        result = await session.execute(
+            select(CRMLead)
+            .where(CRMLead.telefone_contato == origem, CRMLead.empresa_id == empresa_id)
+        )
+        lead = result.scalars().first()
+        
+        if lead:
+            state["nome_contato"] = lead.nome_contato
+            state["lead_id"] = str(lead.id)
+            print(f"[NODE CRM] Lead existente encontrado. ID: {state['lead_id']}")
+        else:
+            print(f"[NODE CRM] Lead não encontrado. Iniciando criação automática...")
+            
+            # Se a mensagem inicial vier com "novo", simularemos falta de nome
+            # Em prod, vem do webhook da Meta/Evolution
+            possivel_nome = "Usuário (Auto)"
+            if "novo" in origem.lower(): 
+                possivel_nome = None 
+
+            try:
+                # Buscar o funil padrao ou criar se não existir
+                result_funil = await session.execute(
+                    select(CRMFunil)
+                    .where(CRMFunil.empresa_id == empresa_id)
+                    .options(selectinload(CRMFunil.etapas))
+                )
+                funil = result_funil.scalars().first()
+                
+                etapa_inicial_id = None
+                
+                if funil and funil.etapas:
+                    # Pega a primeira etapa (ordem)
+                    etapa_inicial = min(funil.etapas, key=lambda x: x.ordem)
+                    etapa_inicial_id = etapa_inicial.id
+                elif not funil:
+                    # Precisa criar o funil padrao aqui também caso chegue a msg antes do admin abrir o relatorio
+                    novo_funil = CRMFunil(empresa_id=empresa_id, nome="Pipeline Padrão")
+                    session.add(novo_funil)
+                    await session.flush()
+                    
+                    etapa_padrao = CRMEtapa(funil_id=novo_funil.id, nome="Novo Lead", ordem=1)
+                    session.add(etapa_padrao)
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Em Atendimento", ordem=2))
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Fechado", ordem=3))
+                    await session.flush()
+                    
+                    etapa_inicial_id = etapa_padrao.id
+                
+                # Criar Lead
+                if possivel_nome:
+                    novo_lead = CRMLead(
+                        empresa_id=empresa_id,
+                        telefone_contato=origem,
+                        nome_contato=possivel_nome,
+                        etapa_id=etapa_inicial_id,
+                        historico_resumo="Lead capturado automaticamente via integração."
+                    )
+                    session.add(novo_lead)
+                    await session.commit()
+                    await session.refresh(novo_lead)
+                    
+                    state["nome_contato"] = novo_lead.nome_contato
+                    state["lead_id"] = str(novo_lead.id)
+                    print(f"[NODE CRM] Novo Lead criado com sucesso. ID: {state['lead_id']}")
+                else:
+                    state["nome_contato"] = None
+                    state["lead_id"] = None
+                    print(f"[NODE CRM] Não há nome suficiente para criar Lead agora. Roteando para captura.")
+
+            except Exception as e:
+                print(f"[NODE CRM] Erro ao criar lead auto: {e}")
+                await session.rollback()
+                state["nome_contato"] = None
+                state["lead_id"] = None
+                
+    return state
+
+async def node_capturar_nome(state: AgentState):
+    print(f"[NODE CAPTURAR NOME] Gerando mensagem amigável para perguntar o nome...")
+    
+    prompt = "Você é um assistente virtual prestativo. O usuário iniciou a conversa, mas não sabemos o nome dele. Gere uma mensagem curta, simpática e humana pedindo o nome dele."
+    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+    
+    llm = await get_llm(state.get("empresa_id"))
+    resposta = await llm.ainvoke([("system", prompt), ("user", ultima_mensagem)])
+    state["resposta_final"] = resposta.content
+    
+    # Disparar via Evolution (caso caia no nó de captura de nome e encerre aqui)
+    try:
+        import uuid
+        empresa_id = state.get("empresa_id")
+        empresa_uuid = uuid.UUID(empresa_id) if empresa_id else None
+        
+        if empresa_uuid and state.get("identificador_origem"):
+            from app.services.evolution_service import enviar_mensagem_whatsapp
+            from db.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                await enviar_mensagem_whatsapp(
+                    empresa_uuid, 
+                    state["identificador_origem"], 
+                    state["resposta_final"], 
+                    session
+                )
+    except Exception as e:
+        print(f"[NODE CAPTURAR NOME] Falha silenciosa ao enviar via Evolution API: {e}")
+
+    return state
+
+async def node_atendente(state: AgentState):
+    print(f"[NODE ATENDENTE] Iniciando processamento...")
+    import uuid
+    from langchain_core.messages import SystemMessage
+    from app.api.utils import get_orchestrator_system_prompt
+
+    # 1. Inicialização de Variáveis Locais (Prevenção de UnboundLocalError)
+    empresa_id = state.get("empresa_id")
+    lead_id = state.get("lead_id")
+    historico_bd = state.get("historico_bd", "")
+    respostas_especialistas = state.get("respostas_especialistas", [])
+    identificador = state.get("identificador_origem")
+    canal = state.get("canal")
+    
+    try:
+        empresa_uuid = uuid.UUID(empresa_id) if empresa_id else None
+    except (ValueError, TypeError):
+        empresa_uuid = None
+
+    # Helper para montar bloco de contexto XML
+    def _bloco_xml(historico: str, respostas: list[str]) -> str:
+        hist_content = historico.strip() if historico and historico.strip() \
+            else "(nenhuma interacao anterior registrada)"
+        esp_content = "\n".join(respostas).strip() if respostas \
+            else "(nenhuma resposta de especialista neste turno)"
+        return (
+            f"<historico_conversa>\n{hist_content}\n</historico_conversa>\n\n"
+            f"<respostas_especialistas>\n{esp_content}\n</respostas_especialistas>"
+        )
+
+    # Identifica se é o primeiro turno para a trava de saudação
+    is_primeira_msg = (not historico_bd or historico_bd.strip() == "(nenhuma interacao anterior registrada)")
+
+    # Pegar prompt base
+    system_prompt_base = await get_orchestrator_system_prompt(empresa_id, is_primeira_mensagem=is_primeira_msg)
+
+    # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
+    if respostas_especialistas:
+        print(f"[NODE ATENDENTE] Fase de Síntese: Consolidando {len(respostas_especialistas)} resposta(s)...")
+
+        bloco_xml = _bloco_xml(historico_bd, respostas_especialistas)
+
+        bloco_xml_sintese = _bloco_xml(historico_bd, respostas_especialistas)
+
+        prompt_sintese = f"""{system_prompt_base}
+
+{bloco_xml_sintese}
+
+<instrucao_final>
+Com base nas <respostas_especialistas> e no <historico_conversa>, consolide as informações em uma ÚNICA resposta fluida e coesa.
+Assuma as informações como suas. NUNCA mencione que consultou especialistas ou sistemas internos.
+</instrucao_final>"""
+
+        print(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
+        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + state.get("mensagens", [])
+        llm = await get_llm(empresa_id)
+        resposta = await llm.ainvoke(mensagens_para_llm)
+
+        state["resposta_final"] = resposta.content
+        state["respostas_especialistas"] = []
+        state["intencao"] = []
+
+        try:
+            if empresa_uuid and identificador and canal != "simulador":
+                from app.services.evolution_service import enviar_mensagem_whatsapp
+                from db.database import AsyncSessionLocal
+                import asyncio
+                async with AsyncSessionLocal() as session:
+                    partes = [p.strip() for p in state["resposta_final"].split('\n\n') if p.strip()]
+                    for idx, parte in enumerate(partes):
+                        await enviar_mensagem_whatsapp(empresa_uuid, identificador, parte, session)
+                        if idx < len(partes) - 1:
+                            await asyncio.sleep(1.5)
+        except Exception as e:
+            print(f"[NODE ATENDENTE] Falha silenciosa no Evolution: {e}")
+
+        return state
+
+    # ── FASE INICIAL (Recepção e Decisão) ────────────────────────────────────────
+    print("[NODE ATENDENTE] Fase Inicial: Avaliando small-talk ou roteamento...")
+
+    bloco_xml = _bloco_xml(historico_bd, [])
+
+    prompt_decisao = f"""{system_prompt_base}
+
+{bloco_xml}
+
+<instrucao_decisao>
+Avalie a última mensagem do cliente considerando TODO o <historico_conversa>.
+Se ele estiver apenas cumprimentando, encerrando, ou fazendo small talk, defina precisa_roteamento=False e forneça sua resposta em 'resposta'. Máximo de 2 frases.
+Se a intenção demandar suporte, preços, agendamento ou dados operacionais, defina precisa_roteamento=True e deixe 'resposta' nula.
+</instrucao_decisao>"""
+
+    print(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
+    mensagens_para_llm = [SystemMessage(content=prompt_decisao)] + state.get("mensagens", [])
+
+    llm = await get_llm(empresa_id)
+    llm_json = llm.with_structured_output(DecisaoAtendente)
+    resultado = await llm_json.ainvoke(mensagens_para_llm)
+
+    state["status_conversa"] = resultado.status_conversa
+
+    if not resultado.precisa_roteamento and resultado.resposta:
+        state["resposta_final"] = resultado.resposta
+        state["intencao"] = []
+        state["respostas_especialistas"] = []
+        print(f"[NODE ATENDENTE] Resolvido via Small Talk: {resultado.resposta}")
+        try:
+            if empresa_uuid and identificador and canal != "simulador":
+                from app.services.evolution_service import enviar_mensagem_whatsapp
+                from db.database import AsyncSessionLocal
+                import asyncio
+                async with AsyncSessionLocal() as session:
+                    partes = [p.strip() for p in state["resposta_final"].split('\n\n') if p.strip()]
+                    for idx, parte in enumerate(partes):
+                        await enviar_mensagem_whatsapp(empresa_uuid, identificador, parte, session)
+                        if idx < len(partes) - 1:
+                            await asyncio.sleep(1.5)
+        except Exception as e:
+            pass
+    else:
+        print("[NODE ATENDENTE] Optou por acionar Roteador.")
+        state["resposta_final"] = None
+
+    return state
+
+async def node_roteador_maestro(state: AgentState):
+    print(f"[NODE ROTEADOR] Mapeando intenções para Especialistas...")
+    
+    import uuid
+    from langchain_core.messages import SystemMessage
+    empresa_id = state.get("empresa_id")
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        empresa_uuid = None
+
+    nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
+    contexto_empresa = f"Você mapeia requisições para a empresa {nome_empresa}"
+    if area_atuacao:
+        contexto_empresa += f", área: {area_atuacao}."
+    else:
+        contexto_empresa += "."
+
+    especialistas_str = "- 'geral': Atendimento geral."
+    if empresa_uuid:
+        from db.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Especialista).where(
+                    Especialista.ativo == True,
+                    Especialista.empresa_id == empresa_uuid
+                ).options(selectinload(Especialista.ferramentas))
+            )
+            especialistas_ativos = result.scalars().all()
+            if especialistas_ativos:
+                linhas_esp = []
+                for e in especialistas_ativos:
+                    desc = e.descricao_missao if e.descricao_missao else f"{e.prompt_sistema[:150]}..."
+                    if getattr(e, 'ferramentas', None):
+                        fd = [f.nome_ferramenta for f in e.ferramentas]
+                        if fd:
+                            desc += f" (Ferramentas: {', '.join(fd)})."
+                    linhas_esp.append(f"- '{e.nome}': {desc}")
+                especialistas_str = "\n".join(linhas_esp)
+
+    prompt = f"""[ROTEADOR MECÂNICO]
+Sua função é APENAS rotear.
+{contexto_empresa}
+
+ESPECIALISTAS DISPONÍVEIS:
+{especialistas_str}
+
+Com base na última mensagem do cliente, retorne um ARRAY/LISTA contendo os nomes exatos dos especialistas que devem atuar. 
+Se a requisição tiver múltiplos assuntos, retorne múltiplos nomes (Ex: ['Comercial', 'Suporte']).
+Se nenhum encaixar perfeitamente, retorne ['geral']."""
+    
+    mensagens_para_llm = [SystemMessage(content=prompt)] + state.get("mensagens", [])
+
+    # ── Busca explícita do modelo_roteador — independente do modelo_ia do Atendente ──
+    modelo_roteador = None
+    if empresa_uuid:
+        try:
+            from db.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as _sess_rot:
+                _res_emp = await _sess_rot.execute(
+                    select(Empresa).where(Empresa.id == empresa_uuid)
+                )
+                _emp = _res_emp.scalars().first()
+                if _emp:
+                    modelo_roteador = getattr(_emp, "modelo_roteador", None)
+        except Exception as _e_rot:
+            print(f"[NODE ROTEADOR] Aviso: falha ao buscar modelo_roteador: {_e_rot}")
+    # ─────────────────────────────────────────────────────────────────────────────────
+
+    print(f"[NODE ROTEADOR] Usando modelo: '{modelo_roteador or 'default'}'")
+    llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_roteador)
+    llm_json = llm.with_structured_output(AnaliseRoteador)
+    resultado = await llm_json.ainvoke(mensagens_para_llm)
+
+    print(f"[LLM ROTEADOR] Intenções: '{resultado.intencao}' | Handoff: {resultado.handoff_requested}")
+    state["intencao"] = resultado.intencao
+    state["respostas_especialistas"] = []
+    state["handoff_requested"] = resultado.handoff_requested
+    return state
+
+async def node_especialista_dinamico(state: AgentState):
+    intencoes = state.get("intencao", ["geral"])
+    if not isinstance(intencoes, list):
+        intencoes = [intencoes] if intencoes else ["geral"]
+        
+    print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
+    
+    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+    
+    import uuid
+    empresa_id = state.get("empresa_id")
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        empresa_uuid = None
+
+    nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
+    contexto_empresa = f"Você atende pela empresa {nome_empresa}"
+    if area_atuacao:
+        contexto_empresa += f", cuja área de atuação é: {area_atuacao}.\n"
+    else:
+        contexto_empresa += ".\n"
+
+    state["respostas_especialistas"] = []
+    
+    for intencao in intencoes:
+        contexto_adicional = ""
+        
+        if intencao == "duvida" and empresa_uuid:
+            contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
+            contexto_adicional = f"\n\nContexto da Base de Conhecimento para apoiar sua resposta:\n{contexto_rag}"
+            
+        prompt_base = f"Você é um especialista prestativo e amigável.{contexto_adicional}"
+        tools_disponiveis = []
+        descricoes_tools = []
+        
+        especialista_db = None
+        if empresa_uuid:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Especialista)
+                    .where(
+                        Especialista.nome == intencao, 
+                        Especialista.ativo == True,
+                        Especialista.empresa_id == empresa_uuid
+                    )
+                    .options(
+                        selectinload(Especialista.api_connections),
+                        selectinload(Especialista.ferramentas)
+                    )
+                )
+                especialista_db = result.scalars().first()
+                
+                if especialista_db:
+                    # RAG Check
+                    if getattr(especialista_db, 'usar_rag', False) or intencao == "duvida":
+                        contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
+                        contexto_adicional = f"\n\nContexto da Base de Conhecimento para apoiar sua resposta:\n{contexto_rag}"
+
+                    prompt_base = especialista_db.prompt_sistema + contexto_adicional
+                    
+                    # Carrega ferramentas associadas a este especialista (API Connections)
+                    for conexao in especialista_db.api_connections:
+                        try:
+                            nova_tool = create_dynamic_tool(conexao)
+                            tools_disponiveis.append(nova_tool)
+                            desc = nova_tool.description if nova_tool.description else "Ferramenta sem descrição."
+                            descricoes_tools.append(f"- {conexao.nome}: {desc}")
+                        except Exception as e:
+                            print(f"Erro ao instanciar ferramenta {conexao.nome}: {e}")
+
+                # Busca dinâmica de Ferramentas vinculadas a este Especialista
+                ferramentas_nativas = especialista_db.ferramentas if especialista_db else []
+                for f_db in ferramentas_nativas:
+                    try:
+                        schema_dict = f_db.schema_parametros if f_db.schema_parametros else {}
+                        if isinstance(schema_dict, str):
+                            import json
+                            schema_dict = json.loads(schema_dict)
+                            
+                        ArgsSchema = _create_pydantic_model_from_json_schema(
+                            schema_dict, 
+                            model_name=f"{f_db.nome_ferramenta}Args"
+                        )
+
+                        if f_db.nome_ferramenta in MAP_FUNCOES_NATIVAS:
+                            # Hardcoded native function
+                            func_python = MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta]
+                            nova_tool = StructuredTool(
+                                name=f_db.nome_ferramenta,
+                                description=f_db.descricao_ia,
+                                args_schema=ArgsSchema,
+                                coroutine=func_python
+                            )
+                            tools_disponiveis.append(nova_tool)
+                            descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
+                        elif getattr(f_db, 'url', None):
+                            # Dynamic HTTP Builder Tool
+                            headers_str = getattr(f_db, 'headers', '{}')
+                            payload_str = getattr(f_db, 'payload', '{}')
+                            
+                            def create_http_tool_coroutine(url, method, headers_json, payload_json, nome_tool):
+                                async def http_tool_coroutine(**kwargs) -> str:
+                                    import json
+                                    import httpx
+                                    
+                                    print(f"[TOOL EXECUTION] Chamando {nome_tool} com parametros: {kwargs}")
+                                    
+                                    # Parse JSONs safely
+                                    try:
+                                        h_dict = json.loads(headers_json) if headers_json else {}
+                                    except:
+                                        h_dict = {}
+                                        
+                                    try:
+                                        p_dict = json.loads(payload_json) if payload_json else {}
+                                    except:
+                                        p_dict = {}
+
+                                    try:
+                                        # Substituir {{variaveis}} no URL
+                                        final_url = url or ""
+                                        for k, v in kwargs.items():
+                                            final_url = final_url.replace(f"{{{{{k}}}}}", str(v))
+                                            # Suporte legado para single brackets caso o cliente o use
+                                            final_url = final_url.replace(f"{{{k}}}", str(v))
+                                            
+                                        # Substituir {{variaveis}} no Payload (convertendo para string, substituindo e voltando para dict)
+                                        p_str = json.dumps(p_dict)
+                                        for k, v in kwargs.items():
+                                            p_str = p_str.replace(f"{{{{{k}}}}}", str(v))
+                                        final_payload = json.loads(p_str)
+
+                                        async with httpx.AsyncClient() as client:
+                                            if method.upper() == "GET":
+                                                resp = await client.get(final_url, headers=h_dict, params=kwargs, timeout=10.0)
+                                            elif method.upper() == "POST":
+                                                resp = await client.post(final_url, headers=h_dict, json=final_payload, timeout=10.0)
+                                            elif method.upper() == "PUT":
+                                                resp = await client.put(final_url, headers=h_dict, json=final_payload, timeout=10.0)
+                                            elif method.upper() == "DELETE":
+                                                resp = await client.delete(final_url, headers=h_dict, params=kwargs, timeout=10.0)
+                                            else:
+                                                resultado = f"Método HTTP {method} não suportado."
+                                                print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                return resultado
+                                                
+                                            if resp.status_code >= 400:
+                                                resultado = f"Erro na requisição: {resp.status_code} - {resp.text}"
+                                                if "cep" in nome_tool.lower() or "cep" in final_url.lower():
+                                                    resultado = "Erro: CEP invalido ou nao encontrado."
+                                                print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                return resultado
+
+                                            resp.raise_for_status()
+                                            
+                                            try:
+                                                resp_json = resp.json()
+                                                if isinstance(resp_json, dict) and resp_json.get("erro") in [True, "true", "True"]:
+                                                    if "cep" in nome_tool.lower() or "cep" in final_url.lower():
+                                                        resultado = "Erro: CEP invalido ou nao encontrado."
+                                                    else:
+                                                        resultado = f"Erro na API: {resp.text}"
+                                                    print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                    return resultado
+                                            except Exception:
+                                                pass
+
+                                            resultado = resp.text
+                                            print(f"[TOOL RESULT] Resposta: {resultado}")
+                                            return resultado
+                                    except Exception as e:
+                                        resultado = f"Falha ao executar ferramenta {nome_tool}: {str(e)}"
+                                        if "cep" in nome_tool.lower():
+                                            resultado = "Erro: CEP invalido ou nao encontrado."
+                                        print(f"[TOOL RESULT] Resposta: {resultado}")
+                                        return resultado
+                                return http_tool_coroutine
+
+                            nova_tool = StructuredTool(
+                                name=f_db.nome_ferramenta,
+                                description=f_db.descricao_ia,
+                                args_schema=ArgsSchema,
+                                coroutine=create_http_tool_coroutine(f_db.url, f_db.metodo, headers_str, payload_str, f_db.nome_ferramenta)
+                            )
+                            tools_disponiveis.append(nova_tool)
+                            descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
+
+                    except Exception as e:
+                        print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
+
+        system_message_adicional = f"\n{contexto_empresa}O nome do usuário é: {state['nome_contato']}."
+        
+        if descricoes_tools:
+            system_message_adicional += "\n\nVocê tem acesso às seguintes ferramentas:\n"
+            system_message_adicional += "\n".join(descricoes_tools)
+            system_message_adicional += "\nUse-as se a requisição do usuário exigir."
+            
+        if state.get("handoff_requested", False):
+            system_message_adicional += "\n\nInformação importante: O usuário pediu atendimento humano. Avise que irá transferir."
+            
+        prompt_completo = prompt_base + system_message_adicional
+
+        modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, 'modelo_ia') else None
+        llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
+        print(f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista '{intencao}' com modelo '{modelo_esp or 'default'}'...")
+        if tools_disponiveis:
+            print(f"  Fazendo bind dinâmico via llm.bind_tools para {len(tools_disponiveis)} ferramenta(s)")
+            llm_with_tools = llm.bind_tools(tools_disponiveis)
+            tool_node = ToolNode(tools_disponiveis)
+            
+            from langchain_core.messages import SystemMessage, HumanMessage
+            mensagens = [SystemMessage(content=prompt_completo), HumanMessage(content=ultima_mensagem)]
+            
+            for _ in range(5):
+                resposta = await llm_with_tools.ainvoke(mensagens)
+                mensagens.append(resposta)
+                
+                if hasattr(resposta, "tool_calls") and len(resposta.tool_calls) > 0:
+                    nomes = [t['name'] for t in resposta.tool_calls]
+                    print(f"  Ferramentas acionadas pelo fluxo: {nomes}")
+                    try:
+                        # Executa o ToolNode Langgraph Customizado em loop local
+                        resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
+                        mensagens.extend(resultado_toolnode["messages"])
+                    except Exception as e:
+                        print(f"  Erro no nó de execução ToolNode: {e}")
+                        resposta_parcial = f"Erro no sistema de execução: {e}"
+                        break
+                else:
+                    resposta_parcial = resposta.content
+                    break
+            else:
+                resposta_parcial = "Tentei utilizar as ferramentas várias vezes mas não consegui concluir. Houve limite de tentativas."
+        else:
+            print("  Resposta direta via LLM (sem ferramentas)")
+            resposta = await llm.ainvoke([("system", prompt_completo), ("user", ultima_mensagem)])
+            resposta_parcial = resposta.content
+            
+        state["respostas_especialistas"].append(f"[{intencao.upper()}]: {resposta_parcial}")
+        
+    return state
+
+# Função condicional de roteamento
+def router_crm(state: AgentState):
+    if state.get("nome_contato") is None:
+        return "capturar_nome"
+    return "node_atendente"
+
+# 3. Desenhar o Grafo
+workflow = StateGraph(AgentState)
+
+workflow.add_node("node_crm", node_crm)
+workflow.add_node("node_capturar_nome", node_capturar_nome)
+workflow.add_node("node_atendente", node_atendente)
+workflow.add_node("node_roteador_maestro", node_roteador_maestro)
+workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
+
+workflow.set_entry_point("node_crm")
+
+workflow.add_conditional_edges(
+    "node_crm",
+    router_crm,
+    {
+        "capturar_nome": "node_capturar_nome",
+        "node_atendente": "node_atendente"
+    }
+)
+
+workflow.add_edge("node_capturar_nome", END)
+
+def router_atendente(state: AgentState):
+    if state.get("resposta_final"):
+        return END
+    return "node_roteador_maestro"
+
+workflow.add_conditional_edges(
+    "node_atendente",
+    router_atendente,
+    {
+        END: END,
+        "node_roteador_maestro": "node_roteador_maestro"
+    }
+)
+
+workflow.add_edge("node_roteador_maestro", "node_especialista_dinamico")
+workflow.add_edge("node_especialista_dinamico", "node_atendente")
+
+from langgraph.checkpoint.memory import MemorySaver
+memory = MemorySaver()
+
+# Compilar com Checkpointer
+graph = workflow.compile(checkpointer=memory)
+
+async def _buscar_historico_lead_para_followup(canal: str, identificador_origem: str, empresa_id: str, limite: int = 5) -> tuple[str, str | None]:
+    """Busca as últimas N mensagens do lead no Postgres e as formata para injeção no prompt."""
+    try:
+        import uuid as _uuid
+        from db.database import AsyncSessionLocal as _ASL
+        from db.models import CRMLead as _CRMLead, MensagemHistorico as _MH
+        from sqlalchemy import select as _select
+
+        empresa_uuid = _uuid.UUID(empresa_id)
+        async with _ASL() as sess:
+            res_lead = await sess.execute(
+                _select(_CRMLead).where(
+                    _CRMLead.empresa_id == empresa_uuid,
+                    _CRMLead.telefone_contato == str(identificador_origem)
+                )
+            )
+            lead = res_lead.scalars().first()
+            if not lead:
+                return "", None
+
+            res_hist = await sess.execute(
+                _select(_MH)
+                .where(_MH.lead_id == lead.id)
+                .order_by(_MH.criado_em.desc())
+                .limit(limite)
+            )
+            msgs = list(reversed(res_hist.scalars().all()))
+            if not msgs:
+                return "", str(lead.id)
+
+            linhas = []
+            for m in msgs:
+                papel = "Assistente" if m.from_me else "Cliente"
+                linhas.append(f"{papel}: {m.texto}")
+            return "\n".join(linhas), str(lead.id)
+    except Exception as e:
+        print(f"[FOLLOW-UP] Aviso: falha ao buscar histórico do Postgres: {e}")
+        return "", None
+
+
+async def gerar_followup_contextual(canal: str, identificador_origem: str, empresa_id: str) -> str:
+    """
+    Gera um Nudge (Nível 1) — apenas as últimas 2 mensagens + nome da empresa.
+    """
+    print("[FOLLOW-UP CONTEXTUAL] Iniciando Nível 1...", flush=True)
+
+    # Busca apenas as últimas 2 mensagens
+    historico, _ = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=2)
+
+    import uuid as _uuid
+    from db.database import AsyncSessionLocal as _ASL
+    from db.models import Empresa as _Empresa
+    from sqlalchemy import select as _sel
+
+    nome_empresa = ""
+    try:
+        async with _ASL() as sess:
+            res_emp = await sess.execute(_sel(_Empresa).where(_Empresa.id == _uuid.UUID(empresa_id)))
+            emp = res_emp.scalars().first()
+            if emp:
+                nome_empresa = emp.nome_empresa or ""
+    except Exception as e:
+        print(f"[FOLLOW-UP] Erro ao buscar empresa: {e}", flush=True)
+
+    print(f"[FOLLOW-UP CONTEXTUAL] Empresa: '{nome_empresa}' | Histórico (últimas 2): {bool(historico)}", flush=True)
+
+    fim_conversa = historico if historico else "(sem histórico registrado)"
+
+    prompt = f"""Você é um assistente da {nome_empresa}. Sua única tarefa é enviar UMA frase curta e educada de acompanhamento, baseada apenas no fim da conversa. Seja sutil e não tente vender nada.
+
+Fim da conversa:
+{fim_conversa}
+
+Exemplo de tom: "Ficou alguma dúvida sobre o que conversamos?"
+
+Responda APENAS com o texto da frase. Máximo 15 palavras."""
+
+    print(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 1) ---\n{prompt}\n" + "-"*40, flush=True)
+    llm = await get_llm(empresa_id)
+    resposta = await llm.ainvoke(prompt)
+    print(f"[FOLLOW-UP RESULT] Resposta da IA: {resposta.content}", flush=True)
+    return resposta.content
+
+
+async def gerar_followup_encerramento(canal: str, identificador_origem: str, empresa_id: str) -> str:
+    """
+    Gera uma Despedida (Nível 2) — mensagem curta de encerramento com nome da empresa.
+    """
+    print("[FOLLOW-UP ENCERRAMENTO] Iniciando Nível 2...", flush=True)
+
+    historico, lead_id = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=3)
+
+    import uuid as _uuid
+    from db.database import AsyncSessionLocal as _ASL
+    from db.models import Empresa as _Empresa
+    from sqlalchemy import select as _sel
+
+    nome_empresa = ""
+    try:
+        async with _ASL() as sess:
+            res_emp = await sess.execute(_sel(_Empresa).where(_Empresa.id == _uuid.UUID(empresa_id)))
+            emp = res_emp.scalars().first()
+            if emp:
+                nome_empresa = emp.nome_empresa or ""
+    except Exception as e:
+        print(f"[FOLLOW-UP ENCERRAMENTO] Erro ao buscar empresa: {e}", flush=True)
+
+    print(f"[FOLLOW-UP ENCERRAMENTO] Gerando prompt para empresa '{nome_empresa}'...", flush=True)
+
+    fim_conversa = historico if historico else "(sem histórico registrado)"
+
+    prompt = f"""Você é um assistente da {nome_empresa}. O cliente não respondeu ao acompanhamento anterior.
+
+Fim da conversa:
+{fim_conversa}
+
+Escreva UMA mensagem curta informando que:
+1. A conversa será arquivada.
+2. O consultor Jose Paulo foi notificado e pode dar continuidade se necessário.
+3. O cliente é sempre bem-vindo a retomar quando quiser.
+
+Seja gentil e breve. Máximo 2 frases. Responda APENAS com o texto da mensagem."""
+
+    print(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 2 ENCERRAMENTO) ---\n{prompt}\n" + "-"*40, flush=True)
+    llm = await get_llm(empresa_id)
+    resposta = await llm.ainvoke(prompt)
+    texto_encerramento = resposta.content
+    print(f"[FOLLOW-UP ENCERRAMENTO RESULT] Resposta da IA: {texto_encerramento}", flush=True)
+
+    # ── UPDATE REAL NO CRM ────────────────────────────────────────────────────
+    if lead_id:
+        try:
+            from db.database import AsyncSessionLocal as _ASL2
+            from db.models import CRMLead as _CRMLead, CRMFunil as _CRMFunil, CRMEtapa as _CRMEtapa
+            from sqlalchemy import select as _sel2, update as _upd
+
+            empresa_uuid = _uuid.UUID(empresa_id)
+            lead_uuid = _uuid.UUID(lead_id)
+
+            async with _ASL2() as sess:
+                _res_funil = await sess.execute(
+                    _sel2(_CRMFunil).where(_CRMFunil.empresa_id == empresa_uuid)
+                )
+                funil = _res_funil.scalars().first()
+
+                etapa_encerramento_id = None
+                if funil:
+                    _res_etapa = await sess.execute(
+                        _sel2(_CRMEtapa).where(
+                            _CRMEtapa.funil_id == funil.id,
+                            _CRMEtapa.nome.in_(["Perdido", "Esfriou", "Perdidos", "Inativo", "Sem Retorno"])
+                        )
+                    )
+                    etapa_enc = _res_etapa.scalars().first()
+                    if etapa_enc:
+                        etapa_encerramento_id = etapa_enc.id
+                        print(f"[CRM UPDATE] Etapa de encerramento encontrada: '{etapa_enc.nome}'", flush=True)
+
+                valores_update = {
+                    "historico_resumo": (
+                        f"[Encerrado por inatividade — follow-up automático]\n"
+                        f"Última interação resumida:\n{historico[:500] if historico else 'Sem histórico registrado.'}"
+                    )
+                }
+                if etapa_encerramento_id:
+                    valores_update["etapa_id"] = etapa_encerramento_id
+
+                await sess.execute(
+                    _upd(_CRMLead)
+                    .where(_CRMLead.id == lead_uuid)
+                    .values(**valores_update)
+                )
+                await sess.commit()
+                print(f"[CRM UPDATE] Lead {lead_id} atualizado com sucesso no banco.", flush=True)
+
+        except Exception as e:
+            print(f"[FOLLOW-UP ENCERRAMENTO] Aviso: falha ao atualizar CRM: {e}", flush=True)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    return texto_encerramento
