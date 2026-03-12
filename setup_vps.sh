@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 REPO_CLONE_URL_BASE="https://github.com/ferriolimidias/agenteos.git"
 PROJECT_NAME="agenteos"
+PROJECT_DIR=""
+DOMAIN=""
+SSL_EMAIL=""
+GITHUB_TOKEN=""
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
 else
   SUDO="sudo"
 fi
+
+log() {
+  echo
+  echo "==> $1"
+}
+
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Erro: comando obrigatorio nao encontrado: ${cmd}"
+    exit 1
+  fi
+}
 
 ask_inputs() {
   read -r -p "Informe o dominio do sistema (ex: agents.ferriolimidias.com): " DOMAIN
@@ -22,23 +39,45 @@ ask_inputs() {
   fi
 }
 
-install_dependencies() {
-  echo "Instalando dependencias necessarias..."
+update_system_and_install_basics() {
+  log "Atualizando sistema e instalando pacotes basicos"
+  require_command apt-get
+
   $SUDO apt-get update -y
-  $SUDO apt-get install -y git docker.io docker-compose-plugin nginx certbot python3-certbot-nginx
-  $SUDO systemctl enable docker nginx
-  $SUDO systemctl start docker nginx
+  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    git \
+    curl \
+    nginx \
+    certbot \
+    python3-certbot-nginx
+
+  $SUDO systemctl enable --now nginx
 }
 
-clone_repository() {
+install_docker() {
+  log "Instalando Docker via script oficial get.docker.com"
+
+  curl -fsSL https://get.docker.com | sh
+  $SUDO systemctl enable --now docker
+
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "Erro: Docker Compose nao foi disponibilizado apos a instalacao do Docker."
+    exit 1
+  fi
+}
+
+clone_repository_main() {
+  log "Clonando/atualizando repositorio na branch main"
+  require_command git
+
   PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
 
   if [ -d "${PROJECT_DIR}/.git" ]; then
     echo "Clone existente detectado em ${PROJECT_DIR}. Atualizando..."
     cd "${PROJECT_DIR}"
+    git remote set-url origin "${REPO_CLONE_URL_BASE}"
     git fetch origin main
-    git checkout main
-    git pull origin main
+    git checkout -B main origin/main
     return
   fi
 
@@ -47,16 +86,17 @@ clone_repository() {
     exit 1
   fi
 
-  echo "Clonando repositorio em ${PROJECT_DIR}..."
   git clone "https://${GITHUB_TOKEN}@github.com/ferriolimidias/agenteos.git" "${PROJECT_DIR}"
   cd "${PROJECT_DIR}"
   git remote set-url origin "${REPO_CLONE_URL_BASE}"
+  git fetch origin main
+  git checkout -B main origin/main
 }
 
-configure_nginx() {
+configure_nginx_proxy() {
   local nginx_conf="/etc/nginx/sites-available/agenteos"
 
-  echo "Configurando Nginx..."
+  log "Configurando Nginx como proxy reverso"
   $SUDO tee "${nginx_conf}" >/dev/null <<EOF
 server {
     listen 80;
@@ -85,8 +125,14 @@ EOF
   $SUDO systemctl reload nginx
 }
 
+run_compose_build() {
+  log "Subindo aplicacao com Docker Compose"
+  cd "${PROJECT_DIR}"
+  docker compose up --build -d
+}
+
 configure_ssl() {
-  echo "Gerando certificado SSL com Certbot..."
+  log "Configurando SSL com Certbot"
   $SUDO certbot --nginx \
     -d "${DOMAIN}" \
     --non-interactive \
@@ -95,19 +141,14 @@ configure_ssl() {
     --redirect
 }
 
-run_compose_build() {
-  cd "${PROJECT_DIR}"
-  echo "Subindo containers com build limpo..."
-  docker compose up --build -d
-}
-
 main() {
   ask_inputs
-  install_dependencies
-  clone_repository
-  configure_nginx
-  configure_ssl
+  update_system_and_install_basics
+  install_docker
+  clone_repository_main
+  configure_nginx_proxy
   run_compose_build
+  configure_ssl
 
   echo
   echo "Deploy concluido com sucesso."
