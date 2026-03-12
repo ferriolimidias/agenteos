@@ -14,33 +14,12 @@ else
   SUDO="sudo"
 fi
 
-# Primeira acao: aguardar locks do apt e atualizacoes de primeiro boot.
-while true; do
-  if pgrep -fa "unattended-upgrades?|apt.systemd.daily|apt-get|apt |dpkg" >/dev/null 2>&1; then
-    echo "Aguardando processos de atualizacao do sistema liberarem..."
-    sleep 5
-    continue
-  fi
-
-  locked=0
-  for lock_file in \
-    /var/lib/dpkg/lock \
-    /var/lib/dpkg/lock-frontend \
-    /var/cache/apt/archives/lock \
-    /var/lib/apt/lists/lock; do
-    if [ -e "${lock_file}" ] && ! ${SUDO} flock -n "${lock_file}" -c true >/dev/null 2>&1; then
-      locked=1
-      break
-    fi
-  done
-
-  if [ "${locked}" -eq 0 ]; then
-    break
-  fi
-
-  echo "Aguardando lock files do apt/dpkg serem liberados..."
-  sleep 5
-done
+# Primeira acao efetiva: matar/desativar unattended-upgrades e limpar locks do dpkg.
+${SUDO} systemctl stop unattended-upgrades.service || true
+${SUDO} systemctl disable unattended-upgrades.service || true
+${SUDO} systemctl mask unattended-upgrades.service || true
+${SUDO} rm -f /var/lib/dpkg/lock* /var/cache/apt/archives/lock /var/lib/apt/lists/lock || true
+${SUDO} dpkg --configure -a || true
 
 log() {
   echo
@@ -198,12 +177,8 @@ EOF
 
 build_and_start_stack() {
   cd "${PROJECT_DIR}"
-  require_command git
-
-  log "Executando build blindado do ambiente Docker"
-  ${SUDO} docker compose down -v --remove-orphans || true
-  ${SUDO} docker compose build --no-cache
-  ${SUDO} docker compose up -d --remove-orphans
+  log "Subindo stack com build isolado (Dockerfile usa Yarn)"
+  ${SUDO} docker compose up --build -d --remove-orphans
 }
 
 wait_for_database() {
