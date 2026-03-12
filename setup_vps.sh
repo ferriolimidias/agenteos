@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 REPO_CLONE_URL_BASE="https://github.com/ferriolimidias/agenteos.git"
 PROJECT_NAME="agenteos"
@@ -44,7 +45,7 @@ update_system_and_install_basics() {
   require_command apt-get
 
   $SUDO apt-get update -y
-  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  $SUDO apt-get install -y \
     git \
     curl \
     nginx \
@@ -60,7 +61,7 @@ install_docker() {
   curl -fsSL https://get.docker.com | sh
   $SUDO systemctl enable --now docker
 
-  if ! docker compose version >/dev/null 2>&1; then
+  if ! $SUDO docker compose version >/dev/null 2>&1; then
     echo "Erro: Docker Compose nao foi disponibilizado apos a instalacao do Docker."
     exit 1
   fi
@@ -128,7 +129,7 @@ EOF
 run_compose_build() {
   log "Subindo aplicacao com Docker Compose"
   cd "${PROJECT_DIR}"
-  docker compose up --build -d
+  $SUDO docker compose up --build -d
 }
 
 configure_ssl() {
