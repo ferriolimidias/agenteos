@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -26,8 +27,8 @@ redis_client: redis.Redis = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
-    # Start Redis connection
-    redis_client = redis.from_url("redis://localhost:6379", decode_responses=True)
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_client = redis.from_url(redis_url, decode_responses=True)
     yield
     # Cleanup Redis connection on shutdown
     await redis_client.close()

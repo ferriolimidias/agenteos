@@ -2,24 +2,18 @@
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-REPO_URL="https://github.com/ferriolimidias/agenteos.git"
-PROJECT_NAME="agenteos"
-PROJECT_DIR=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}"
 DOMAIN="${DOMAIN:-}"
-SSL_EMAIL="${SSL_EMAIL:-}"
+EMAIL="${EMAIL:-${SSL_EMAIL:-}}"
+COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
+ENV_FILE="${PROJECT_DIR}/.env"
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
 else
   SUDO="sudo"
 fi
-
-# Primeira acao efetiva: matar/desativar unattended-upgrades e limpar locks do dpkg.
-${SUDO} systemctl stop unattended-upgrades.service || true
-${SUDO} systemctl disable unattended-upgrades.service || true
-${SUDO} systemctl mask unattended-upgrades.service || true
-${SUDO} rm -f /var/lib/dpkg/lock* /var/cache/apt/archives/lock /var/lib/apt/lists/lock || true
-${SUDO} dpkg --configure -a || true
 
 log() {
   echo
@@ -31,86 +25,69 @@ fail() {
   exit 1
 }
 
-require_command() {
-  local cmd="$1"
-  command -v "${cmd}" >/dev/null 2>&1 || fail "Comando obrigatorio nao encontrado: ${cmd}"
-}
-
 on_error() {
   local line="$1"
   fail "Falha na linha ${line}. Abortando."
 }
 trap 'on_error $LINENO' ERR
 
-update_os() {
-  log "Atualizando o sistema operacional por completo"
-  ${SUDO} apt-get update
+disable_unattended_upgrades() {
+  log "Desativando unattended-upgrades e timers de update"
+  ${SUDO} systemctl stop unattended-upgrades.service apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer || true
+  ${SUDO} systemctl disable unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer || true
+  ${SUDO} systemctl mask unattended-upgrades.service || true
+  ${SUDO} pkill -f unattended-upgrade || true
+  ${SUDO} rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/apt/lists/lock || true
+  ${SUDO} dpkg --configure -a || true
+}
+
+apt_update_and_upgrade() {
+  log "Atualizando cache e pacotes do Ubuntu"
+  ${SUDO} apt-get update -y
   ${SUDO} apt-get upgrade -y
 }
 
 install_base_dependencies() {
-  log "Instalando dependencias basicas"
-  ${SUDO} apt-get install -y git curl ca-certificates certbot python3-certbot-nginx
-}
-
-install_nginx_if_needed() {
-  if command -v nginx >/dev/null 2>&1; then
-    log "Nginx ja instalado"
-  else
-    log "Instalando Nginx"
-    ${SUDO} apt-get install -y nginx
-  fi
-  ${SUDO} systemctl enable --now nginx
+  log "Instalando dependencias base do host"
+  ${SUDO} apt-get install -y \
+    git \
+    curl \
+    ca-certificates \
+    gnupg \
+    build-essential \
+    nginx \
+    certbot \
+    python3-certbot-nginx
 }
 
 install_docker_if_needed() {
-  if command -v docker >/dev/null 2>&1; then
-    log "Docker ja instalado"
-  else
-    log "Instalando Docker"
-    curl -fsSL https://get.docker.com | ${SUDO} sh
+  if command -v docker >/dev/null 2>&1 && ${SUDO} docker compose version >/dev/null 2>&1; then
+    log "Docker e Docker Compose V2 ja instalados"
+    ${SUDO} systemctl enable --now docker
+    return
   fi
 
+  log "Instalando Docker oficial (canal estavel)"
+  ${SUDO} install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | ${SUDO} gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  ${SUDO} chmod a+r /etc/apt/keyrings/docker.gpg
+
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
+  echo \
+    "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable" \
+    | ${SUDO} tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+  ${SUDO} apt-get update -y
+  ${SUDO} apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   ${SUDO} systemctl enable --now docker
-
-  if ! ${SUDO} docker compose version >/dev/null 2>&1; then
-    log "Instalando plugin docker compose"
-    ${SUDO} apt-get install -y docker-compose-plugin
-  fi
-
   ${SUDO} docker compose version >/dev/null 2>&1 || fail "Docker Compose indisponivel apos instalacao."
 }
 
-resolve_project_directory() {
-  local current_basename
-  current_basename="$(basename "$(pwd)")"
-
-  if [ -d ".git" ] && [ "${current_basename}" = "${PROJECT_NAME}" ]; then
-    PROJECT_DIR="$(pwd)"
-    log "Repositorio local detectado em ${PROJECT_DIR}. Pulando clone."
-    return
-  fi
-
-  if [ -d "$(pwd)/${PROJECT_NAME}/.git" ]; then
-    PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
-    log "Repositorio detectado em ${PROJECT_DIR}. Pulando clone."
-    return
-  fi
-
-  PROJECT_DIR="$(pwd)/${PROJECT_NAME}"
-  if [ -d "${PROJECT_DIR}" ] && [ ! -d "${PROJECT_DIR}/.git" ]; then
-    fail "Diretorio ${PROJECT_DIR} existe, mas nao e um repositorio Git valido."
-  fi
-
-  if [ ! -d "${PROJECT_DIR}/.git" ]; then
-    log "Clonando repositorio ${PROJECT_NAME}"
-    local clone_url="${REPO_URL}"
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      clone_url="https://${GITHUB_TOKEN}@github.com/ferriolimidias/agenteos.git"
-    fi
-
-    git clone "${clone_url}" "${PROJECT_DIR}" || fail "Falha no clone. Se o repo for privado, exporte GITHUB_TOKEN e execute novamente."
-  fi
+enable_nginx_service() {
+  log "Habilitando Nginx no host"
+  ${SUDO} systemctl enable --now nginx
 }
 
 apply_env_file() {
@@ -128,28 +105,41 @@ apply_env_file() {
     set +a
   fi
 
-  DOMAIN="${DOMAIN:-}"
-  SSL_EMAIL="${SSL_EMAIL:-}"
+  DOMAIN="${DOMAIN:-${DOMAIN_NAME:-}}"
+  EMAIL="${EMAIL:-${SSL_EMAIL:-}}"
 
   [ -n "${DOMAIN}" ] || fail "Defina DOMAIN (env do shell ou .env) para configurar Nginx/Certbot."
-  [ -n "${SSL_EMAIL}" ] || fail "Defina SSL_EMAIL (env do shell ou .env) para executar Certbot."
+  [ -n "${EMAIL}" ] || fail "Defina EMAIL (env do shell ou .env) para executar Certbot."
+}
+
+validate_project_layout() {
+  [ -f "${COMPOSE_FILE}" ] || fail "docker-compose.yml nao encontrado em ${PROJECT_DIR}"
+  [ -f "${PROJECT_DIR}/setup_vps.sh" ] || fail "Execute este script a partir do repositorio clonado."
 }
 
 configure_nginx() {
   local nginx_conf="/etc/nginx/sites-available/agenteos"
 
-  log "Configurando Nginx para frontend 8080 e backend 8000"
+  log "Configurando Nginx como reverse proxy blindado"
   ${SUDO} tee "${nginx_conf}" >/dev/null <<EOF
 server {
     listen 80;
     listen [::]:80;
     server_name ${DOMAIN};
 
+    server_tokens off;
+    client_max_body_size 25m;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
     location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
+        proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -160,7 +150,7 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -177,7 +167,7 @@ EOF
 
 build_and_start_stack() {
   cd "${PROJECT_DIR}"
-  log "Subindo stack com build isolado (Dockerfile usa Yarn)"
+  log "Subindo stack completa pelo Docker Compose"
   ${SUDO} docker compose up --build -d --remove-orphans
 }
 
@@ -199,7 +189,7 @@ wait_for_database() {
 }
 
 run_certbot() {
-  log "Executando Certbot"
+  log "Emitindo certificado SSL com Certbot"
 
   if [ -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
     echo "Certificado para ${DOMAIN} ja existe. Pulando emissao."
@@ -211,15 +201,16 @@ run_certbot() {
     --agree-tos \
     --redirect \
     -d "${DOMAIN}" \
-    -m "${SSL_EMAIL}"
+    -m "${EMAIL}"
 }
 
 main() {
-  update_os
+  disable_unattended_upgrades
+  apt_update_and_upgrade
   install_base_dependencies
-  install_nginx_if_needed
+  enable_nginx_service
   install_docker_if_needed
-  resolve_project_directory
+  validate_project_layout
   apply_env_file
   configure_nginx
   build_and_start_stack

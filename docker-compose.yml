@@ -1,8 +1,5 @@
-version: '3.8'
-
 services:
   db:
-    # Usando imagem com pgvector pre-instalado
     image: ankane/pgvector:latest
     container_name: agent_os_db
     restart: always
@@ -10,19 +7,27 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-agent_os}
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent_os}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   redis:
     image: redis:alpine
     container_name: agent_os_redis
     restart: always
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   backend:
     build:
@@ -31,12 +36,15 @@ services:
     container_name: agent_os_backend
     restart: always
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
     environment:
-      # O compose resolve o host "db" para o container PostgreSQL e "redis" pro Redis
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-agent_os}
       - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -53,7 +61,6 @@ services:
       - backend
     ports:
       - "127.0.0.1:8080:80"
-    volumes: []
 
 volumes:
   postgres_data:
