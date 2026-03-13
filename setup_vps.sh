@@ -26,9 +26,14 @@ ${SUDO} apt-get install -y nginx certbot python3-certbot-nginx curl ca-certifica
 ${SUDO} systemctl enable --now nginx
 
 # 3) Instalação Docker (explícito)
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-rm -f get-docker.sh
+${SUDO} apt-get update
+${SUDO} apt-get install -y ca-certificates curl gnupg
+${SUDO} install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | ${SUDO} gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+${SUDO} chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | ${SUDO} tee /etc/apt/sources.list.d/docker.list > /dev/null
+${SUDO} apt-get update
+${SUDO} apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ${SUDO} systemctl enable --now docker
 
 # 4) Configuração via variáveis exportadas
@@ -40,7 +45,8 @@ cd "${PROJECT_DIR}"
 
 # 5) Build
 ${SUDO} docker compose down -v --remove-orphans || true
-${SUDO} docker compose up --build -d
+${SUDO} docker compose build --no-cache
+${SUDO} docker compose up -d
 
 # 6) Nginx/SSL (proxy reverso + certbot não interativo)
 ${SUDO} tee /etc/nginx/sites-available/agenteos >/dev/null <<EOF
