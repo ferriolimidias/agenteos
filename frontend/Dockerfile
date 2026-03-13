@@ -14,7 +14,7 @@ COPY package.json ./
 RUN corepack enable
 
 COPY . .
-RUN rm -f yarn.lock package-lock.json
+RUN rm -rf node_modules yarn.lock package-lock.json
 RUN yarn config set supportedArchitectures --all \
   && yarn install \
   && yarn cache clean \
