@@ -43,21 +43,9 @@ disable_unattended_upgrades() {
   ${SUDO} dpkg --configure -a || true
 }
 
-wait_for_apt_locks_release() {
-  log "Aguardando liberacao de locks do apt/dpkg"
-  local max_attempts=30
-  local attempt=1
-
-  while ${SUDO} fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
-    || ${SUDO} fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-    || ${SUDO} fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
-    || ${SUDO} fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
-    if [ "${attempt}" -ge "${max_attempts}" ]; then
-      fail "Locks do apt/dpkg nao foram liberados a tempo."
-    fi
-    sleep 2
-    attempt=$((attempt + 1))
-  done
+mask_unattended_upgrades() {
+  log "Aplicando mask em unattended-upgrades"
+  ${SUDO} systemctl mask unattended-upgrades || true
 }
 
 apt_update_and_upgrade() {
@@ -188,7 +176,8 @@ EOF
 build_and_start_stack() {
   cd "${PROJECT_DIR}"
   log "Subindo stack completa pelo Docker Compose"
-  ${SUDO} docker compose up --build -d --remove-orphans
+  ${SUDO} docker compose build --no-cache
+  ${SUDO} docker compose up -d --remove-orphans
 }
 
 wait_for_database() {
@@ -225,8 +214,8 @@ run_certbot() {
 }
 
 main() {
+  mask_unattended_upgrades
   disable_unattended_upgrades
-  wait_for_apt_locks_release
   apt_update_and_upgrade
   install_base_dependencies
   enable_nginx_service
