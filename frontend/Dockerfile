@@ -11,14 +11,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
+RUN rm -rf node_modules yarn.lock package-lock.json
 RUN corepack enable
 
 COPY . .
-RUN rm -rf node_modules yarn.lock package-lock.json
-RUN yarn config set supportedArchitectures --all \
-  && yarn install \
-  && yarn cache clean \
-  && yarn build
+RUN yarn config set supportedArchitectures --all && yarn install
+RUN yarn build && yarn cache clean
 
 FROM nginx:stable-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
