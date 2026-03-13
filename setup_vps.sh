@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export UCF_FORCE_CONFOLD=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
@@ -41,10 +43,27 @@ disable_unattended_upgrades() {
   ${SUDO} dpkg --configure -a || true
 }
 
+wait_for_apt_locks_release() {
+  log "Aguardando liberacao de locks do apt/dpkg"
+  local max_attempts=30
+  local attempt=1
+
+  while ${SUDO} fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+    || ${SUDO} fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+    || ${SUDO} fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+    || ${SUDO} fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+    if [ "${attempt}" -ge "${max_attempts}" ]; then
+      fail "Locks do apt/dpkg nao foram liberados a tempo."
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
 apt_update_and_upgrade() {
   log "Atualizando cache e pacotes do Ubuntu"
-  ${SUDO} apt-get update -y
-  ${SUDO} apt-get upgrade -y
+  ${SUDO} apt-get -yq update
+  ${SUDO} apt-get -yq upgrade
 }
 
 install_base_dependencies() {
@@ -68,6 +87,7 @@ install_docker_if_needed() {
   fi
 
   log "Instalando Docker oficial (canal estavel)"
+  ${SUDO} apt-get remove -y docker docker-engine docker.io containerd runc docker-compose docker-compose-v2 || true
   ${SUDO} install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | ${SUDO} gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   ${SUDO} chmod a+r /etc/apt/keyrings/docker.gpg
@@ -79,8 +99,8 @@ install_docker_if_needed() {
     "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable" \
     | ${SUDO} tee /etc/apt/sources.list.d/docker.list >/dev/null
 
-  ${SUDO} apt-get update -y
-  ${SUDO} apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  ${SUDO} apt-get -yq update
+  ${SUDO} apt-get -yq install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   ${SUDO} systemctl enable --now docker
   ${SUDO} docker compose version >/dev/null 2>&1 || fail "Docker Compose indisponivel apos instalacao."
 }
@@ -206,6 +226,7 @@ run_certbot() {
 
 main() {
   disable_unattended_upgrades
+  wait_for_apt_locks_release
   apt_update_and_upgrade
   install_base_dependencies
   enable_nginx_service
