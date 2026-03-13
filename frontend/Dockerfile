@@ -11,11 +11,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
-RUN corepack enable \
-  && yarn config set supportedArchitectures --all
+RUN corepack enable
 
 COPY . .
-RUN rm -rf node_modules package-lock.json yarn.lock /root/.npm /root/.cache /tmp/* \
+RUN rm -f yarn.lock package-lock.json
+RUN yarn config set supportedArchitectures --all \
   && yarn install \
   && yarn cache clean \
   && yarn build

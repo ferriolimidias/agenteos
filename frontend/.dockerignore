@@ -1,7 +1,8 @@
 node_modules
-package-lock.json
 dist
-.vite
 .git
+*.lock
+*.log
+.vite
 .env
 __pycache__
