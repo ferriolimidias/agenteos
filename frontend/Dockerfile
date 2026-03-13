@@ -4,22 +4,23 @@ WORKDIR /app
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
+    build-essential \
     ca-certificates \
     libc6 \
     libstdc++6 \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json yarn.lock ./
+COPY package.json ./
 RUN corepack enable \
   && yarn config set supportedArchitectures --all
 
 COPY . .
-RUN rm -rf node_modules package-lock.json /root/.npm /root/.cache /tmp/* \
+RUN rm -rf node_modules package-lock.json yarn.lock /root/.npm /root/.cache /tmp/* \
   && yarn install \
   && yarn cache clean \
   && yarn build
 
-FROM nginx:alpine
+FROM nginx:stable-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

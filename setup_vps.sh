@@ -176,6 +176,7 @@ EOF
 build_and_start_stack() {
   cd "${PROJECT_DIR}"
   log "Subindo stack completa pelo Docker Compose"
+  ${SUDO} docker compose down -v --remove-orphans || true
   ${SUDO} docker compose build --no-cache
   ${SUDO} docker compose up -d --remove-orphans
 }
