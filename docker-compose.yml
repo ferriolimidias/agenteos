@@ -32,10 +32,7 @@ services:
       start_period: 10s
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      pull: true
+    build: .
     container_name: agent_os_backend
     restart: always
     depends_on:
