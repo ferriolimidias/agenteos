@@ -2,13 +2,13 @@ asyncpg==0.31.0
 bcrypt==5.0.0
 beautifulsoup4
 fastapi==0.135.1
+pgvector
 httpx
 langchain
 langchain-openai
 langchain-text-splitters
 langgraph
 openai
-pgvector
 PyPDF2
 pydantic==2.12.5
 pydantic-settings==2.13.1
