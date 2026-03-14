@@ -8,7 +8,7 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
 RUN pip install --upgrade pip
-RUN pip install pgvector
+RUN pip install pgvector python-multipart
 
 RUN apt-get update && apt-get install -y \
     build-essential \
