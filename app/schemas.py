@@ -1,13 +1,14 @@
-from pydantic import BaseModel, UUID4
-from typing import Optional, Dict, Any
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, UUID4
 
 # --- Schemas para Empresa ---
 class EmpresaBase(BaseModel):
     nome_empresa: str
-    area_atuacao: Optional[str] = None
-    credenciais_canais: Optional[Dict[str, Any]] = {}
-    ia_instrucoes_personalizadas: Optional[str] = None
-    ia_tom_voz: Optional[str] = None
+    area_atuacao: str | None = None
+    credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
+    ia_instrucoes_personalizadas: str | None = None
+    ia_tom_voz: str | None = None
 
 class EmpresaCreate(EmpresaBase):
     pass
@@ -15,8 +16,7 @@ class EmpresaCreate(EmpresaBase):
 class EmpresaResponse(EmpresaBase):
     id: UUID4
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Schemas para Agente ---
 class AgenteBase(BaseModel):
@@ -24,7 +24,7 @@ class AgenteBase(BaseModel):
     nome: str
     modelo_ia: str
     prompt_sistema: str
-    ativo: Optional[bool] = True
+    ativo: bool | None = True
 
 class AgenteCreate(AgenteBase):
     pass
@@ -32,8 +32,7 @@ class AgenteCreate(AgenteBase):
 class AgenteResponse(AgenteBase):
     id: UUID4
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Schemas para Conhecimento ---
 class ConhecimentoUpload(BaseModel):
@@ -44,7 +43,7 @@ class EspecialistaBase(BaseModel):
     empresa_id: UUID4
     nome: str
     prompt_sistema: str
-    ativo: Optional[bool] = True
+    ativo: bool | None = True
 
 class EspecialistaCreate(EspecialistaBase):
     pass
@@ -52,17 +51,16 @@ class EspecialistaCreate(EspecialistaBase):
 class EspecialistaResponse(EspecialistaBase):
     id: UUID4
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Schemas para APIConnection ---
 class APIConnectionBase(BaseModel):
     empresa_id: UUID4
     nome: str
     url: str
-    metodo: Optional[str] = "GET"
-    headers_json: Optional[Dict[str, Any]] = {}
-    params_schema_json: Optional[Dict[str, Any]] = {}
+    metodo: str | None = "GET"
+    headers_json: dict[str, Any] | None = Field(default_factory=dict)
+    params_schema_json: dict[str, Any] | None = Field(default_factory=dict)
 
 class APIConnectionCreate(APIConnectionBase):
     pass
@@ -70,8 +68,7 @@ class APIConnectionCreate(APIConnectionBase):
 class APIConnectionResponse(APIConnectionBase):
     id: UUID4
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Schema para Vínculo Ferramenta Especialista ---
 class EspecialistaToolLink(BaseModel):

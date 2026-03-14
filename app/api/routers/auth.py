@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.core.security import get_password_hash, is_bcrypt_hash, verify_password
 from db.database import get_db
 from db.models import Usuario
 
@@ -20,15 +21,29 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário ou senha incorretos")
-    
-    # Para testes iniciais, comparando a senha em texto puro em vez de hash
-    if user.senha_hash != data.senha:
+
+    if is_bcrypt_hash(user.senha_hash):
+        password_ok = verify_password(data.senha, user.senha_hash)
+    else:
+        password_ok = user.senha_hash == data.senha
+
+    if not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário ou senha incorretos")
 
     if not user.ativo:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário inativo")
 
-    # Retorno esperado
+    if not is_bcrypt_hash(user.senha_hash):
+        try:
+            user.senha_hash = get_password_hash(data.senha)
+            await db.commit()
+            await db.refresh(user)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
     return {
         "access_token": "token_fake",
         "usuario": {
@@ -51,7 +66,6 @@ async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: No
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
 
-    # Busca o primeiro usuário vinculado a esta empresa
     result = await db.execute(select(Usuario).where(Usuario.empresa_id == emp_uuid))
     user = result.scalars().first()
 

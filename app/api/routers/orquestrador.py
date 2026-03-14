@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy.orm import selectinload
 
@@ -19,7 +19,7 @@ class EspecialistaCreate(BaseModel):
     prompt_sistema: str
     modelo_ia: Optional[str] = "gpt-4o-mini"
     usar_rag: Optional[bool] = False
-    ferramentas_ids: Optional[List[str]] = []
+    ferramentas_ids: Optional[List[str]] = Field(default_factory=list)
 
 class FerramentaCreate(BaseModel):
     nome_ferramenta: str

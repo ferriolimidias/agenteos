@@ -11,8 +11,10 @@ from fastapi.responses import Response
 from db.database import get_db
 from sqlalchemy.orm import selectinload
 from db.models import Empresa, Usuario, ConhecimentoRAG, CRMFunil, CRMEtapa, CRMLead, AgendaConfiguracao, AgendamentoLocal
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
+
+from app.core.security import get_password_hash
 
 class EvolutionCredentials(BaseModel):
     evolution_url: str
@@ -259,7 +261,7 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
             empresa_id=nova_empresa.id,
             nome=data.admin_nome,
             email=data.admin_email,
-            senha_hash=data.admin_senha, # Texto puro por enquanto para teste
+            senha_hash=get_password_hash(data.admin_senha),
             role="admin_empresa",
             ativo=True
         )
@@ -282,6 +284,12 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
                 "email": novo_usuario.email
             }
         }
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         print(f"Erro durante o setup da empresa: {str(e)}")
         await db.rollback()
@@ -313,7 +321,7 @@ class CRMLeadResponse(BaseModel):
     nome_contato: str
     telefone: str | None = None
     historico_resumo: str | None = None
-    dados_adicionais: Dict[str, Any] = {}
+    dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
     criado_em: str | None = None
 
 

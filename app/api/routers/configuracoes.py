@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from db.database import get_db
 from db.models import ConfiguracoesGlobais
 
@@ -18,8 +18,7 @@ class ConfiguracaoGlobalResponse(BaseModel):
     cor_primaria: str
     openai_key_global: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 @router.get("/configuracoes", response_model=ConfiguracaoGlobalResponse)
 async def get_configuracoes_globais(db: AsyncSession = Depends(get_db)):
