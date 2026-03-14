@@ -1,5 +1,6 @@
 import asyncio
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 # Carrega o .env antes das importações de SQLAlchemy
 load_dotenv()
@@ -11,8 +12,8 @@ from db.models import Empresa, Contato, Agente, FerramentaAPI, ParametrosCadenci
 async def init_models():
     print("Iniciando a criação das tabelas no banco de dados...")
     async with engine.begin() as conn:
-        # A extensão 'vector' do pgvector precisará ter sido criada antes, manualmente no banco:
-        # await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        # Garante a extensão necessária antes de criar colunas Vector().
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         
         # Cria fisicamente as tabelas
         await conn.run_sync(Base.metadata.create_all)
