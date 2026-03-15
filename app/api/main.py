@@ -38,7 +38,7 @@ app = FastAPI(lifespan=lifespan, title="Agent OS (Omnichannel)")
 
 @app.get("/")
 async def root():
-    return {"status": "online", "message": "Backend do Agente OS operando"}
+    return {"status": "online", "message": "API Agente OS operando"}
 
 
 # Configuração do CORS
