@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from typing import TypedDict, List, Optional, Literal, Any
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
@@ -49,6 +50,8 @@ from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_f
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
+
+logger = logging.getLogger(__name__)
 
 async def disparar_webhook_saida(lead_id: str):
     import uuid
@@ -708,7 +711,7 @@ async def node_especialista_dinamico(state: AgentState):
                                     import json
                                     import httpx
                                     
-                                    print(f"[TOOL EXECUTION] Chamando {nome_tool} com parametros: {kwargs}")
+                                    logger.info("[TOOL EXECUTION] Chamando %s com parametros: %s", nome_tool, kwargs)
                                     
                                     # Parse JSONs safely
                                     try:
@@ -728,6 +731,14 @@ async def node_especialista_dinamico(state: AgentState):
                                             final_url = final_url.replace(f"{{{{{k}}}}}", str(v))
                                             # Suporte legado para single brackets caso o cliente o use
                                             final_url = final_url.replace(f"{{{k}}}", str(v))
+
+                                        if "{" in final_url or "}" in final_url:
+                                            resultado = (
+                                                f"Falha ao executar ferramenta {nome_tool}: URL template não preenchido. "
+                                                f"URL atual: {final_url}. Parametros recebidos: {kwargs}"
+                                            )
+                                            logger.warning("[TOOL ERROR] %s", resultado)
+                                            return resultado
                                             
                                         # Substituir {{variaveis}} no Payload (convertendo para string, substituindo e voltando para dict)
                                         p_str = json.dumps(p_dict)
@@ -735,25 +746,45 @@ async def node_especialista_dinamico(state: AgentState):
                                             p_str = p_str.replace(f"{{{{{k}}}}}", str(v))
                                         final_payload = json.loads(p_str)
 
+                                        path_placeholders = {
+                                            k for k in kwargs.keys()
+                                            if f"{{{k}}}" in (url or "") or f"{{{{{k}}}}}" in (url or "")
+                                        }
+                                        query_params = {k: v for k, v in kwargs.items() if k not in path_placeholders}
+
+                                        logger.info(
+                                            "[TOOL HTTP REQUEST] tool=%s method=%s url=%s query_params=%s",
+                                            nome_tool,
+                                            method.upper(),
+                                            final_url,
+                                            query_params if method.upper() in ["GET", "DELETE"] else {},
+                                        )
+
                                         async with httpx.AsyncClient() as client:
                                             if method.upper() == "GET":
-                                                resp = await client.get(final_url, headers=h_dict, params=kwargs, timeout=10.0)
+                                                resp = await client.get(final_url, headers=h_dict, params=query_params, timeout=10.0)
                                             elif method.upper() == "POST":
                                                 resp = await client.post(final_url, headers=h_dict, json=final_payload, timeout=10.0)
                                             elif method.upper() == "PUT":
                                                 resp = await client.put(final_url, headers=h_dict, json=final_payload, timeout=10.0)
                                             elif method.upper() == "DELETE":
-                                                resp = await client.delete(final_url, headers=h_dict, params=kwargs, timeout=10.0)
+                                                resp = await client.delete(final_url, headers=h_dict, params=query_params, timeout=10.0)
                                             else:
                                                 resultado = f"Método HTTP {method} não suportado."
-                                                print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                logger.warning("[TOOL ERROR] %s", resultado)
                                                 return resultado
+
+                                            logger.info(
+                                                "[TOOL HTTP RESPONSE] tool=%s method=%s url=%s status_code=%s",
+                                                nome_tool,
+                                                method.upper(),
+                                                final_url,
+                                                resp.status_code,
+                                            )
                                                 
                                             if resp.status_code >= 400:
                                                 resultado = f"Erro na requisição: {resp.status_code} - {resp.text}"
-                                                if "cep" in nome_tool.lower() or "cep" in final_url.lower():
-                                                    resultado = "Erro: CEP invalido ou nao encontrado."
-                                                print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                logger.warning("[TOOL ERROR] %s", resultado)
                                                 return resultado
 
                                             resp.raise_for_status()
@@ -761,23 +792,18 @@ async def node_especialista_dinamico(state: AgentState):
                                             try:
                                                 resp_json = resp.json()
                                                 if isinstance(resp_json, dict) and resp_json.get("erro") in [True, "true", "True"]:
-                                                    if "cep" in nome_tool.lower() or "cep" in final_url.lower():
-                                                        resultado = "Erro: CEP invalido ou nao encontrado."
-                                                    else:
-                                                        resultado = f"Erro na API: {resp.text}"
-                                                    print(f"[TOOL RESULT] Resposta: {resultado}")
+                                                    resultado = f"Erro na API: {resp.text}"
+                                                    logger.warning("[TOOL ERROR] %s", resultado)
                                                     return resultado
                                             except Exception:
                                                 pass
 
                                             resultado = resp.text
-                                            print(f"[TOOL RESULT] Resposta: {resultado}")
+                                            logger.info("[TOOL RESULT] Ferramenta %s retornou %d chars", nome_tool, len(resultado))
                                             return resultado
                                     except Exception as e:
                                         resultado = f"Falha ao executar ferramenta {nome_tool}: {str(e)}"
-                                        if "cep" in nome_tool.lower():
-                                            resultado = "Erro: CEP invalido ou nao encontrado."
-                                        print(f"[TOOL RESULT] Resposta: {resultado}")
+                                        logger.exception("[TOOL ERROR] %s", resultado)
                                         return resultado
                                 return http_tool_coroutine
 

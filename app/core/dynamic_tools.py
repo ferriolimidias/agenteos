@@ -1,10 +1,13 @@
 import json
+import logging
 from typing import Any, Dict, Optional, Type
 import httpx
 from pydantic import BaseModel, Field, create_model
 from langchain_core.tools import StructuredTool
 
 from db.models import APIConnection
+
+logger = logging.getLogger(__name__)
 
 # Mapping from JSON Schema Draft 7 types to Python types
 _JSON_SCHEMA_TYPE_MAP = {
@@ -17,6 +20,78 @@ _JSON_SCHEMA_TYPE_MAP = {
 }
 
 
+def _normalize_params_schema(raw_schema: Any) -> dict:
+    """
+    Normaliza o schema vindo do banco para um JSON Schema de objeto.
+
+    Aceita:
+    - JSON Schema completo (mantém, garantindo type=object quando aplicável)
+    - Formato simplificado do painel, ex: {"cep": "string"}
+    - Formato simplificado com metadados por campo,
+      ex: {"cep": {"type":"string","description":"CEP","required": true}}
+    """
+    if not isinstance(raw_schema, dict) or not raw_schema:
+        return {"type": "object", "properties": {}, "required": []}
+
+    schema_keywords = {
+        "type", "properties", "required", "description", "additionalProperties",
+        "items", "oneOf", "anyOf", "allOf", "$schema", "$id", "title"
+    }
+
+    # Já parece JSON Schema (com properties ou keywords canônicas)
+    if "properties" in raw_schema or any(k in raw_schema for k in schema_keywords):
+        normalized = dict(raw_schema)
+        if "properties" in normalized and "type" not in normalized:
+            normalized["type"] = "object"
+        if normalized.get("type") == "object":
+            normalized.setdefault("properties", {})
+            normalized.setdefault("required", [])
+        return normalized
+
+    # Formato simplificado: {"campo": "string"} ou {"campo": {"type":"string"}}
+    properties: dict[str, dict[str, Any]] = {}
+    required: list[str] = []
+    valid_type_names = set(_JSON_SCHEMA_TYPE_MAP.keys())
+
+    for field_name, field_definition in raw_schema.items():
+        field_schema: dict[str, Any]
+
+        if isinstance(field_definition, str):
+            field_type = field_definition if field_definition in valid_type_names else "string"
+            field_schema = {
+                "type": field_type,
+                "description": f"Parâmetro '{field_name}' da ferramenta.",
+            }
+            required.append(field_name)
+        elif isinstance(field_definition, dict):
+            # Ex.: {"type":"string","description":"...","required":true}
+            raw_type = field_definition.get("type", "string")
+            field_type = raw_type if raw_type in valid_type_names else "string"
+            field_schema = dict(field_definition)
+            field_schema["type"] = field_type
+            field_schema.setdefault("description", f"Parâmetro '{field_name}' da ferramenta.")
+
+            # No formato simplificado com metadados, se required não vier explícito, assume obrigatório.
+            is_required = field_definition.get("required")
+            if is_required is None or bool(is_required):
+                required.append(field_name)
+        else:
+            field_schema = {
+                "type": "string",
+                "description": f"Parâmetro '{field_name}' da ferramenta.",
+            }
+            required.append(field_name)
+
+        properties[field_name] = field_schema
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 def _create_pydantic_model_from_json_schema(schema: dict, model_name: str = "DynamicModel") -> Type[BaseModel]:
     """
     Creates a Pydantic v2 BaseModel dynamically from a valid JSON Schema (Draft 7).
@@ -24,6 +99,8 @@ def _create_pydantic_model_from_json_schema(schema: dict, model_name: str = "Dyn
     Required fields use Ellipsis (...) — Pydantic treats them as mandatory.
     Optional fields default to None.
     """
+    schema = _normalize_params_schema(schema)
+
     if not schema or "properties" not in schema:
         # No parameters needed — return an empty model
         return create_model(model_name)
@@ -55,7 +132,7 @@ def create_dynamic_tool(connection: APIConnection) -> StructuredTool:
     returning a clean error string to the LLM instead of crashing LangGraph.
     """
 
-    # --- Parse params schema from DB (JSON Schema Draft 7) ---
+    # --- Parse params schema from DB ---
     schema_dict = connection.params_schema_json
     if isinstance(schema_dict, str) and schema_dict:
         try:
@@ -64,6 +141,7 @@ def create_dynamic_tool(connection: APIConnection) -> StructuredTool:
             schema_dict = {}
     if not isinstance(schema_dict, dict):
         schema_dict = {}
+    schema_dict = _normalize_params_schema(schema_dict)
 
     # --- Parse headers from DB ---
     headers_dict = connection.headers_json
@@ -90,17 +168,36 @@ def create_dynamic_tool(connection: APIConnection) -> StructuredTool:
 
     async def tool_func(**kwargs) -> str:
         """Async execution of the external API call. Returns a string result always."""
-        print(f"[TOOL EXECUTION] Calling '{_nome}' with params: {kwargs}")
+        logger.info("[TOOL EXECUTION] Calling '%s' with params: %s", _nome, kwargs)
         try:
-            # URL template substitution: replace {param} placeholders with actual values
-            formatted_url = _url or ""
+            # URL template substitution (supports {param} and {{param}})
+            formatted_url = (_url or "")
             for k, v in kwargs.items():
                 formatted_url = formatted_url.replace(f"{{{k}}}", str(v))
+                formatted_url = formatted_url.replace(f"{{{{{k}}}}}", str(v))
+
+            # Detect unresolved placeholders to avoid calls with invalid URL templates.
+            if "{" in formatted_url or "}" in formatted_url:
+                msg = (
+                    f"Tool Execution Failed: URL template não preenchido para '{_nome}'. "
+                    f"URL atual: {formatted_url}. Parâmetros recebidos: {kwargs}"
+                )
+                logger.warning("[TOOL ERROR] %s", msg)
+                return msg
+
+            # Avoid duplicating path vars in querystring when URL already interpolated.
+            query_params = {k: v for k, v in kwargs.items() if v is not None and f"{{{k}}}" not in (_url or "") and f"{{{{{k}}}}}" not in (_url or "")}
+
+            logger.info(
+                "[TOOL HTTP REQUEST] tool=%s method=%s url=%s query_params=%s",
+                _nome,
+                _metodo,
+                formatted_url,
+                query_params if _metodo == "GET" else {},
+            )
 
             async with httpx.AsyncClient(timeout=15.0) as client:
                 if _metodo == "GET":
-                    # Send non-None params as query string
-                    query_params = {k: v for k, v in kwargs.items() if v is not None}
                     response = await client.get(formatted_url, headers=_headers, params=query_params)
                 elif _metodo == "POST":
                     response = await client.post(formatted_url, headers=_headers, json=kwargs)
@@ -111,24 +208,36 @@ def create_dynamic_tool(connection: APIConnection) -> StructuredTool:
                 else:
                     return f"Tool Execution Failed: HTTP method '{_metodo}' is not supported. Analise e avise o usuario."
 
+                logger.info(
+                    "[TOOL HTTP RESPONSE] tool=%s method=%s url=%s status_code=%s",
+                    _nome,
+                    _metodo,
+                    formatted_url,
+                    response.status_code,
+                )
+
                 # Raise for 4xx/5xx so the except block handles it uniformly
                 response.raise_for_status()
 
                 resultado = response.text
-                print(f"[TOOL RESULT] '{_nome}' returned: {resultado[:300]}")
+                logger.info("[TOOL RESULT] '%s' returned payload with %d chars", _nome, len(resultado))
                 return resultado
 
         except httpx.TimeoutException as e:
             msg = f"Tool Execution Failed: Timeout ao chamar '{_nome}' ({e}). Analise e avise o usuario."
-            print(f"[TOOL ERROR] {msg}")
+            logger.warning("[TOOL ERROR] %s", msg)
             return msg
         except httpx.HTTPStatusError as e:
-            msg = f"Tool Execution Failed: HTTP {e.response.status_code} ao chamar '{_nome}'. Resposta: {e.response.text[:300]}. Analise e avise o usuario."
-            print(f"[TOOL ERROR] {msg}")
+            response_text = e.response.text if e.response is not None else str(e)
+            msg = (
+                f"Tool Execution Failed: HTTP {e.response.status_code} ao chamar '{_nome}'. "
+                f"Resposta: {response_text}"
+            )
+            logger.warning("[TOOL ERROR] %s", msg)
             return msg
         except Exception as e:
             msg = f"Tool Execution Failed: {type(e).__name__} ao executar '{_nome}': {str(e)}. Analise e avise o usuario."
-            print(f"[TOOL ERROR] {msg}")
+            logger.exception("[TOOL ERROR] %s", msg)
             return msg
 
     # --- Build tool name (snake_case, alphanumeric only) ---
