@@ -25,6 +25,8 @@ async def seed_admin() -> None:
                 usuario.senha_hash = get_password_hash(ADMIN_PASSWORD)
                 usuario.role = ADMIN_ROLE
                 usuario.ativo = True
+                if hasattr(usuario, "is_superuser"):
+                    usuario.is_superuser = True
                 if not usuario.nome:
                     usuario.nome = ADMIN_NAME
                 acao = "Senha redefinida e acesso de superusuário garantido"
@@ -36,6 +38,8 @@ async def seed_admin() -> None:
                     role=ADMIN_ROLE,
                     ativo=True,
                 )
+                if hasattr(usuario, "is_superuser"):
+                    usuario.is_superuser = True
                 session.add(usuario)
                 acao = "Usuário administrador criado com sucesso"
 
