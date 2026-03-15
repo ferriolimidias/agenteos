@@ -10,7 +10,19 @@ from fastapi.responses import Response
 
 from db.database import get_db
 from sqlalchemy.orm import selectinload
-from db.models import Empresa, Usuario, ConhecimentoRAG, CRMFunil, CRMEtapa, CRMLead, AgendaConfiguracao, AgendamentoLocal
+from db.models import (
+    Empresa,
+    Usuario,
+    ConhecimentoRAG,
+    CRMFunil,
+    CRMEtapa,
+    CRMLead,
+    AgendaConfiguracao,
+    AgendamentoLocal,
+    is_root_admin_email,
+    normalize_user_email,
+    normalize_user_role,
+)
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 
@@ -66,10 +78,11 @@ async def listar_empresas(db: AsyncSession = Depends(get_db)):
             detail=f"Erro ao listar empresas: {str(e)}"
         )
 
-# --- ROTAS DA IA CONFIGURATOR (Somente Super Admin) ---
+# --- ROTAS DA IA CONFIGURATOR ---
 from fastapi import Header
 
-async def require_super_admin(
+async def require_ia_config_access(
+    empresa_id: str,
     db: AsyncSession = Depends(get_db),
     x_user_id: Optional[str] = Header(None),
 ):
@@ -86,11 +99,31 @@ async def require_super_admin(
     if not usuario_bd:
         raise HTTPException(status_code=401, detail="Usuário não encontrado.")
 
-    role_normalizada = (usuario_bd.role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if is_root_admin_email(usuario_bd.email):
+        return usuario_bd
+
+    role_normalizada = normalize_user_role(usuario_bd.role)
     print(f"Role no Banco: {usuario_bd.role}")
-    roles_permitidas = {"super_admin", "superadmin"}
-    if role_normalizada not in roles_permitidas:
-        raise HTTPException(status_code=403, detail="Acesso negado. Apenas Super Admin.")
+    roles_super_admin = {"super_admin", "superadmin"}
+    roles_admin_empresa = {"admin_empresa", "adminempresa"}
+
+    if role_normalizada in roles_super_admin:
+        return usuario_bd
+
+    if role_normalizada in roles_admin_empresa:
+        try:
+            empresa_uuid = uuid.UUID(empresa_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ID da empresa inválido.")
+
+        if usuario_bd.empresa_id != empresa_uuid:
+            raise HTTPException(status_code=403, detail="Acesso negado para esta empresa.")
+        return usuario_bd
+
+    raise HTTPException(
+        status_code=403,
+        detail="Acesso negado. Apenas Super Admin ou Admin da própria empresa."
+    )
 
 class IAConfigResponse(BaseModel):
     ia_instrucoes_personalizadas: str | None = None
@@ -118,8 +151,12 @@ class IAConfigUpdateRequest(BaseModel):
     informacoes_adicionais: str | None = None
     coletar_nome: bool | None = None
     
-@router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK, dependencies=[Depends(require_super_admin)])
-async def get_ia_config(empresa_id: str, db: AsyncSession = Depends(get_db)):
+@router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
+async def get_ia_config(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
     result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = result.scalars().first()
     if not empresa:
@@ -138,8 +175,14 @@ async def get_ia_config(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
     }
 
-@router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK, dependencies=[Depends(require_super_admin)])
-async def put_ia_config(empresa_id: str, data: IAConfigUpdateRequest, db: AsyncSession = Depends(get_db)):
+@router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
+@router.post("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
+async def put_ia_config(
+    empresa_id: str,
+    data: IAConfigUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
     result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = result.scalars().first()
     if not empresa:
@@ -258,7 +301,8 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
     print(f"Iniciando setup_empresa para: {data.nome_empresa}")
     
     # Verifica se o email já existe
-    result = await db.execute(select(Usuario).where(Usuario.email == data.admin_email))
+    admin_email_normalizado = normalize_user_email(data.admin_email)
+    result = await db.execute(select(Usuario).where(Usuario.email == admin_email_normalizado))
     if result.scalars().first():
         print(f"Setup falhou: E-mail {data.admin_email} já em uso.")
         raise HTTPException(
@@ -276,12 +320,13 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
         await db.flush() # Para obter o ID da empresa gerado
         
         print("Criando usuário admin...")
+        is_root_admin = is_root_admin_email(data.admin_email)
         novo_usuario = Usuario(
-            empresa_id=nova_empresa.id,
+            empresa_id=None if is_root_admin else nova_empresa.id,
             nome=data.admin_nome,
-            email=data.admin_email,
+            email=admin_email_normalizado,
             senha_hash=get_password_hash(data.admin_senha),
-            role="admin_empresa",
+            role="super_admin" if is_root_admin else "admin_empresa",
             ativo=True
         )
         db.add(novo_usuario)

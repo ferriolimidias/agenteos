@@ -1,21 +1,19 @@
 import axios from 'axios';
+import { getStoredUser } from "../utils/auth";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api'
 });
 
 api.interceptors.request.use((config) => {
-  const userStr = localStorage.getItem('user');
-  if (userStr) {
-    try {
-      const user = JSON.parse(userStr);
-      if (user.role) {
-        config.headers['X-User-Role'] = user.role;
-      }
-      if (user.id) {
-        config.headers['X-User-Id'] = user.id;
-      }
-    } catch (e) {}
+  const user = getStoredUser();
+  if (user) {
+    if (user.role) {
+      config.headers['X-User-Role'] = user.role;
+    }
+    if (user.id) {
+      config.headers['X-User-Id'] = user.id;
+    }
   }
   return config;
 });

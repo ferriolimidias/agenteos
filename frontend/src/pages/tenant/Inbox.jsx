@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { UserCircle, Send, BotOff, MessageSquare, Trash2 } from "lucide-react";
 import api from "../../services/api";
+import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 
 export default function Inbox() {
   const [leads, setLeads] = useState([]);
@@ -10,9 +11,8 @@ export default function Inbox() {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
-  const userStr = localStorage.getItem("user");
-  const user = userStr ? JSON.parse(userStr) : null;
-  const empresa_id = user?.empresa_id;
+  const user = getStoredUser();
+  const empresa_id = getActiveEmpresaId();
 
   const fetchLeads = async () => {
     if (!empresa_id) return;

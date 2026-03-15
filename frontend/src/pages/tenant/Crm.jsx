@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, MessageSquare } from "lucide-react";
+import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 
 export default function Crm() {
   const [funil, setFunil] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const user = JSON.parse(localStorage.getItem("user"));
-  const empresaId = user?.empresa_id || user?.id;
+  const user = getStoredUser();
+  const empresaId = getActiveEmpresaId();
 
   const fetchCrmData = async () => {
     try {

@@ -7,7 +7,7 @@ import uuid
 
 from app.core.security import get_password_hash, is_bcrypt_hash, verify_password
 from db.database import get_db
-from db.models import Usuario
+from db.models import Usuario, is_root_admin_email, normalize_user_email, normalize_user_role
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -17,7 +17,8 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Usuario).where(Usuario.email == data.email))
+    email_normalizado = normalize_user_email(data.email)
+    result = await db.execute(select(Usuario).where(Usuario.email == email_normalizado))
     user = result.scalars().first()
 
     if not user:
@@ -50,6 +51,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         "usuario": {
             "id": str(user.id),
             "nome": user.nome,
+            "email": user.email,
             "role": user.role,
             "empresa_id": str(user.empresa_id) if user.empresa_id else None
         }
@@ -72,7 +74,10 @@ async def require_super_admin(
     if not usuario_bd:
         raise HTTPException(status_code=401, detail="Usuário não encontrado.")
 
-    role_normalizada = (usuario_bd.role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if is_root_admin_email(usuario_bd.email):
+        return
+
+    role_normalizada = normalize_user_role(usuario_bd.role)
     print(f"Role no Banco: {usuario_bd.role}")
     roles_permitidas = {"super_admin", "superadmin"}
     if role_normalizada not in roles_permitidas:
@@ -99,6 +104,7 @@ async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: No
         "usuario": {
             "id": str(user.id),
             "nome": user.nome,
+            "email": user.email,
             "role": user.role,
             "empresa_id": str(user.empresa_id)
         }

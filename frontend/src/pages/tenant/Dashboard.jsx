@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { Users, UserPlus, MessageSquare, AlertCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
+import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 
 export default function Dashboard() {
   const [data, setData] = useState({
@@ -12,24 +13,18 @@ export default function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
 
-  let user = null;
-  try {
-    const userStr = localStorage.getItem("user");
-    if (userStr) user = JSON.parse(userStr);
-  } catch (e) {
-    console.error("Failed to parse user from local storage");
-  }
+  const user = getStoredUser();
+  const empresaId = getActiveEmpresaId();
 
   useEffect(() => {
     const fetchDashboard = async () => {
-      if (!user || (!user.empresa_id && user.role !== "super_admin")) {
+      if (!user || !empresaId) {
         setLoading(false);
         return;
       }
       
       try {
         setLoading(true);
-        const empresaId = user.empresa_id || user.id; 
         const res = await api.get(`/empresas/${empresaId}/dashboard/stats`);
         setData(res.data);
       } catch (err) {
@@ -40,7 +35,7 @@ export default function Dashboard() {
     };
 
     fetchDashboard();
-  }, [user?.empresa_id]);
+  }, [empresaId]);
 
   if (!user) {
     return <div className="p-8 text-center text-gray-500">Faça login novamente.</div>;

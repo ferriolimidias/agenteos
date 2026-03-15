@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogIn } from "lucide-react";
 import api from "../services/api";
+import { clearImpersonation } from "../utils/auth";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -20,6 +21,7 @@ export default function Login() {
       const { usuario, access_token } = response.data;
       
       // Salva os dados do usuário
+      clearImpersonation();
       localStorage.setItem("user", JSON.stringify(usuario));
       localStorage.setItem("token", access_token);
       

@@ -1,35 +1,21 @@
 import { Outlet, Link, useNavigate } from "react-router-dom";
 import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, Settings } from "lucide-react";
+import { clearImpersonation, getStoredUser } from "../utils/auth";
 
 export default function TenantLayout() {
   const navigate = useNavigate();
-  // Safe parsing
-  let user = null;
-  try {
-    const userStr = localStorage.getItem("user");
-    if (userStr) user = JSON.parse(userStr);
-  } catch (e) {
-    console.error("Failed to parse user from local storage");
-  }
+  const user = getStoredUser();
 
   const isImpersonating = localStorage.getItem("impersonating") === "true";
   const impersonatingEmpresa = localStorage.getItem("impersonating_empresa");
 
   const handleReturnToAdmin = () => {
-    const origUser = localStorage.getItem("original_user");
-    const origToken = localStorage.getItem("original_token");
-    if (origUser) {
-      localStorage.setItem("user", origUser);
-      localStorage.setItem("token", origToken);
-      localStorage.removeItem("impersonating");
-      localStorage.removeItem("impersonating_empresa");
-      localStorage.removeItem("original_user");
-      localStorage.removeItem("original_token");
-      window.location.href = "/admin";
-    }
+    clearImpersonation();
+    window.location.href = "/admin";
   };
 
   const handleLogout = () => {
+    clearImpersonation();
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     navigate("/");

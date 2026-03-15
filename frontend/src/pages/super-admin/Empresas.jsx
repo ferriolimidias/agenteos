@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText } from "lucide-react";
 import RAGManager from "../../components/RAGManager";
+import { clearImpersonation } from "../../utils/auth";
 
 import { useNavigate } from "react-router-dom";
 
@@ -234,18 +235,15 @@ export default function Empresas() {
     try {
       const res = await api.post(`/auth/impersonate/${emp.id}`);
       const data = res.data;
-      
-      // Save original auth details if not already impersonating to allow returning later
-      const currentUserStr = localStorage.getItem("user");
-      if (currentUserStr && !localStorage.getItem("original_user")) {
-        localStorage.setItem("original_user", currentUserStr);
-        localStorage.setItem("original_token", localStorage.getItem("token") || "");
-      }
 
-      localStorage.setItem("user", JSON.stringify(data.usuario));
-      localStorage.setItem("token", data.access_token);
+      // Mantém a identidade autenticada original e troca apenas o tenant ativo.
+      clearImpersonation();
       localStorage.setItem("impersonating", "true");
       localStorage.setItem("impersonating_empresa", emp.nome_empresa);
+      localStorage.setItem("impersonated_empresa_id", emp.id);
+      if (data?.usuario?.id) {
+        localStorage.setItem("impersonated_user_id", data.usuario.id);
+      }
 
       window.location.href = "/painel"; // Full reload to clear states and trigger layout update
     } catch (err) {

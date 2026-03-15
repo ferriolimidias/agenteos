@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Send, Bot, RefreshCw } from "lucide-react";
+import { getActiveEmpresaId } from "../../utils/auth";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const POLL_INTERVAL_MS = 2000;
@@ -16,14 +17,7 @@ export default function Simulador() {
 
   const [sessaoId] = useState(() => "ID_TESTE_SIMULADOR");
 
-  let empresaId = "";
-  try {
-    const userStr = localStorage.getItem("user");
-    if (userStr) {
-      const u = JSON.parse(userStr);
-      empresaId = u.empresa_id;
-    }
-  } catch (e) {}
+  const empresaId = getActiveEmpresaId() || "";
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

@@ -9,12 +9,28 @@ from sqlalchemy import (
     Text,
     Table,
     DateTime,
-    Time
+    Time,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from .database import Base
+
+ROOT_ADMIN_EMAIL = "admin@ferriolimidias.com"
+ROOT_ADMIN_ROLE = "super_admin"
+
+
+def normalize_user_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
+def normalize_user_role(role: str | None) -> str:
+    return (role or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_root_admin_email(email: str | None) -> bool:
+    return normalize_user_email(email) == ROOT_ADMIN_EMAIL
 
 # N:N Association Table for Agentes and Ferramentas_API
 agente_ferramentas = Table(
@@ -215,6 +231,28 @@ class Usuario(Base):
     ativo = Column(Boolean, default=True)
 
     empresa = relationship("Empresa", back_populates="usuarios")
+
+
+def _enforce_root_admin_permissions(target: "Usuario") -> None:
+    if not is_root_admin_email(getattr(target, "email", None)):
+        return
+
+    target.role = ROOT_ADMIN_ROLE
+    target.empresa_id = None
+    target.ativo = True
+
+    if hasattr(target, "is_superuser"):
+        target.is_superuser = True
+
+
+@event.listens_for(Usuario, "before_insert")
+def _usuario_before_insert(_mapper, _connection, target: "Usuario") -> None:
+    _enforce_root_admin_permissions(target)
+
+
+@event.listens_for(Usuario, "before_update")
+def _usuario_before_update(_mapper, _connection, target: "Usuario") -> None:
+    _enforce_root_admin_permissions(target)
 
 
 class ConhecimentoRAG(Base):
