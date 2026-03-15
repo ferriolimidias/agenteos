@@ -13,6 +13,7 @@ openai
 PyPDF2
 pydantic==2.12.5
 pydantic-settings==2.13.1
+python-multipart
 python-dotenv
 python-jose[cryptography]==3.5.0
 redis

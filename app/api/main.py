@@ -35,6 +35,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Agent OS (Omnichannel)")
 
+
+@app.get("/")
+async def root():
+    return {"status": "online", "message": "Backend do Agente OS operando"}
+
+
 # Configuração do CORS
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.include_router(empresas.router, prefix="/api")
 app.include_router(agentes.router, prefix="/api")
