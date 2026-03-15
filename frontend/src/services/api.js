@@ -12,6 +12,9 @@ api.interceptors.request.use((config) => {
       if (user.role) {
         config.headers['X-User-Role'] = user.role;
       }
+      if (user.id) {
+        config.headers['X-User-Id'] = user.id;
+      }
     } catch (e) {}
   }
   return config;

@@ -3,6 +3,7 @@ from typing import Optional
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+import uuid
 
 from app.core.security import get_password_hash, is_bcrypt_hash, verify_password
 from db.database import get_db
@@ -54,15 +55,31 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         }
     }
 
-async def require_super_admin(x_user_role: Optional[str] = Header(None)):
-    role_normalizada = (x_user_role or "").strip().lower().replace("-", "_").replace(" ", "_")
+async def require_super_admin(
+    db: AsyncSession = Depends(get_db),
+    x_user_id: Optional[str] = Header(None),
+):
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Usuário não autenticado.")
+
+    try:
+        user_uuid = uuid.UUID(x_user_id)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Identificador de usuário inválido.")
+
+    result = await db.execute(select(Usuario).where(Usuario.id == user_uuid))
+    usuario_bd = result.scalars().first()
+    if not usuario_bd:
+        raise HTTPException(status_code=401, detail="Usuário não encontrado.")
+
+    role_normalizada = (usuario_bd.role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    print(f"Role no Banco: {usuario_bd.role}")
     roles_permitidas = {"super_admin", "superadmin"}
     if role_normalizada not in roles_permitidas:
         raise HTTPException(status_code=403, detail="Acesso negado. Apenas Super Admin.")
 
 @router.post("/impersonate/{empresa_id}")
 async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: None = Depends(require_super_admin)):
-    import uuid
     try:
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
