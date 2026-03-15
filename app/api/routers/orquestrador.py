@@ -81,7 +81,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
 
     db.add(novo)
     await db.commit()
-    await db.refresh(novo)
+    await db.refresh(novo, attribute_names=["ferramentas"])
     
     return {
         "id": novo.id,
