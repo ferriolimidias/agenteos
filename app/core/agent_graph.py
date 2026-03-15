@@ -421,8 +421,16 @@ Assuma as informações como suas. NUNCA mencione que consultou especialistas ou
 
 <instrucao_decisao>
 Avalie a última mensagem do cliente considerando TODO o <historico_conversa>.
-Se ele estiver apenas cumprimentando, encerrando, ou fazendo small talk, defina precisa_roteamento=False e forneça sua resposta em 'resposta'. Máximo de 2 frases.
-Se a intenção demandar suporte, preços, agendamento ou dados operacionais, defina precisa_roteamento=True e deixe 'resposta' nula.
+Regra principal: em caso de dúvida, classifique como precisa_roteamento=True.
+Somente use precisa_roteamento=False quando for small talk puro (cumprimento, agradecimento, despedida ou conversa social sem pedido operacional).
+Defina precisa_roteamento=True obrigatoriamente para qualquer solicitação que envolva:
+- consulta a sistemas, APIs, bancos, ferramentas, integrações ou dados externos;
+- suporte técnico, diagnóstico, status, disponibilidade, preços, prazos, agendamento ou segunda via;
+- cálculos, verificações, validações, comparações, busca de endereço/CEP, tracking, protocolo ou pedidos com campos estruturados;
+- intenção desconhecida, ambígua, incompleta, ou qualquer pedido que você não possa resolver somente com conversa.
+Quando precisa_roteamento=True, deixe 'resposta' como nula.
+É proibido responder com limitação do tipo "não consigo consultar" na fase de decisão; nesses casos, roteie.
+Se for small talk puro, use precisa_roteamento=False e forneça uma resposta curta em 'resposta' (máximo 2 frases).
 </instrucao_decisao>"""
 
     print(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
@@ -433,6 +441,62 @@ Se a intenção demandar suporte, preços, agendamento ou dados operacionais, de
     resultado = await llm_json.ainvoke(mensagens_para_llm)
 
     state["status_conversa"] = resultado.status_conversa
+
+    ultima_mensagem = (state.get("mensagens") or [""])[-1]
+    texto_ultima = str(ultima_mensagem or "").strip().lower()
+
+    # Guarda de segurança para reduzir falso "small talk":
+    # se houver qualquer sinal de consulta operacional, ferramenta, cálculo,
+    # CEP ou intenção não social clara, força roteamento para o supervisor.
+    import re
+
+    def _eh_small_talk_puro(texto: str) -> bool:
+        if not texto:
+            return False
+        if "?" in texto:
+            return False
+        if re.search(r"\d{2,}", texto):
+            return False
+        tokens = re.findall(r"[a-zA-ZÀ-ÿ0-9_]+", texto.lower())
+        if not tokens:
+            return False
+        small_talk_vocab = {
+            "oi", "ola", "olá", "bom", "boa", "dia", "tarde", "noite",
+            "tudo", "bem", "obrigado", "obrigada", "valeu", "blz", "beleza",
+            "show", "perfeito", "entendi", "ok", "okay", "flw", "falou",
+            "tchau", "ate", "até", "mais", "vlw", "obg"
+        }
+        return len(tokens) <= 8 and all(t in small_talk_vocab for t in tokens)
+
+    marcadores_roteamento = [
+        "cep", "preco", "preço", "valor", "agenda", "agendar", "horario", "horário",
+        "disponibilidade", "suporte", "erro", "problema", "consultar", "consulta",
+        "buscar", "calcular", "calculo", "cálculo", "status", "rastreio",
+        "codigo", "código", "protocolo", "sistema", "api", "ferramenta", "integracao", "integração"
+    ]
+    resposta_modelo = (resultado.resposta or "").lower()
+    respondeu_limitacao = any(
+        trecho in resposta_modelo
+        for trecho in ["não consigo", "nao consigo", "não posso", "nao posso", "não tenho acesso", "nao tenho acesso"]
+    )
+    tem_padrao_cep = re.search(r"\b\d{5}-?\d{3}\b", texto_ultima) is not None
+    precisa_forcar_roteamento = (
+        (not _eh_small_talk_puro(texto_ultima))
+        and (
+            # Se não for small talk puro, tratar por padrão como rota para especialistas.
+            # Mantém no atendente apenas cumprimentos/agradecimentos/despedidas.
+            bool(texto_ultima)
+            or
+            any(m in texto_ultima for m in marcadores_roteamento)
+            or tem_padrao_cep
+            or respondeu_limitacao
+        )
+    )
+
+    if not resultado.precisa_roteamento and precisa_forcar_roteamento:
+        print("[NODE ATENDENTE] Guarda de segurança acionada: forçando roteamento para o Supervisor.")
+        resultado.precisa_roteamento = True
+        resultado.resposta = None
 
     if not resultado.precisa_roteamento and resultado.resposta:
         state["resposta_final"] = resultado.resposta
