@@ -55,7 +55,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     }
 
 async def require_super_admin(x_user_role: Optional[str] = Header(None)):
-    if x_user_role != "super_admin":
+    role_normalizada = (x_user_role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    roles_permitidas = {"super_admin", "superadmin"}
+    if role_normalizada not in roles_permitidas:
         raise HTTPException(status_code=403, detail="Acesso negado. Apenas Super Admin.")
 
 @router.post("/impersonate/{empresa_id}")
