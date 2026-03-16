@@ -259,3 +259,113 @@ async def executar_transferencia_atendimento(
         f"Transferência realizada com sucesso para '{destino.nome_destino}'. "
         "Agora responda ao cliente de forma cordial informando que o atendimento será continuado por um humano em instantes."
     )
+
+
+async def testar_destino_transferencia(
+    *,
+    empresa_id: str,
+    destino_id: str,
+    conexao_id_atual: str | None = None,
+) -> dict:
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+        destino_uuid = uuid.UUID(str(destino_id))
+    except (ValueError, TypeError):
+        return {
+            "success": False,
+            "detail": "IDs inválidos para teste de destino.",
+            "falhas": [],
+        }
+
+    async with AsyncSessionLocal() as session:
+        result_empresa = await session.execute(
+            select(Empresa).where(Empresa.id == empresa_uuid)
+        )
+        empresa = result_empresa.scalars().first()
+        if not empresa:
+            return {
+                "success": False,
+                "detail": "Empresa não encontrada para o teste.",
+                "falhas": [],
+            }
+
+        result_destino = await session.execute(
+            select(DestinosTransferencia).where(
+                DestinosTransferencia.id == destino_uuid,
+                DestinosTransferencia.empresa_id == empresa_uuid,
+            )
+        )
+        destino = result_destino.scalars().first()
+        if not destino:
+            return {
+                "success": False,
+                "detail": "Destino de transferência não encontrado.",
+                "falhas": [],
+            }
+
+        contatos_destino = [
+            str(contato).strip()
+            for contato in (destino.contatos_destino or [])
+            if str(contato).strip()
+        ]
+        if not contatos_destino:
+            return {
+                "success": False,
+                "detail": "O destino não possui contatos_destino configurados.",
+                "falhas": [],
+            }
+
+        conexao_id_envio = await _resolver_conexao_evolution_para_transferencia(
+            session,
+            empresa,
+            conexao_id_atual=conexao_id_atual,
+        )
+        if not conexao_id_envio:
+            return {
+                "success": False,
+                "detail": "Nenhuma conexão Evolution válida foi encontrada para disparar o teste.",
+                "falhas": contatos_destino,
+            }
+
+    mensagem_teste = (
+        "🤖 *Teste de Sistema*\n"
+        "Sua configuração de transbordo está funcionando perfeitamente! "
+        "Você receberá os leads neste número."
+    )
+
+    falhas: list[str] = []
+    sucessos: list[str] = []
+    for contato in contatos_destino:
+        try:
+            enviado = await despachar_mensagem(
+                canal="evolution",
+                identificador_origem=contato,
+                texto=mensagem_teste,
+                conexao_id=conexao_id_envio,
+            )
+            if enviado:
+                sucessos.append(contato)
+            else:
+                falhas.append(contato)
+        except Exception:
+            falhas.append(contato)
+
+    if falhas:
+        return {
+            "success": False,
+            "detail": (
+                f"Falha ao enviar o teste para: {', '.join(falhas)}. "
+                "Verifique se os números e a conexão configurada estão corretos."
+            ),
+            "falhas": falhas,
+            "sucessos": sucessos,
+            "destino_nome": destino.nome_destino,
+        }
+
+    return {
+        "success": True,
+        "detail": f"Teste enviado com sucesso para o destino '{destino.nome_destino}'.",
+        "falhas": [],
+        "sucessos": sucessos,
+        "destino_nome": destino.nome_destino,
+    }

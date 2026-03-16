@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
+from app.services.transferencia_service import testar_destino_transferencia
 
 class EvolutionCredentials(BaseModel):
     evolution_url: str
@@ -852,6 +853,25 @@ async def excluir_destino_transferencia(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao excluir destino: {str(e)}")
+
+
+@router.post("/{empresa_id}/transferencias/destinos/{destino_id}/testar", status_code=status.HTTP_200_OK)
+async def testar_destino_transferencia_endpoint(
+    empresa_id: str,
+    destino_id: str,
+):
+    resultado = await testar_destino_transferencia(
+        empresa_id=empresa_id,
+        destino_id=destino_id,
+    )
+
+    if not resultado.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=resultado.get("detail") or "Falha ao testar destino de transferência.",
+        )
+
+    return resultado
 
 
 @router.get("/{empresa_id}/transferencias/historico", response_model=List[HistoricoTransferenciaResponse])

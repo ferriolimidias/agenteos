@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRightLeft,
+  BellRing,
   ClipboardList,
   MessageCircleMore,
   Pencil,
   Plus,
   RefreshCw,
+  Send,
   Trash2,
   X,
 } from "lucide-react";
@@ -44,6 +46,8 @@ export default function Transferencias() {
   const [formData, setFormData] = useState(initialForm);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [testingId, setTestingId] = useState(null);
+  const [toast, setToast] = useState(null);
 
   const emptyHistorico = useMemo(() => !historico || historico.length === 0, [historico]);
 
@@ -77,6 +81,12 @@ export default function Transferencias() {
     fetchDestinos();
     fetchHistorico();
   }, [empresaId]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const openCreateModal = () => {
     setEditingDestino(null);
@@ -140,8 +150,64 @@ export default function Transferencias() {
     }
   };
 
+  const handleTestarDestino = async (destino) => {
+    try {
+      setTestingId(destino.id);
+      const res = await api.post(`/empresas/${empresaId}/transferencias/destinos/${destino.id}/testar`);
+      setToast({
+        type: "success",
+        message: res.data?.detail || "Teste enviado com sucesso.",
+      });
+    } catch (err) {
+      console.error("Erro ao testar destino:", err);
+      setToast({
+        type: "error",
+        message:
+          err.response?.data?.detail ||
+          "Falha ao enviar o teste. Verifique os números e a conexão configurada.",
+      });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
+      {toast ? (
+        <div className="fixed right-6 top-6 z-[70]">
+          <div
+            className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
+              toast.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`mt-0.5 rounded-full p-1 ${
+                  toast.type === "success" ? "bg-emerald-100" : "bg-red-100"
+                }`}
+              >
+                {toast.type === "success" ? <BellRing size={16} /> : <X size={16} />}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">
+                  {toast.type === "success" ? "Teste enviado" : "Falha no teste"}
+                </p>
+                <p className="mt-0.5 text-sm">{toast.message}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                className="rounded-lg p-1 opacity-70 transition-opacity hover:opacity-100"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
@@ -229,6 +295,19 @@ export default function Transferencias() {
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleTestarDestino(destino)}
+                            disabled={testingId === destino.id}
+                            className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {testingId === destino.id ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <Send size={14} />
+                            )}
+                            Testar Notificação
+                          </button>
                           <button
                             type="button"
                             onClick={() => openEditModal(destino)}
