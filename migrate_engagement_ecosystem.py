@@ -106,10 +106,13 @@ CREATE TABLE IF NOT EXISTS campanhas_disparo (
 """
 
 
-CREATE_CAMPANHAS_DISPARO_INDEXES = """
+CREATE_CAMPANHAS_DISPARO_EMPRESA_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_campanhas_disparo_empresa_id
 ON campanhas_disparo (empresa_id);
+"""
 
+
+CREATE_CAMPANHAS_DISPARO_TEMPLATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_campanhas_disparo_template_id
 ON campanhas_disparo (template_id);
 """
@@ -146,13 +149,19 @@ CREATE TABLE IF NOT EXISTS historico_transferencia (
 """
 
 
-CREATE_HISTORICO_TRANSFERENCIA_INDEXES = """
+CREATE_HISTORICO_TRANSFERENCIA_EMPRESA_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_historico_transferencia_empresa_id
 ON historico_transferencia (empresa_id);
+"""
 
+
+CREATE_HISTORICO_TRANSFERENCIA_LEAD_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_historico_transferencia_lead_id
 ON historico_transferencia (lead_id);
+"""
 
+
+CREATE_HISTORICO_TRANSFERENCIA_DESTINO_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_historico_transferencia_destino_id
 ON historico_transferencia (destino_id);
 """
@@ -180,7 +189,8 @@ async def main() -> None:
         print("Tabela templates_mensagem garantida.")
 
         await conn.execute(text(CREATE_CAMPANHAS_DISPARO_TABLE))
-        await conn.execute(text(CREATE_CAMPANHAS_DISPARO_INDEXES))
+        await conn.execute(text(CREATE_CAMPANHAS_DISPARO_EMPRESA_INDEX))
+        await conn.execute(text(CREATE_CAMPANHAS_DISPARO_TEMPLATE_INDEX))
         print("Tabela campanhas_disparo garantida.")
 
         await conn.execute(text(CREATE_DESTINOS_TRANSFERENCIA_TABLE))
@@ -188,7 +198,9 @@ async def main() -> None:
         print("Tabela destinos_transferencia garantida.")
 
         await conn.execute(text(CREATE_HISTORICO_TRANSFERENCIA_TABLE))
-        await conn.execute(text(CREATE_HISTORICO_TRANSFERENCIA_INDEXES))
+        await conn.execute(text(CREATE_HISTORICO_TRANSFERENCIA_EMPRESA_INDEX))
+        await conn.execute(text(CREATE_HISTORICO_TRANSFERENCIA_LEAD_INDEX))
+        await conn.execute(text(CREATE_HISTORICO_TRANSFERENCIA_DESTINO_INDEX))
         print("Tabela historico_transferencia garantida.")
 
     print("Migracao do ecossistema concluida.")
