@@ -16,7 +16,7 @@ async def despachar_mensagem(
     Função responsável por aplicar o delay 'humano' e enviar a mensagem para o canal final.
     """
     if not texto:
-        return
+        return False
 
     # Lógica de Humanização: quebrando a resposta usando quebra de linha
     # Também poderia incluir divisão por '.' se o texto for muito longo e sem parágrafos
@@ -25,6 +25,8 @@ async def despachar_mensagem(
     if not partes:
         partes = [texto]
         
+    sucesso_geral = True
+
     for parte in partes:
         # Cálculo de delay baseado no tamanho do texto (ex: 15 caracteres por segundo)
         delay = max(1.0, len(parte) / 15.0)
@@ -44,6 +46,7 @@ async def despachar_mensagem(
 
                 if not conexao_id:
                     print(f"[Channel Factory -> Evolution] Fallback seguro: conexao_id ausente para {identificador_origem}.")
+                    sucesso_geral = False
                     continue
 
                 try:
@@ -57,19 +60,24 @@ async def despachar_mensagem(
 
                         if not conexao:
                             print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não encontrada.")
+                            sucesso_geral = False
                             continue
 
                         if conexao.tipo != TipoConexao.EVOLUTION:
                             print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não pertence ao canal evolution.")
+                            sucesso_geral = False
                             continue
 
-                        await enviar_mensagem_whatsapp_por_credenciais(
+                        enviado = await enviar_mensagem_whatsapp_por_credenciais(
                             identificador_origem,
                             parte,
                             conexao.credenciais,
                         )
+                        if not enviado:
+                            sucesso_geral = False
                 except Exception as e:
                     print(f"[Channel Factory -> Evolution] Erro ao despachar via conexão {conexao_id}: {e}")
+                    sucesso_geral = False
                 
             case "chatwoot":
                 print(f"[Channel Factory -> Chatwoot] Disparando para {identificador_origem}: {parte}")
@@ -94,3 +102,5 @@ async def despachar_mensagem(
             case _:
                 print(f"[Channel Factory] Despachando via Conexão ID: {conexao_id} para o canal: {canal}")
                 print(f"[Channel Factory -> {canal}] (Canal desconhecido) Disparando para {identificador_origem}: {parte}")
+
+    return sucesso_geral

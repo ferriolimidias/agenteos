@@ -58,6 +58,10 @@ from db.models import Conhecimento, Especialista, Empresa, CRMLead, CRMFunil, CR
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_from_json_schema
+from app.services.transferencia_service import (
+    executar_transferencia_atendimento,
+    listar_destinos_transferencia_para_prompt,
+)
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
@@ -263,6 +267,40 @@ def criar_ferramenta_atualizar_tags_contextual(lead_id: str, empresa_id: str) ->
             "Use para adicionar ou remover marcadores como interesse, perfil, objeção, prioridade ou estágio comportamental."
         ),
         args_schema=ActionAtualizarTagsInput,
+        coroutine=_tool,
+    )
+
+
+class ActionTransferirAtendimentoInput(BaseModel):
+    destino_id: str = Field(
+        description="UUID do destino de transferência que deve receber o transbordo."
+    )
+    resumo_conversa: str = Field(
+        description="Resumo curto e objetivo do motivo da transferência e do que o cliente precisa."
+    )
+
+
+def criar_ferramenta_transferir_atendimento_contextual(
+    lead_id: str,
+    empresa_id: str,
+    conexao_id: Optional[str] = None,
+) -> StructuredTool:
+    async def _tool(destino_id: str, resumo_conversa: str) -> str:
+        return await executar_transferencia_atendimento(
+            empresa_id=empresa_id,
+            lead_id=lead_id,
+            destino_id=destino_id,
+            resumo_conversa=resumo_conversa,
+            conexao_id_atual=conexao_id,
+        )
+
+    return StructuredTool(
+        name="action_transferir_atendimento",
+        description=(
+            "Executa o transbordo real do atendimento para um destino humano configurado. "
+            "Use quando o cenário corresponder às instruções de ativação do destino e inclua um resumo objetivo da conversa."
+        ),
+        args_schema=ActionTransferirAtendimentoInput,
         coroutine=_tool,
     )
 
@@ -692,6 +730,8 @@ async def node_especialista_dinamico(state: AgentState):
 
     state["respostas_especialistas"] = []
     lead_id = state.get("lead_id")
+    conexao_id = state.get("conexao_id")
+    destinos_transferencia_prompt = await listar_destinos_transferencia_para_prompt(empresa_id)
     
     for intencao in intencoes:
         contexto_adicional = ""
@@ -893,15 +933,37 @@ async def node_especialista_dinamico(state: AgentState):
                 "- action_atualizar_tags: atualiza tags do lead atual para registrar contexto comercial, perfil, objeções e sinais de engajamento."
             )
 
+        if lead_id and empresa_id and destinos_transferencia_prompt and "action_transferir_atendimento" not in nomes_tools_registradas:
+            tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
+                lead_id=lead_id,
+                empresa_id=empresa_id,
+                conexao_id=conexao_id,
+            )
+            tools_disponiveis.append(tool_transferencia)
+            descricoes_tools.append(
+                "- action_transferir_atendimento: transfere o atendimento para um destino humano configurado, registra auditoria e dispara o aviso interno."
+            )
+
         system_message_adicional = f"\n{contexto_empresa}O nome do usuário é: {state['nome_contato']}."
         
         if descricoes_tools:
             system_message_adicional += "\n\nVocê tem acesso às seguintes ferramentas:\n"
             system_message_adicional += "\n".join(descricoes_tools)
             system_message_adicional += "\nUse-as se a requisição do usuário exigir."
+
+        if destinos_transferencia_prompt:
+            system_message_adicional += (
+                "\n\nVocê tem os seguintes destinos de transferência disponíveis:\n"
+                f"{destinos_transferencia_prompt}\n"
+                "Quando o cenário bater com as instruções de ativação acima, use a ferramenta 'action_transferir_atendimento'. "
+                "Após usar a ferramenta, encerre sua resposta ao cliente de forma cordial avisando que um humano continuará o atendimento em instantes."
+            )
             
         if state.get("handoff_requested", False):
-            system_message_adicional += "\n\nInformação importante: O usuário pediu atendimento humano. Avise que irá transferir."
+            system_message_adicional += (
+                "\n\nInformação importante: O usuário pediu atendimento humano. "
+                "Se houver um destino compatível, priorize usar 'action_transferir_atendimento' antes de responder ao cliente."
+            )
             
         prompt_completo = prompt_base + system_message_adicional
 
