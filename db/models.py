@@ -1,3 +1,4 @@
+import enum
 import uuid
 from datetime import datetime
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Table,
     DateTime,
     Time,
+    Enum,
     event,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -60,6 +62,7 @@ class Empresa(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nome_empresa = Column(String, nullable=False)
     area_atuacao = Column(String, nullable=True)
+    # Campo legado mantido durante a migracao para a tabela conexoes.
     credenciais_canais = Column(JSONB, default={})
     informacoes_adicionais = Column(Text, nullable=True)
     ia_instrucoes_personalizadas = Column(Text, nullable=True)
@@ -69,6 +72,7 @@ class Empresa(Base):
     mensagem_saudacao = Column(String, nullable=True)
     modelo_ia = Column(String, default="gpt-4o-mini")
     modelo_roteador = Column(String, default="gpt-4o-mini")
+    conexao_disparo_id = Column(UUID(as_uuid=True), ForeignKey("conexoes.id", ondelete="SET NULL"), nullable=True)
     # Configurações de Follow-up Automático
     followup_ativo = Column(Boolean, default=False)
     followup_espera_nivel_1_minutos = Column(Integer, default=20)
@@ -92,6 +96,41 @@ class Empresa(Base):
     agendamentos_locais = relationship("AgendamentoLocal", back_populates="empresa", cascade="all, delete-orphan")
     integracoes_externas = relationship("IntegracaoExterna", back_populates="empresa", cascade="all, delete-orphan")
     webhooks_saida = relationship("WebhookSaida", back_populates="empresa", cascade="all, delete-orphan")
+    conexoes = relationship("Conexao", back_populates="empresa", cascade="all, delete-orphan", foreign_keys="Conexao.empresa_id")
+    conexao_disparo = relationship("Conexao", back_populates="empresas_como_canal_disparo", foreign_keys=[conexao_disparo_id], post_update=True)
+    templates_mensagem = relationship("TemplateMensagem", back_populates="empresa", cascade="all, delete-orphan")
+    campanhas_disparo = relationship("CampanhaDisparo", back_populates="empresa", cascade="all, delete-orphan")
+    destinos_transferencia = relationship("DestinosTransferencia", back_populates="empresa", cascade="all, delete-orphan")
+    historicos_transferencia = relationship("HistoricoTransferencia", back_populates="empresa", cascade="all, delete-orphan")
+
+
+class TipoConexao(str, enum.Enum):
+    EVOLUTION = "evolution"
+    META = "meta"
+    INSTAGRAM = "instagram"
+
+
+class Conexao(Base):
+    __tablename__ = "conexoes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    tipo = Column(Enum(TipoConexao, name="tipo_conexao_enum"), nullable=False)
+    nome_instancia = Column(String, nullable=False)
+    credenciais = Column(JSONB, default={})
+    status = Column(String, nullable=False, default="ativo")
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="conexoes", foreign_keys=[empresa_id])
+    empresas_como_canal_disparo = relationship("Empresa", back_populates="conexao_disparo", foreign_keys="Empresa.conexao_disparo_id")
+    mensagens_historico = relationship("MensagemHistorico", back_populates="conexao")
+
+
+class CampanhaDisparoStatus(str, enum.Enum):
+    PENDENTE = "pendente"
+    EXECUTANDO = "executando"
+    CONCLUIDO = "concluido"
+    ERRO = "erro"
 
 
 class Contato(Base):
@@ -300,6 +339,7 @@ class CRMLead(Base):
     nome_contato = Column(String, nullable=False)
     telefone_contato = Column(String, nullable=True)
     historico_resumo = Column(Text, nullable=True)
+    tags = Column(JSONB, nullable=False, default=list)
     dados_adicionais = Column(JSONB, default={})  # campos extras captados pela IA
     bot_pausado_ate = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
@@ -308,17 +348,80 @@ class CRMLead(Base):
     etapa = relationship("CRMEtapa", back_populates="leads")
     agendamentos = relationship("AgendamentoLocal", back_populates="lead")
     mensagens = relationship("MensagemHistorico", back_populates="lead", cascade="all, delete-orphan")
+    historicos_transferencia = relationship("HistoricoTransferencia", back_populates="lead", cascade="all, delete-orphan")
 
 class MensagemHistorico(Base):
     __tablename__ = "mensagens_historico"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     lead_id = Column(UUID(as_uuid=True), ForeignKey("crm_leads.id", ondelete="CASCADE"), nullable=False)
+    conexao_id = Column(UUID(as_uuid=True), ForeignKey("conexoes.id", ondelete="SET NULL"), nullable=True)
     texto = Column(Text, nullable=False)
     from_me = Column(Boolean, nullable=False, default=False)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     lead = relationship("CRMLead", back_populates="mensagens")
+    conexao = relationship("Conexao", back_populates="mensagens_historico")
+
+
+class TemplateMensagem(Base):
+    __tablename__ = "templates_mensagem"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String, nullable=False)
+    texto_template = Column(Text, nullable=False)
+    variaveis_esperadas = Column(JSONB, nullable=False, default=list)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="templates_mensagem")
+    campanhas = relationship("CampanhaDisparo", back_populates="template")
+
+
+class CampanhaDisparo(Base):
+    __tablename__ = "campanhas_disparo"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String, nullable=False)
+    template_id = Column(UUID(as_uuid=True), ForeignKey("templates_mensagem.id", ondelete="SET NULL"), nullable=True)
+    tags_alvo = Column(JSONB, nullable=False, default=list)
+    data_agendamento = Column(DateTime, nullable=True)
+    status = Column(Enum(CampanhaDisparoStatus, name="campanha_disparo_status_enum"), nullable=False, default=CampanhaDisparoStatus.PENDENTE)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="campanhas_disparo")
+    template = relationship("TemplateMensagem", back_populates="campanhas")
+
+
+class DestinosTransferencia(Base):
+    __tablename__ = "destinos_transferencia"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome_destino = Column(String, nullable=False)
+    contatos_destino = Column(JSONB, nullable=False, default=list)
+    instrucoes_ativacao = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="destinos_transferencia")
+    historicos_transferencia = relationship("HistoricoTransferencia", back_populates="destino")
+
+
+class HistoricoTransferencia(Base):
+    __tablename__ = "historico_transferencia"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("crm_leads.id", ondelete="CASCADE"), nullable=False)
+    destino_id = Column(UUID(as_uuid=True), ForeignKey("destinos_transferencia.id", ondelete="SET NULL"), nullable=True)
+    motivo_ia = Column(Text, nullable=True)
+    resumo_enviado = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="historicos_transferencia")
+    lead = relationship("CRMLead", back_populates="historicos_transferencia")
+    destino = relationship("DestinosTransferencia", back_populates="historicos_transferencia")
 
 
 

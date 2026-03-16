@@ -1,7 +1,17 @@
 import asyncio
-import httpx
+import uuid
 
-async def despachar_mensagem(canal: str, identificador_origem: str, texto: str):
+from db.database import AsyncSessionLocal
+from db.models import Conexao, TipoConexao
+from sqlalchemy import select
+
+
+async def despachar_mensagem(
+    canal: str,
+    identificador_origem: str,
+    texto: str,
+    conexao_id: str | None = None,
+):
     """
     Função responsável por aplicar o delay 'humano' e enviar a mensagem para o canal final.
     """
@@ -30,10 +40,36 @@ async def despachar_mensagem(canal: str, identificador_origem: str, texto: str):
                 #     await client.post("mock_url_meta", json={"to": identificador_origem, "text": {"body": parte}})
                 
             case "evolution":
-                print(f"[Channel Factory -> Evolution] Disparando para {identificador_origem}: {parte}")
-                # Mock HTTP:
-                # async with httpx.AsyncClient() as client:
-                #     await client.post("mock_url_evolution", json={"number": identificador_origem, "text": parte})
+                print(f"[Channel Factory] Despachando via Conexão ID: {conexao_id} para o canal: {canal}")
+
+                if not conexao_id:
+                    print(f"[Channel Factory -> Evolution] Fallback seguro: conexao_id ausente para {identificador_origem}.")
+                    continue
+
+                try:
+                    from app.services.evolution_service import enviar_mensagem_whatsapp_por_credenciais
+
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(Conexao).where(Conexao.id == uuid.UUID(conexao_id))
+                        )
+                        conexao = result.scalars().first()
+
+                        if not conexao:
+                            print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não encontrada.")
+                            continue
+
+                        if conexao.tipo != TipoConexao.EVOLUTION:
+                            print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não pertence ao canal evolution.")
+                            continue
+
+                        await enviar_mensagem_whatsapp_por_credenciais(
+                            identificador_origem,
+                            parte,
+                            conexao.credenciais,
+                        )
+                except Exception as e:
+                    print(f"[Channel Factory -> Evolution] Erro ao despachar via conexão {conexao_id}: {e}")
                 
             case "chatwoot":
                 print(f"[Channel Factory -> Chatwoot] Disparando para {identificador_origem}: {parte}")
@@ -45,6 +81,7 @@ async def despachar_mensagem(canal: str, identificador_origem: str, texto: str):
                 print(f"[Channel Factory -> Telegram] Disparando para {identificador_origem}: {parte}")
                 
             case "simulador":
+                print(f"[Channel Factory] Despachando via Conexão ID: {conexao_id} para o canal: {canal}")
                 print(f"[Channel Factory -> Simulador] Gravando resposta no Redis para sessão: {identificador_origem}")
                 from app.api.main import redis_client
                 # No simulador, o identificador_origem é o sessao_id
@@ -55,4 +92,5 @@ async def despachar_mensagem(canal: str, identificador_origem: str, texto: str):
                 await redis_client.setex(f"sim_resp:{identificador_origem}", 300, parte)
                 
             case _:
+                print(f"[Channel Factory] Despachando via Conexão ID: {conexao_id} para o canal: {canal}")
                 print(f"[Channel Factory -> {canal}] (Canal desconhecido) Disparando para {identificador_origem}: {parte}")

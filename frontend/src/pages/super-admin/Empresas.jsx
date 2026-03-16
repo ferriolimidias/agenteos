@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText } from "lucide-react";
 import RAGManager from "../../components/RAGManager";
+import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import { clearImpersonation } from "../../utils/auth";
 
 import { useNavigate } from "react-router-dom";
@@ -16,6 +17,7 @@ export default function Empresas() {
   // Modal de Credenciais
   const [showCredenciaisModal, setShowCredenciaisModal] = useState(false);
   const [empresaSelecionada, setEmpresaSelecionada] = useState(null);
+  const [activeIntegracaoTab, setActiveIntegracaoTab] = useState("conexoes");
   const [credenciais, setCredenciais] = useState({
     evolution_url: "",
     evolution_apikey: "",
@@ -159,6 +161,7 @@ export default function Empresas() {
 
   const openCredenciaisModal = (emp) => {
     setEmpresaSelecionada(emp);
+    setActiveIntegracaoTab("conexoes");
     // Tentar pré-popular se houver (o mock endpoint atual não traz as credenciais pro front de cara, mas se no futuro vier populado)
     setCredenciais({
       evolution_url: emp.credenciais_canais?.evolution_url || "",
@@ -531,15 +534,15 @@ export default function Empresas() {
         </div>
       )}
 
-      {/* MODAL CONFIGURAÇÃO CREDENCIAIS EVOLUTION */}
+      {/* MODAL INTEGRAÇÕES E CONEXÕES */}
       {showCredenciaisModal && empresaSelecionada && (
         <div className="fixed inset-0 bg-gray-900/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
               <div>
                 <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                   <Settings className="text-gray-500" size={24} />
-                  Integração WhatsApp
+                  Integrações e Canais
                 </h2>
                 <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
               </div>
@@ -551,79 +554,118 @@ export default function Empresas() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveCredenciais} className="p-6">
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Evolution URL Base
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    placeholder="Ex: https://api.meuservidor.com"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                    value={credenciais.evolution_url}
-                    onChange={(e) => setCredenciais({...credenciais, evolution_url: e.target.value})}
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Global API Key
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Sua chave secreta da Evolution"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                    value={credenciais.evolution_apikey}
-                    onChange={(e) => setCredenciais({...credenciais, evolution_apikey: e.target.value})}
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Nome da Instância
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: whatsapp-tenant-01"
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                    value={credenciais.evolution_instance}
-                    onChange={(e) => setCredenciais({...credenciais, evolution_instance: e.target.value})}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">
-                    Chave da OpenAI (Opcional - Chave do Cliente)
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="sk-..."
-                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                    value={credenciais.openai_api_key}
-                    onChange={(e) => setCredenciais({...credenciais, openai_api_key: e.target.value})}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-8 flex justify-end">
+            <div className="border-b border-gray-100 px-6 pt-4">
+              <div className="flex gap-2">
                 <button
-                  type="submit"
-                  disabled={savingCredenciais}
-                  className="bg-gray-900 hover:bg-black text-white px-6 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                  type="button"
+                  onClick={() => setActiveIntegracaoTab("conexoes")}
+                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    activeIntegracaoTab === "conexoes"
+                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
                 >
-                  {savingCredenciais ? (
-                    <><RefreshCw size={18} className="animate-spin" /> Salvando...</>
-                  ) : (
-                    "Salvar Integração"
-                  )}
+                  Canais / Conexões
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveIntegracaoTab("legado")}
+                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    activeIntegracaoTab === "legado"
+                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  Credenciais Legadas
                 </button>
               </div>
-            </form>
+            </div>
+
+            <div className="max-h-[80vh] overflow-y-auto p-6">
+              {activeIntegracaoTab === "conexoes" ? (
+                <EmpresaConexoesManager
+                  empresaId={empresaSelecionada.id}
+                  empresaNome={empresaSelecionada.nome_empresa}
+                />
+              ) : (
+                <form onSubmit={handleSaveCredenciais} className="space-y-6">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Esta aba mantém a configuração antiga por compatibilidade. As novas integrações devem ser cadastradas em <strong>Canais / Conexões</strong>.
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Evolution URL Base
+                      </label>
+                      <input
+                        type="url"
+                        required
+                        placeholder="Ex: https://api.meuservidor.com"
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        value={credenciais.evolution_url}
+                        onChange={(e) => setCredenciais({...credenciais, evolution_url: e.target.value})}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Global API Key
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Sua chave secreta da Evolution"
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        value={credenciais.evolution_apikey}
+                        onChange={(e) => setCredenciais({...credenciais, evolution_apikey: e.target.value})}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Nome da Instância
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: whatsapp-tenant-01"
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        value={credenciais.evolution_instance}
+                        onChange={(e) => setCredenciais({...credenciais, evolution_instance: e.target.value})}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Chave da OpenAI (Opcional - Chave do Cliente)
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="sk-..."
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        value={credenciais.openai_api_key}
+                        onChange={(e) => setCredenciais({...credenciais, openai_api_key: e.target.value})}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-8 flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={savingCredenciais}
+                      className="bg-gray-900 hover:bg-black text-white px-6 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                    >
+                      {savingCredenciais ? (
+                        <><RefreshCw size={18} className="animate-spin" /> Salvando...</>
+                      ) : (
+                        "Salvar Integração"
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -1,6 +1,19 @@
 import asyncio
+import os
 from typing import List
 from app.api.schemas import StandardMessage
+
+LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()
+
+
+def _conversation_debug_enabled() -> bool:
+    return LOG_LEVEL_CONVERSATION == "DEBUG"
+
+
+def _conversation_debug_log(message: str) -> None:
+    if _conversation_debug_enabled():
+        print(message)
+
 
 def get_llm_model(model_name: str, api_key: str = None):
     """
@@ -136,9 +149,10 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         print("[ENGINE] Bloco de mensagens resultou vazio após limpeza. Abortando LangGraph.")
         return
 
-    for i, msg in enumerate(mensagens_validas, 1):
-        remetente = "Humano" if msg.is_human_agent else "Usuário/Lead"
-        print(f" [{i}] {remetente}: {msg.texto_mensagem}")
+    if _conversation_debug_enabled():
+        for i, msg in enumerate(mensagens_validas, 1):
+            remetente = "Humano" if msg.is_human_agent else "Usuário/Lead"
+            print(f" [{i}] {remetente}: {msg.texto_mensagem}")
         
     textos = [msg.texto_mensagem for msg in mensagens_validas]
     
@@ -181,6 +195,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         linhas.append(f"{papel}: {_m.texto}")
                     historico_bd_formatado = "\n".join(linhas)
                     print(f"[ENGINE] Histórico PostgreSQL carregado: {len(_msgs_hist)} mensagem(ns).")
+                    _conversation_debug_log(f"[ENGINE][DEBUG] Histórico formatado:\n{historico_bd_formatado}")
                 else:
                     print("[ENGINE] Lead encontrado, sem histórico anterior no banco.")
             else:
@@ -193,6 +208,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "empresa_id": mensagens[0].empresa_id,
         "identificador_origem": mensagens[0].identificador_origem,
         "canal": mensagens[0].canal,
+        "conexao_id": mensagens[0].conexao_id,
         "mensagens": textos,
         "historico_bd": historico_bd_formatado,
         "nome_contato": None,
@@ -220,9 +236,9 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         config = {"configurable": {"thread_id": mensagens[0].identificador_origem}}
         estado_final = await graph.ainvoke(estado_inicial, config=config)
         
-        print("\n--- ESTADO FINAL DA IA ---")
-        print(estado_final)
-        print("--------------------------------------\n")
+        _conversation_debug_log("\n--- ESTADO FINAL DA IA ---")
+        _conversation_debug_log(str(estado_final))
+        _conversation_debug_log("--------------------------------------\n")
         
         # Timestamp Lock - Verifica se chegou mensagem BEM na hora que o Langgraph pensava
         timestamp_fim = await redis_client.get(f"last_msg_time:{mensagens[0].canal}:{mensagens[0].identificador_origem}")
@@ -240,6 +256,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
     
     from app.services.channel_factory import despachar_mensagem
     
+    conexao_id_dispatch = estado_final.get("conexao_id") or mensagens[0].conexao_id
     resposta = estado_final.get("resposta_final")
     if resposta:
         print("\n[Channel Factory] Despachando a resposta final...")
@@ -257,7 +274,8 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                     mensagens[0].empresa_id,
                     mensagens[0].identificador_origem,
                     textos_juntos,
-                    resposta
+                    resposta,
+                    mensagens[0].conexao_id,
                 )
             except Exception as e:
                 print(f"[SIMULADOR] Aviso: falha ao salvar histórico simulador: {e}")
@@ -265,7 +283,8 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
             await despachar_mensagem(
                 canal=mensagens[0].canal,
                 identificador_origem=mensagens[0].identificador_origem,
-                texto=resposta
+                texto=resposta,
+                conexao_id=conexao_id_dispatch,
             )
 
             try:
@@ -295,6 +314,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                     if lead:
                         nova_msg = MensagemHistorico(
                             lead_id=lead.id,
+                            conexao_id=uuid.UUID(mensagens[0].conexao_id) if mensagens[0].conexao_id else None,
                             texto=resposta,
                             from_me=True
                         )
@@ -377,9 +397,14 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
 
                 if nivel == 1:
                     texto = await gerar_followup_contextual(canal_orig, id_orig, empresa_id_fu)
-                    print(f"[Follow-up Nível 1] Texto gerado: '{texto}'")
+                    _conversation_debug_log(f"[Follow-up Nível 1] Texto gerado: '{texto}'")
 
-                    await despachar_mensagem(canal=canal_orig, identificador_origem=id_orig, texto=texto)
+                    await despachar_mensagem(
+                        canal=canal_orig,
+                        identificador_origem=id_orig,
+                        texto=texto,
+                        conexao_id=conexao_id_dispatch,
+                    )
 
                     novo_token = str(_time_mod.time() + 1)
                     await redis_client.setex(ativo_key, delay_n2 + 60, novo_token)
@@ -401,8 +426,13 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         print(f"⏰ [REENGAJAMENTO PROATIVO NÍVEL 2 INICIADO] — Canal={canal_orig} | Origem={id_orig}")
                         try:
                             texto_enc = await gerar_followup_encerramento(canal_orig, id_orig, empresa_id_fu)
-                            print(f"[Follow-up Nível 2] Texto gerado: '{texto_enc}'")
-                            await despachar_mensagem(canal=canal_orig, identificador_origem=id_orig, texto=texto_enc)
+                            _conversation_debug_log(f"[Follow-up Nível 2] Texto gerado: '{texto_enc}'")
+                            await despachar_mensagem(
+                                canal=canal_orig,
+                                identificador_origem=id_orig,
+                                texto=texto_enc,
+                                conexao_id=conexao_id_dispatch,
+                            )
                         except Exception as e_n2:
                             print(f"[Follow-up Nível 2] Erro: {e_n2}")
                         finally:
@@ -415,8 +445,13 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                 elif nivel == 2:
                     # Fallback seguro (caso a task de N2 fosse iniciada via outro caminho)
                     texto_enc = await gerar_followup_encerramento(canal_orig, id_orig, empresa_id_fu)
-                    print(f"[Follow-up Nível 2 — fallback] Texto: '{texto_enc}'")
-                    await despachar_mensagem(canal=canal_orig, identificador_origem=id_orig, texto=texto_enc)
+                    _conversation_debug_log(f"[Follow-up Nível 2 — fallback] Texto: '{texto_enc}'")
+                    await despachar_mensagem(
+                        canal=canal_orig,
+                        identificador_origem=id_orig,
+                        texto=texto_enc,
+                        conexao_id=conexao_id_dispatch,
+                    )
                     await redis_client.delete(ativo_key)
                     await redis_client.delete(nivel_key)
 
@@ -547,7 +582,13 @@ Você é um atendente inteligente e conciso. Seu objetivo é interagir com o lea
     return prompt
 
 
-async def save_simulator_history(empresa_id: str, sessao_id: str, pergunta: str, resposta: str = None):
+async def save_simulator_history(
+    empresa_id: str,
+    sessao_id: str,
+    pergunta: str,
+    resposta: str = None,
+    conexao_id: str | None = None,
+):
     """
     Função utilitária para fingir a gravação de conversa no simulador ou em Lead genérico para o app.
     No simulador, como não existe Lead real com o 'telefone' sessao_id, ele procura ou insere um Mock
@@ -588,12 +629,22 @@ async def save_simulator_history(empresa_id: str, sessao_id: str, pergunta: str,
                 await session.flush()
                 
             # Adiciona mensagem do usuário
-            msg_usuario = MensagemHistorico(lead_id=lead.id, texto=pergunta, from_me=False)
+            msg_usuario = MensagemHistorico(
+                lead_id=lead.id,
+                conexao_id=uuid.UUID(conexao_id) if conexao_id else None,
+                texto=pergunta,
+                from_me=False,
+            )
             session.add(msg_usuario)
             
             # Adiciona mensagem da IA se fornecida
             if resposta:
-                msg_ia = MensagemHistorico(lead_id=lead.id, texto=resposta, from_me=True)
+                msg_ia = MensagemHistorico(
+                    lead_id=lead.id,
+                    conexao_id=uuid.UUID(conexao_id) if conexao_id else None,
+                    texto=resposta,
+                    from_me=True,
+                )
                 session.add(msg_ia)
             
             await session.commit()

@@ -6,8 +6,7 @@ from sqlalchemy import text
 load_dotenv()
 
 from db.database import engine, Base
-# Importar os models para garantir que o SQLAlchemy os conheça ao chamar create_all
-from db.models import Empresa, Contato, Agente, FerramentaAPI, ParametrosCadencia, DocumentoBase, VetorConhecimento, Conhecimento, Especialista, APIConnection, WebhookSaida
+import db.models  # noqa: F401
 
 async def init_models():
     print("Iniciando a criação das tabelas no banco de dados...")

@@ -19,6 +19,7 @@ from app.api.routers import configuracoes
 from app.api.routers import webhook
 from app.api.routers import inbox
 from app.api.routers import integracoes
+from app.api.routers import conexoes
 from app.api.routers import dashboard
 
 # Global Redis Client
@@ -64,6 +65,8 @@ app.include_router(configuracoes.router)
 app.include_router(auth.router)
 app.include_router(inbox.router)
 app.include_router(integracoes.router)
+app.include_router(conexoes.router, prefix="/api")
+app.include_router(conexoes.status_router, prefix="/api")
 app.include_router(dashboard.router)
 
 

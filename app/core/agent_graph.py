@@ -8,6 +8,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()
+
+
+def _conversation_debug_enabled() -> bool:
+    return LOG_LEVEL_CONVERSATION == "DEBUG"
+
+
+def _conversation_debug_log(message: str, flush: bool = False) -> None:
+    if _conversation_debug_enabled():
+        print(message, flush=flush)
+
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 # Removido LLM global: será instanciado via get_llm
@@ -154,10 +165,111 @@ async def transferir_para_humano(telefone: str, empresa_id: str) -> str:
     except Exception as e:
         return f"Erro ao transferir para humano: {str(e)}"
 
+
+async def action_atualizar_tags(
+    lead_id: str,
+    empresa_id: str,
+    operacao: Literal["adicionar", "remover"],
+    tags: List[str],
+    motivo: Optional[str] = None,
+) -> str:
+    import uuid
+
+    try:
+        lead_uuid = uuid.UUID(lead_id)
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        return "Erro ao atualizar tags: lead_id ou empresa_id inválido."
+
+    tags_normalizadas: list[str] = []
+    vistos: set[str] = set()
+    for tag in tags or []:
+        tag_limpa = str(tag or "").strip()
+        if not tag_limpa:
+            continue
+        chave = tag_limpa.lower()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        tags_normalizadas.append(tag_limpa)
+
+    if not tags_normalizadas:
+        return "Erro ao atualizar tags: informe ao menos uma tag válida."
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.id == lead_uuid,
+                    CRMLead.empresa_id == empresa_uuid,
+                )
+            )
+            lead = result.scalars().first()
+            if not lead:
+                return "Erro ao atualizar tags: lead não encontrado para esta empresa."
+
+            tags_atuais = lead.tags if isinstance(lead.tags, list) else []
+            mapa_tags = {
+                str(tag).strip().lower(): str(tag).strip()
+                for tag in tags_atuais
+                if str(tag).strip()
+            }
+
+            if operacao == "adicionar":
+                for tag in tags_normalizadas:
+                    mapa_tags[tag.lower()] = tag
+            elif operacao == "remover":
+                for tag in tags_normalizadas:
+                    mapa_tags.pop(tag.lower(), None)
+            else:
+                return "Erro ao atualizar tags: operação inválida. Use 'adicionar' ou 'remover'."
+
+            lead.tags = list(mapa_tags.values())
+            await session.commit()
+
+            contexto_motivo = f" Motivo registrado: {motivo.strip()}" if motivo and motivo.strip() else ""
+            return f"Sucesso: tags do lead atualizadas para {lead.tags}.{contexto_motivo}"
+    except Exception as e:
+        return f"Erro ao atualizar tags do lead: {str(e)}"
+
+
+class ActionAtualizarTagsInput(BaseModel):
+    operacao: Literal["adicionar", "remover"] = Field(
+        description="Use 'adicionar' para incluir tags ou 'remover' para retirar tags existentes do lead."
+    )
+    tags: List[str] = Field(
+        description="Lista de tags que devem ser adicionadas ou removidas do lead."
+    )
+    motivo: Optional[str] = Field(
+        default=None,
+        description="Motivo curto da atualização com base no contexto da conversa.",
+    )
+
+
+def criar_ferramenta_atualizar_tags_contextual(lead_id: str, empresa_id: str) -> StructuredTool:
+    async def _tool(operacao: str, tags: List[str], motivo: Optional[str] = None) -> str:
+        return await action_atualizar_tags(
+            lead_id=lead_id,
+            empresa_id=empresa_id,
+            operacao=operacao,
+            tags=tags,
+            motivo=motivo,
+        )
+
+    return StructuredTool(
+        name="action_atualizar_tags",
+        description=(
+            "Atualiza as tags do lead atual com base no contexto da conversa. "
+            "Use para adicionar ou remover marcadores como interesse, perfil, objeção, prioridade ou estágio comportamental."
+        ),
+        args_schema=ActionAtualizarTagsInput,
+        coroutine=_tool,
+    )
+
 MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
-    "transferir_para_humano": transferir_para_humano
+    "transferir_para_humano": transferir_para_humano,
 }
 
 async def ler_dados_empresa(empresa_uuid) -> tuple:
@@ -197,6 +309,7 @@ class AgentState(TypedDict):
     empresa_id: str
     identificador_origem: str
     canal: str
+    conexao_id: Optional[str]
     mensagens: list
     historico_bd: str          # Histórico real do PostgreSQL, formatado
     nome_contato: Optional[str]
@@ -313,25 +426,6 @@ async def node_capturar_nome(state: AgentState):
     llm = await get_llm(state.get("empresa_id"))
     resposta = await llm.ainvoke([("system", prompt), ("user", ultima_mensagem)])
     state["resposta_final"] = resposta.content
-    
-    # Disparar via Evolution (caso caia no nó de captura de nome e encerre aqui)
-    try:
-        import uuid
-        empresa_id = state.get("empresa_id")
-        empresa_uuid = uuid.UUID(empresa_id) if empresa_id else None
-        
-        if empresa_uuid and state.get("identificador_origem"):
-            from app.services.evolution_service import enviar_mensagem_whatsapp
-            from db.database import AsyncSessionLocal
-            async with AsyncSessionLocal() as session:
-                await enviar_mensagem_whatsapp(
-                    empresa_uuid, 
-                    state["identificador_origem"], 
-                    state["resposta_final"], 
-                    session
-                )
-    except Exception as e:
-        print(f"[NODE CAPTURAR NOME] Falha silenciosa ao enviar via Evolution API: {e}")
 
     return state
 
@@ -349,11 +443,6 @@ async def node_atendente(state: AgentState):
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
     
-    try:
-        empresa_uuid = uuid.UUID(empresa_id) if empresa_id else None
-    except (ValueError, TypeError):
-        empresa_uuid = None
-
     # Helper para montar bloco de contexto XML
     def _bloco_xml(historico: str, respostas: list[str]) -> str:
         hist_content = historico.strip() if historico and historico.strip() \
@@ -388,7 +477,7 @@ Com base nas <respostas_especialistas> e no <historico_conversa>, consolide as i
 Assuma as informações como suas. NUNCA mencione que consultou especialistas ou sistemas internos.
 </instrucao_final>"""
 
-        print(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
+        _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
         mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + state.get("mensagens", [])
         llm = await get_llm(empresa_id)
         resposta = await llm.ainvoke(mensagens_para_llm)
@@ -396,20 +485,6 @@ Assuma as informações como suas. NUNCA mencione que consultou especialistas ou
         state["resposta_final"] = resposta.content
         state["respostas_especialistas"] = []
         state["intencao"] = []
-
-        try:
-            if empresa_uuid and identificador and canal != "simulador":
-                from app.services.evolution_service import enviar_mensagem_whatsapp
-                from db.database import AsyncSessionLocal
-                import asyncio
-                async with AsyncSessionLocal() as session:
-                    partes = [p.strip() for p in state["resposta_final"].split('\n\n') if p.strip()]
-                    for idx, parte in enumerate(partes):
-                        await enviar_mensagem_whatsapp(empresa_uuid, identificador, parte, session)
-                        if idx < len(partes) - 1:
-                            await asyncio.sleep(1.5)
-        except Exception as e:
-            print(f"[NODE ATENDENTE] Falha silenciosa no Evolution: {e}")
 
         return state
 
@@ -436,7 +511,7 @@ Quando precisa_roteamento=True, deixe 'resposta' como nula.
 Se for small talk puro, use precisa_roteamento=False e forneça uma resposta curta em 'resposta' (máximo 2 frases).
 </instrucao_decisao>"""
 
-    print(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
+    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
     mensagens_para_llm = [SystemMessage(content=prompt_decisao)] + state.get("mensagens", [])
 
     llm = await get_llm(empresa_id)
@@ -506,19 +581,6 @@ Se for small talk puro, use precisa_roteamento=False e forneça uma resposta cur
         state["intencao"] = []
         state["respostas_especialistas"] = []
         print(f"[NODE ATENDENTE] Resolvido via Small Talk: {resultado.resposta}")
-        try:
-            if empresa_uuid and identificador and canal != "simulador":
-                from app.services.evolution_service import enviar_mensagem_whatsapp
-                from db.database import AsyncSessionLocal
-                import asyncio
-                async with AsyncSessionLocal() as session:
-                    partes = [p.strip() for p in state["resposta_final"].split('\n\n') if p.strip()]
-                    for idx, parte in enumerate(partes):
-                        await enviar_mensagem_whatsapp(empresa_uuid, identificador, parte, session)
-                        if idx < len(partes) - 1:
-                            await asyncio.sleep(1.5)
-        except Exception as e:
-            pass
     else:
         print("[NODE ATENDENTE] Optou por acionar Roteador.")
         state["resposta_final"] = None
@@ -629,6 +691,7 @@ async def node_especialista_dinamico(state: AgentState):
         contexto_empresa += ".\n"
 
     state["respostas_especialistas"] = []
+    lead_id = state.get("lead_id")
     
     for intencao in intencoes:
         contexto_adicional = ""
@@ -640,6 +703,7 @@ async def node_especialista_dinamico(state: AgentState):
         prompt_base = f"Você é um especialista prestativo e amigável.{contexto_adicional}"
         tools_disponiveis = []
         descricoes_tools = []
+        nomes_tools_registradas = set()
         
         especialista_db = None
         if empresa_uuid:
@@ -671,6 +735,7 @@ async def node_especialista_dinamico(state: AgentState):
                         try:
                             nova_tool = create_dynamic_tool(conexao)
                             tools_disponiveis.append(nova_tool)
+                            nomes_tools_registradas.add(nova_tool.name)
                             desc = nova_tool.description if nova_tool.description else "Ferramenta sem descrição."
                             descricoes_tools.append(f"- {conexao.nome}: {desc}")
                         except Exception as e:
@@ -700,6 +765,7 @@ async def node_especialista_dinamico(state: AgentState):
                                 coroutine=func_python
                             )
                             tools_disponiveis.append(nova_tool)
+                            nomes_tools_registradas.add(nova_tool.name)
                             descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
                         elif getattr(f_db, 'url', None):
                             # Dynamic HTTP Builder Tool
@@ -814,10 +880,18 @@ async def node_especialista_dinamico(state: AgentState):
                                 coroutine=create_http_tool_coroutine(f_db.url, f_db.metodo, headers_str, payload_str, f_db.nome_ferramenta)
                             )
                             tools_disponiveis.append(nova_tool)
+                            nomes_tools_registradas.add(nova_tool.name)
                             descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
 
                     except Exception as e:
                         print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
+
+        if lead_id and empresa_id and "action_atualizar_tags" not in nomes_tools_registradas:
+            tool_tags = criar_ferramenta_atualizar_tags_contextual(lead_id=lead_id, empresa_id=empresa_id)
+            tools_disponiveis.append(tool_tags)
+            descricoes_tools.append(
+                "- action_atualizar_tags: atualiza tags do lead atual para registrar contexto comercial, perfil, objeções e sinais de engajamento."
+            )
 
         system_message_adicional = f"\n{contexto_empresa}O nome do usuário é: {state['nome_contato']}."
         
@@ -986,7 +1060,7 @@ async def gerar_followup_contextual(canal: str, identificador_origem: str, empre
     except Exception as e:
         print(f"[FOLLOW-UP] Erro ao buscar empresa: {e}", flush=True)
 
-    print(f"[FOLLOW-UP CONTEXTUAL] Empresa: '{nome_empresa}' | Histórico (últimas 2): {bool(historico)}", flush=True)
+    print(f"[FOLLOW-UP CONTEXTUAL] Empresa: '{nome_empresa}' | Histórico disponível: {bool(historico)}", flush=True)
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
 
@@ -999,10 +1073,10 @@ Exemplo de tom: "Ficou alguma dúvida sobre o que conversamos?"
 
 Responda APENAS com o texto da frase. Máximo 15 palavras."""
 
-    print(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 1) ---\n{prompt}\n" + "-"*40, flush=True)
+    _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 1) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
     resposta = await llm.ainvoke(prompt)
-    print(f"[FOLLOW-UP RESULT] Resposta da IA: {resposta.content}", flush=True)
+    _conversation_debug_log(f"[FOLLOW-UP RESULT] Resposta da IA: {resposta.content}", flush=True)
     return resposta.content
 
 
@@ -1045,11 +1119,11 @@ Escreva UMA mensagem curta informando que:
 
 Seja gentil e breve. Máximo 2 frases. Responda APENAS com o texto da mensagem."""
 
-    print(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 2 ENCERRAMENTO) ---\n{prompt}\n" + "-"*40, flush=True)
+    _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 2 ENCERRAMENTO) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
     resposta = await llm.ainvoke(prompt)
     texto_encerramento = resposta.content
-    print(f"[FOLLOW-UP ENCERRAMENTO RESULT] Resposta da IA: {texto_encerramento}", flush=True)
+    _conversation_debug_log(f"[FOLLOW-UP ENCERRAMENTO RESULT] Resposta da IA: {texto_encerramento}", flush=True)
 
     # ── UPDATE REAL NO CRM ────────────────────────────────────────────────────
     if lead_id:

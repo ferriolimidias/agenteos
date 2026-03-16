@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from db.database import AsyncSessionLocal
-from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil
+from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil, Conexao, TipoConexao
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -86,6 +86,15 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
+            result_conexao = await session.execute(
+                select(Conexao).where(
+                    Conexao.empresa_id == empresa_uuid,
+                    Conexao.tipo == TipoConexao.EVOLUTION,
+                    Conexao.status == "ativo"
+                )
+            )
+            conexao = result_conexao.scalars().first()
+
             result_lead = await session.execute(
                 select(CRMLead).where(
                     CRMLead.empresa_id == empresa_uuid,
@@ -98,6 +107,7 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
             
             nova_msg = MensagemHistorico(
                 lead_id=lead.id,
+                conexao_id=conexao.id if conexao else None,
                 texto=payload.texto,
                 from_me=True
             )

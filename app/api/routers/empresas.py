@@ -385,6 +385,7 @@ class CRMLeadResponse(BaseModel):
     nome_contato: str
     telefone: str | None = None
     historico_resumo: str | None = None
+    tags: List[str] = Field(default_factory=list)
     dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
     criado_em: str | None = None
 
@@ -414,6 +415,7 @@ class CRMLeadUpdateRequest(BaseModel):
     telefone_contato: str | None = None
     historico_resumo: str | None = None
     etapa_id: str | None = None
+    tags: List[str] | None = None
     dados_adicionais: Dict[str, Any] | None = None
 
 @router.get("/{empresa_id}/rag")
@@ -641,6 +643,7 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
                         "nome_contato": lead.nome_contato,
                         "telefone": lead.telefone_contato,
                         "historico_resumo": lead.historico_resumo,
+                        "tags": lead.tags or [],
                         "dados_adicionais": lead.dados_adicionais or {},
                         "criado_em": lead.criado_em.isoformat() if lead.criado_em else None
                     } for lead in etapa.leads
@@ -750,6 +753,8 @@ async def atualizar_lead_crm(
         lead.telefone_contato = data.telefone_contato
     if data.historico_resumo is not None:
         lead.historico_resumo = data.historico_resumo
+    if data.tags is not None:
+        lead.tags = [str(tag).strip() for tag in data.tags if str(tag).strip()]
     if data.dados_adicionais is not None:
         lead.dados_adicionais = data.dados_adicionais
 
@@ -762,6 +767,7 @@ async def atualizar_lead_crm(
             "telefone_contato": lead.telefone_contato,
             "historico_resumo": lead.historico_resumo,
             "etapa_id": str(lead.etapa_id) if lead.etapa_id else None,
+            "tags": lead.tags or [],
             "dados_adicionais": lead.dados_adicionais or {}
         }
     except Exception as e:
@@ -800,6 +806,7 @@ async def exportar_leads_csv(empresa_id: str, db: AsyncSession = Depends(get_db)
         "etapa_id",
         "etapa_nome",
         "etapa_tipo",
+        "tags",
         "criado_em",
     ]
     fieldnames = base_columns + sorted(extra_keys)
@@ -817,6 +824,7 @@ async def exportar_leads_csv(empresa_id: str, db: AsyncSession = Depends(get_db)
             "etapa_id": str(lead.etapa_id) if lead.etapa_id else "",
             "etapa_nome": lead.etapa.nome if lead.etapa else "",
             "etapa_tipo": lead.etapa.tipo if lead.etapa else "",
+            "tags": ", ".join(lead.tags or []),
             "criado_em": lead.criado_em.isoformat() if lead.criado_em else "",
         }
         if isinstance(lead.dados_adicionais, dict):
