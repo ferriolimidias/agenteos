@@ -172,6 +172,17 @@ export default function Empresas() {
     setShowCredenciaisModal(true);
   };
 
+  const handleConexaoDisparoUpdated = (nextConexaoId) => {
+    setEmpresaSelecionada((prev) => (
+      prev ? { ...prev, conexao_disparo_id: nextConexaoId } : prev
+    ));
+    setEmpresas((prev) => prev.map((empresa) => (
+      empresa.id === empresaSelecionada?.id
+        ? { ...empresa, conexao_disparo_id: nextConexaoId }
+        : empresa
+    )));
+  };
+
   const handleSaveCredenciais = async (e) => {
     e.preventDefault();
     try {
@@ -586,6 +597,8 @@ export default function Empresas() {
                 <EmpresaConexoesManager
                   empresaId={empresaSelecionada.id}
                   empresaNome={empresaSelecionada.nome_empresa}
+                  conexaoDisparoId={empresaSelecionada.conexao_disparo_id}
+                  onConexaoDisparoUpdated={handleConexaoDisparoUpdated}
                 />
               ) : (
                 <form onSubmit={handleSaveCredenciais} className="space-y-6">

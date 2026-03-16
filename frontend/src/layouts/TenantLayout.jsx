@@ -1,5 +1,5 @@
 import { Outlet, Link, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, Settings } from "lucide-react";
+import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, ArrowRightLeft } from "lucide-react";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
 
 export default function TenantLayout() {
@@ -57,6 +57,10 @@ export default function TenantLayout() {
           <Link to="/painel/integracoes" className="flex items-center space-x-3 text-blue-100 hover:text-white hover:bg-blue-800 px-3 py-2 rounded-lg transition-colors">
             <Webhook size={20} />
             <span>Integrações</span>
+          </Link>
+          <Link to="/painel/transferencias" className="flex items-center space-x-3 text-blue-100 hover:text-white hover:bg-blue-800 px-3 py-2 rounded-lg transition-colors">
+            <ArrowRightLeft size={20} />
+            <span>Transferências</span>
           </Link>
         </nav>
         

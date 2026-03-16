@@ -19,6 +19,9 @@ from db.models import (
     CRMLead,
     AgendaConfiguracao,
     AgendamentoLocal,
+    Conexao,
+    DestinosTransferencia,
+    HistoricoTransferencia,
     is_root_admin_email,
     normalize_user_email,
     normalize_user_role,
@@ -234,6 +237,7 @@ class EmpresaUpdateRequest(BaseModel):
     area_atuacao: str | None = None
     ia_instrucoes_personalizadas: str | None = None
     ia_tom_voz: str | None = None
+    conexao_disparo_id: str | None = None
 
 @router.put("/{empresa_id}", response_model=EmpresaResponse, status_code=status.HTTP_200_OK)
 async def atualizar_empresa(empresa_id: str, data: EmpresaUpdateRequest, db: AsyncSession = Depends(get_db)):
@@ -253,6 +257,28 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdateRequest, db: Asy
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
     if data.ia_tom_voz is not None:
         empresa.ia_tom_voz = data.ia_tom_voz
+    if data.conexao_disparo_id is not None:
+        if data.conexao_disparo_id == "":
+            empresa.conexao_disparo_id = None
+        else:
+            try:
+                conexao_disparo_uuid = uuid.UUID(data.conexao_disparo_id)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conexao_disparo_id inválido")
+
+            result_conexao = await db.execute(
+                select(Conexao).where(
+                    Conexao.id == conexao_disparo_uuid,
+                    Conexao.empresa_id == empresa.id,
+                )
+            )
+            conexao = result_conexao.scalars().first()
+            if not conexao:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conexão de disparo não encontrada para esta empresa",
+                )
+            empresa.conexao_disparo_id = conexao.id
         
     try:
         await db.commit()
@@ -417,6 +443,38 @@ class CRMLeadUpdateRequest(BaseModel):
     etapa_id: str | None = None
     tags: List[str] | None = None
     dados_adicionais: Dict[str, Any] | None = None
+
+
+class DestinoTransferenciaBase(BaseModel):
+    nome_destino: str
+    contatos_destino: List[str] = Field(default_factory=list)
+    instrucoes_ativacao: str | None = None
+
+
+class DestinoTransferenciaCreate(DestinoTransferenciaBase):
+    pass
+
+
+class DestinoTransferenciaUpdate(BaseModel):
+    nome_destino: str | None = None
+    contatos_destino: List[str] | None = None
+    instrucoes_ativacao: str | None = None
+
+
+class DestinoTransferenciaResponse(DestinoTransferenciaBase):
+    id: str
+    criado_em: str | None = None
+
+
+class HistoricoTransferenciaResponse(BaseModel):
+    id: str
+    criado_em: str | None = None
+    lead_id: str
+    lead_nome: str | None = None
+    destino_id: str | None = None
+    destino_nome: str | None = None
+    motivo_ia: str | None = None
+    resumo_enviado: str | None = None
 
 @router.get("/{empresa_id}/rag")
 async def listar_conhecimento_rag(empresa_id: str, db: AsyncSession = Depends(get_db)):
@@ -659,6 +717,173 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao carregar CRM: {str(e)}"
         )
+
+
+@router.get("/{empresa_id}/transferencias/destinos", response_model=List[DestinoTransferenciaResponse])
+async def listar_destinos_transferencia(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(DestinosTransferencia)
+        .where(DestinosTransferencia.empresa_id == emp_uuid)
+        .order_by(DestinosTransferencia.criado_em.desc())
+    )
+    destinos = result.scalars().all()
+    return [
+        {
+            "id": str(destino.id),
+            "nome_destino": destino.nome_destino,
+            "contatos_destino": destino.contatos_destino or [],
+            "instrucoes_ativacao": destino.instrucoes_ativacao,
+            "criado_em": destino.criado_em.isoformat() if destino.criado_em else None,
+        }
+        for destino in destinos
+    ]
+
+
+@router.post("/{empresa_id}/transferencias/destinos", response_model=DestinoTransferenciaResponse, status_code=status.HTTP_201_CREATED)
+async def criar_destino_transferencia(
+    empresa_id: str,
+    data: DestinoTransferenciaCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    contatos_normalizados = [str(contato).strip() for contato in data.contatos_destino if str(contato).strip()]
+    destino = DestinosTransferencia(
+        empresa_id=emp_uuid,
+        nome_destino=data.nome_destino.strip(),
+        contatos_destino=contatos_normalizados,
+        instrucoes_ativacao=(data.instrucoes_ativacao or "").strip() or None,
+    )
+    db.add(destino)
+
+    try:
+        await db.commit()
+        await db.refresh(destino)
+        return {
+            "id": str(destino.id),
+            "nome_destino": destino.nome_destino,
+            "contatos_destino": destino.contatos_destino or [],
+            "instrucoes_ativacao": destino.instrucoes_ativacao,
+            "criado_em": destino.criado_em.isoformat() if destino.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar destino: {str(e)}")
+
+
+@router.put("/{empresa_id}/transferencias/destinos/{destino_id}", response_model=DestinoTransferenciaResponse)
+async def atualizar_destino_transferencia(
+    empresa_id: str,
+    destino_id: str,
+    data: DestinoTransferenciaUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        destino_uuid = uuid.UUID(destino_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(DestinosTransferencia).where(
+            DestinosTransferencia.id == destino_uuid,
+            DestinosTransferencia.empresa_id == emp_uuid,
+        )
+    )
+    destino = result.scalars().first()
+    if not destino:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destino não encontrado")
+
+    if data.nome_destino is not None:
+        destino.nome_destino = data.nome_destino.strip()
+    if data.contatos_destino is not None:
+        destino.contatos_destino = [str(contato).strip() for contato in data.contatos_destino if str(contato).strip()]
+    if data.instrucoes_ativacao is not None:
+        destino.instrucoes_ativacao = data.instrucoes_ativacao.strip() or None
+
+    try:
+        await db.commit()
+        await db.refresh(destino)
+        return {
+            "id": str(destino.id),
+            "nome_destino": destino.nome_destino,
+            "contatos_destino": destino.contatos_destino or [],
+            "instrucoes_ativacao": destino.instrucoes_ativacao,
+            "criado_em": destino.criado_em.isoformat() if destino.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar destino: {str(e)}")
+
+
+@router.delete("/{empresa_id}/transferencias/destinos/{destino_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def excluir_destino_transferencia(
+    empresa_id: str,
+    destino_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        destino_uuid = uuid.UUID(destino_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(DestinosTransferencia).where(
+            DestinosTransferencia.id == destino_uuid,
+            DestinosTransferencia.empresa_id == emp_uuid,
+        )
+    )
+    destino = result.scalars().first()
+    if not destino:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destino não encontrado")
+
+    try:
+        await db.delete(destino)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao excluir destino: {str(e)}")
+
+
+@router.get("/{empresa_id}/transferencias/historico", response_model=List[HistoricoTransferenciaResponse])
+async def listar_historico_transferencia(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(HistoricoTransferencia)
+        .where(HistoricoTransferencia.empresa_id == emp_uuid)
+        .options(
+            selectinload(HistoricoTransferencia.lead),
+            selectinload(HistoricoTransferencia.destino),
+        )
+        .order_by(HistoricoTransferencia.criado_em.desc())
+    )
+    historicos = result.scalars().all()
+    return [
+        {
+            "id": str(item.id),
+            "criado_em": item.criado_em.isoformat() if item.criado_em else None,
+            "lead_id": str(item.lead_id),
+            "lead_nome": item.lead.nome_contato if item.lead else None,
+            "destino_id": str(item.destino_id) if item.destino_id else None,
+            "destino_nome": item.destino.nome_destino if item.destino else None,
+            "motivo_ia": item.motivo_ia,
+            "resumo_enviado": item.resumo_enviado,
+        }
+        for item in historicos
+    ]
 
 
 @router.put("/{empresa_id}/crm/etapas/{etapa_id}", status_code=status.HTTP_200_OK)

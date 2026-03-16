@@ -37,7 +37,12 @@ function getTipoIcon(tipo) {
   return <MessageCircle size={18} className="text-green-500" />;
 }
 
-export default function EmpresaConexoesManager({ empresaId, empresaNome }) {
+export default function EmpresaConexoesManager({
+  empresaId,
+  empresaNome,
+  conexaoDisparoId = null,
+  onConexaoDisparoUpdated,
+}) {
   const [conexoes, setConexoes] = useState([]);
   const [statusMap, setStatusMap] = useState({});
   const [loading, setLoading] = useState(false);
@@ -49,6 +54,12 @@ export default function EmpresaConexoesManager({ empresaId, empresaNome }) {
   const [copiedUrl, setCopiedUrl] = useState("");
   const [editingConexao, setEditingConexao] = useState(null);
   const [form, setForm] = useState(initialForm);
+  const [selectedConexaoDisparoId, setSelectedConexaoDisparoId] = useState(conexaoDisparoId || "");
+  const [savingConexaoDisparo, setSavingConexaoDisparo] = useState(false);
+
+  useEffect(() => {
+    setSelectedConexaoDisparoId(conexaoDisparoId || "");
+  }, [conexaoDisparoId]);
 
   const loadStatusForConexoes = async (listaConexoes) => {
     try {
@@ -211,6 +222,21 @@ export default function EmpresaConexoesManager({ empresaId, empresaNome }) {
     }
   };
 
+  const handleSaveConexaoDisparo = async () => {
+    try {
+      setSavingConexaoDisparo(true);
+      await api.put(`/empresas/${empresaId}`, {
+        conexao_disparo_id: selectedConexaoDisparoId || "",
+      });
+      onConexaoDisparoUpdated?.(selectedConexaoDisparoId || null);
+    } catch (err) {
+      console.error("Erro ao salvar conexão padrão de disparo:", err);
+      alert(err.response?.data?.detail || "Erro ao salvar conexão padrão para disparos.");
+    } finally {
+      setSavingConexaoDisparo(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
@@ -244,6 +270,47 @@ export default function EmpresaConexoesManager({ empresaId, empresaNome }) {
             <RefreshCw size={14} />
             Atualizar
           </button>
+        </div>
+
+        <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-semibold text-gray-800">
+                Conexão Padrão para Disparos
+              </label>
+              <select
+                value={selectedConexaoDisparoId}
+                onChange={(e) => setSelectedConexaoDisparoId(e.target.value)}
+                className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Nenhuma conexão padrão selecionada</option>
+                {conexoes.map((conexao) => (
+                  <option key={conexao.id} value={conexao.id}>
+                    {getTipoLabel(conexao.tipo)} - {conexao.nome_instancia}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Essa conexão será usada como canal padrão para disparos em massa da empresa.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSaveConexaoDisparo}
+              disabled={savingConexaoDisparo}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {savingConexaoDisparo ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                "Salvar conexão padrão"
+              )}
+            </button>
+          </div>
         </div>
 
         {loading ? (
