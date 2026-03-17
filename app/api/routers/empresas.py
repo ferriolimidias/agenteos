@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, 
 import io
 import csv
 import uuid
+from datetime import datetime
 import PyPDF2
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -11,6 +12,8 @@ from fastapi.responses import Response
 from db.database import get_db
 from sqlalchemy.orm import selectinload
 from db.models import (
+    CampanhaDisparo,
+    CampanhaDisparoStatus,
     Empresa,
     Usuario,
     ConhecimentoRAG,
@@ -22,6 +25,7 @@ from db.models import (
     Conexao,
     DestinosTransferencia,
     HistoricoTransferencia,
+    TemplateMensagem,
     is_root_admin_email,
     normalize_user_email,
     normalize_user_role,
@@ -30,6 +34,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
+from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
 from app.services.transferencia_service import testar_destino_transferencia
 
 class EvolutionCredentials(BaseModel):
@@ -38,7 +43,7 @@ class EvolutionCredentials(BaseModel):
     evolution_instance: str
     openai_api_key: Optional[str] = None
 
-from app.schemas import EmpresaCreate, EmpresaResponse
+from app.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate
 
 router = APIRouter(
     prefix="/empresas",
@@ -81,6 +86,20 @@ async def listar_empresas(db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao listar empresas: {str(e)}"
         )
+
+
+@router.get("/{empresa_id}", response_model=EmpresaResponse, status_code=status.HTTP_200_OK)
+async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
+
+    result = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = result.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+    return empresa
 
 # --- ROTAS DA IA CONFIGURATOR ---
 from fastapi import Header
@@ -233,15 +252,8 @@ async def put_ia_config(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar: {str(e)}")
 
-class EmpresaUpdateRequest(BaseModel):
-    nome_empresa: str | None = None
-    area_atuacao: str | None = None
-    ia_instrucoes_personalizadas: str | None = None
-    ia_tom_voz: str | None = None
-    conexao_disparo_id: str | None = None
-
 @router.put("/{empresa_id}", response_model=EmpresaResponse, status_code=status.HTTP_200_OK)
-async def atualizar_empresa(empresa_id: str, data: EmpresaUpdateRequest, db: AsyncSession = Depends(get_db)):
+async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSession = Depends(get_db)):
     """
     Atualiza dados básicos da Empresa (nome e área de atuação).
     """
@@ -258,6 +270,14 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdateRequest, db: Asy
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
     if data.ia_tom_voz is not None:
         empresa.ia_tom_voz = data.ia_tom_voz
+    if data.disparo_delay_min is not None:
+        if data.disparo_delay_min < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="disparo_delay_min não pode ser negativo")
+        empresa.disparo_delay_min = data.disparo_delay_min
+    if data.disparo_delay_max is not None:
+        if data.disparo_delay_max < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="disparo_delay_max não pode ser negativo")
+        empresa.disparo_delay_max = data.disparo_delay_max
     if data.conexao_disparo_id is not None:
         if data.conexao_disparo_id == "":
             empresa.conexao_disparo_id = None
@@ -280,6 +300,14 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdateRequest, db: Asy
                     detail="Conexão de disparo não encontrada para esta empresa",
                 )
             empresa.conexao_disparo_id = conexao.id
+
+    delay_min = empresa.disparo_delay_min if empresa.disparo_delay_min is not None else 3
+    delay_max = empresa.disparo_delay_max if empresa.disparo_delay_max is not None else 7
+    if delay_min > delay_max:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O intervalo mínimo de disparo não pode ser maior que o máximo",
+        )
         
     try:
         await db.commit()
@@ -476,6 +504,53 @@ class HistoricoTransferenciaResponse(BaseModel):
     destino_nome: str | None = None
     motivo_ia: str | None = None
     resumo_enviado: str | None = None
+
+
+class TemplateMensagemBase(BaseModel):
+    nome: str
+    texto_template: str
+
+
+class TemplateMensagemCreate(TemplateMensagemBase):
+    variaveis_esperadas: List[str] | None = None
+
+
+class TemplateMensagemUpdate(BaseModel):
+    nome: str | None = None
+    texto_template: str | None = None
+    variaveis_esperadas: List[str] | None = None
+
+
+class TemplateMensagemResponse(BaseModel):
+    id: str
+    nome: str
+    texto_template: str
+    variaveis_esperadas: List[str] = Field(default_factory=list)
+    criado_em: str | None = None
+
+
+class CampanhaDisparoCreate(BaseModel):
+    nome: str
+    template_id: str
+    tags_alvo: List[str] = Field(default_factory=list)
+    data_agendamento: str | None = None
+
+
+class CampanhaDisparoResponse(BaseModel):
+    id: str
+    nome: str
+    template_id: str | None = None
+    template_nome: str | None = None
+    tags_alvo: List[str] = Field(default_factory=list)
+    data_agendamento: str | None = None
+    status: str
+    criado_em: str | None = None
+
+
+class CampanhaPreviewResponse(BaseModel):
+    preview_texto: str
+    total_leads: int
+    usou_mock: bool
 
 @router.get("/{empresa_id}/rag")
 async def listar_conhecimento_rag(empresa_id: str, db: AsyncSession = Depends(get_db)):
@@ -904,6 +979,306 @@ async def listar_historico_transferencia(empresa_id: str, db: AsyncSession = Dep
         }
         for item in historicos
     ]
+
+
+@router.get("/{empresa_id}/crm/tags", response_model=List[str])
+async def listar_tags_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(CRMLead.tags).where(CRMLead.empresa_id == emp_uuid)
+    )
+    tags_unicas: set[str] = set()
+    for tags in result.scalars().all():
+        if isinstance(tags, list):
+            for tag in tags:
+                tag_limpa = str(tag).strip()
+                if tag_limpa:
+                    tags_unicas.add(tag_limpa)
+
+    return sorted(tags_unicas, key=lambda item: item.lower())
+
+
+@router.get("/{empresa_id}/campanhas/templates", response_model=List[TemplateMensagemResponse])
+async def listar_templates_mensagem(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(TemplateMensagem)
+        .where(TemplateMensagem.empresa_id == emp_uuid)
+        .order_by(TemplateMensagem.criado_em.desc())
+    )
+    templates = result.scalars().all()
+    return [
+        {
+            "id": str(template.id),
+            "nome": template.nome,
+            "texto_template": template.texto_template,
+            "variaveis_esperadas": template.variaveis_esperadas or [],
+            "criado_em": template.criado_em.isoformat() if template.criado_em else None,
+        }
+        for template in templates
+    ]
+
+
+@router.post("/{empresa_id}/campanhas/templates", response_model=TemplateMensagemResponse, status_code=status.HTTP_201_CREATED)
+async def criar_template_mensagem(
+    empresa_id: str,
+    data: TemplateMensagemCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    variaveis = data.variaveis_esperadas or extrair_variaveis_template(data.texto_template)
+    template = TemplateMensagem(
+        empresa_id=emp_uuid,
+        nome=data.nome.strip(),
+        texto_template=data.texto_template,
+        variaveis_esperadas=[str(item).strip() for item in variaveis if str(item).strip()],
+    )
+    db.add(template)
+
+    try:
+        await db.commit()
+        await db.refresh(template)
+        return {
+            "id": str(template.id),
+            "nome": template.nome,
+            "texto_template": template.texto_template,
+            "variaveis_esperadas": template.variaveis_esperadas or [],
+            "criado_em": template.criado_em.isoformat() if template.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar template: {str(e)}")
+
+
+@router.put("/{empresa_id}/campanhas/templates/{template_id}", response_model=TemplateMensagemResponse)
+async def atualizar_template_mensagem(
+    empresa_id: str,
+    template_id: str,
+    data: TemplateMensagemUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        template_uuid = uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TemplateMensagem).where(
+            TemplateMensagem.id == template_uuid,
+            TemplateMensagem.empresa_id == emp_uuid,
+        )
+    )
+    template = result.scalars().first()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template não encontrado")
+
+    texto_template_final = data.texto_template if data.texto_template is not None else template.texto_template
+    if data.nome is not None:
+        template.nome = data.nome.strip()
+    if data.texto_template is not None:
+        template.texto_template = data.texto_template
+    if data.variaveis_esperadas is not None:
+        template.variaveis_esperadas = [str(item).strip() for item in data.variaveis_esperadas if str(item).strip()]
+    else:
+        template.variaveis_esperadas = extrair_variaveis_template(texto_template_final)
+
+    try:
+        await db.commit()
+        await db.refresh(template)
+        return {
+            "id": str(template.id),
+            "nome": template.nome,
+            "texto_template": template.texto_template,
+            "variaveis_esperadas": template.variaveis_esperadas or [],
+            "criado_em": template.criado_em.isoformat() if template.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar template: {str(e)}")
+
+
+@router.delete("/{empresa_id}/campanhas/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def excluir_template_mensagem(
+    empresa_id: str,
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        template_uuid = uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TemplateMensagem).where(
+            TemplateMensagem.id == template_uuid,
+            TemplateMensagem.empresa_id == emp_uuid,
+        )
+    )
+    template = result.scalars().first()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template não encontrado")
+
+    try:
+        await db.delete(template)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao excluir template: {str(e)}")
+
+
+@router.get("/{empresa_id}/campanhas", response_model=List[CampanhaDisparoResponse])
+async def listar_campanhas_disparo(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(CampanhaDisparo)
+        .where(CampanhaDisparo.empresa_id == emp_uuid)
+        .options(selectinload(CampanhaDisparo.template))
+        .order_by(CampanhaDisparo.criado_em.desc())
+    )
+    campanhas = result.scalars().all()
+    return [
+        {
+            "id": str(campanha.id),
+            "nome": campanha.nome,
+            "template_id": str(campanha.template_id) if campanha.template_id else None,
+            "template_nome": campanha.template.nome if campanha.template else None,
+            "tags_alvo": campanha.tags_alvo or [],
+            "data_agendamento": campanha.data_agendamento.isoformat() if campanha.data_agendamento else None,
+            "status": campanha.status.value if hasattr(campanha.status, "value") else str(campanha.status),
+            "criado_em": campanha.criado_em.isoformat() if campanha.criado_em else None,
+        }
+        for campanha in campanhas
+    ]
+
+
+@router.get("/{empresa_id}/campanhas/preview", response_model=CampanhaPreviewResponse)
+async def preview_campanha_disparo(
+    empresa_id: str,
+    template_id: str,
+    tag: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        preview = await gerar_preview_campanha(
+            session=db,
+            empresa_id=empresa_id,
+            template_id=template_id,
+            tag=tag,
+        )
+        return preview
+    except ValueError as e:
+        mensagem = str(e)
+        status_code = status.HTTP_404_NOT_FOUND if "não encontrado" in mensagem.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=mensagem)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao gerar pré-visualização: {str(e)}",
+        )
+
+
+@router.post("/{empresa_id}/campanhas", response_model=CampanhaDisparoResponse, status_code=status.HTTP_201_CREATED)
+async def criar_campanha_disparo(
+    empresa_id: str,
+    data: CampanhaDisparoCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        template_uuid = uuid.UUID(data.template_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result_empresa = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = result_empresa.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+    if not empresa.conexao_disparo_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configure a conexão padrão para disparos antes de criar uma campanha",
+        )
+
+    result_template = await db.execute(
+        select(TemplateMensagem).where(
+            TemplateMensagem.id == template_uuid,
+            TemplateMensagem.empresa_id == emp_uuid,
+        )
+    )
+    template = result_template.scalars().first()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template não encontrado")
+
+    tags_alvo = [str(tag).strip() for tag in (data.tags_alvo or []) if str(tag).strip()]
+    if not tags_alvo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecione ao menos uma tag alvo")
+
+    result_leads = await db.execute(
+        select(CRMLead.tags).where(CRMLead.empresa_id == emp_uuid)
+    )
+    total_leads = 0
+    tags_alvo_normalizadas = {tag.lower() for tag in tags_alvo}
+    for tags in result_leads.scalars().all():
+        if not isinstance(tags, list):
+            continue
+        tags_lead = {str(tag).strip().lower() for tag in tags if str(tag).strip()}
+        if tags_alvo_normalizadas.intersection(tags_lead):
+            total_leads += 1
+
+    if total_leads == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não há leads com a tag selecionada para este disparo",
+        )
+
+    campanha = CampanhaDisparo(
+        empresa_id=emp_uuid,
+        nome=data.nome.strip(),
+        template_id=template.id,
+        tags_alvo=tags_alvo,
+        data_agendamento=datetime.fromisoformat(data.data_agendamento) if data.data_agendamento else datetime.utcnow(),
+        status=CampanhaDisparoStatus.PENDENTE,
+    )
+    db.add(campanha)
+
+    try:
+        await db.commit()
+        await db.refresh(campanha)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar campanha: {str(e)}")
+
+    background_tasks.add_task(processar_campanha_disparo, str(campanha.id))
+
+    return {
+        "id": str(campanha.id),
+        "nome": campanha.nome,
+        "template_id": str(campanha.template_id) if campanha.template_id else None,
+        "template_nome": template.nome,
+        "tags_alvo": campanha.tags_alvo or [],
+        "data_agendamento": campanha.data_agendamento.isoformat() if campanha.data_agendamento else None,
+        "status": campanha.status.value if hasattr(campanha.status, "value") else str(campanha.status),
+        "criado_em": campanha.criado_em.isoformat() if campanha.criado_em else None,
+    }
 
 
 @router.put("/{empresa_id}/crm/etapas/{etapa_id}", status_code=status.HTTP_200_OK)

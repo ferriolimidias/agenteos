@@ -73,6 +73,8 @@ class Empresa(Base):
     modelo_ia = Column(String, default="gpt-4o-mini")
     modelo_roteador = Column(String, default="gpt-4o-mini")
     conexao_disparo_id = Column(UUID(as_uuid=True), ForeignKey("conexoes.id", ondelete="SET NULL"), nullable=True)
+    disparo_delay_min = Column(Integer, nullable=False, default=3)
+    disparo_delay_max = Column(Integer, nullable=False, default=7)
     # Configurações de Follow-up Automático
     followup_ativo = Column(Boolean, default=False)
     followup_espera_nivel_1_minutos = Column(Integer, default=20)

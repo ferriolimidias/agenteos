@@ -14,6 +14,7 @@ import Simulador from "./pages/tenant/Simulador";
 import Inbox from "./pages/tenant/Inbox";
 import Integracoes from "./pages/tenant/Integracoes";
 import Transferencias from "./pages/tenant/Transferencias";
+import Campanhas from "./pages/tenant/Campanhas";
 
 function App() {
   useEffect(() => {
@@ -44,6 +45,7 @@ function App() {
         <Route path="inbox" element={<Inbox />} />
         <Route path="integracoes" element={<Integracoes />} />
         <Route path="transferencias" element={<Transferencias />} />
+        <Route path="campanhas" element={<Campanhas />} />
       </Route>
     </Routes>
   );

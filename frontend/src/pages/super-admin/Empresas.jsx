@@ -172,13 +172,13 @@ export default function Empresas() {
     setShowCredenciaisModal(true);
   };
 
-  const handleConexaoDisparoUpdated = (nextConexaoId) => {
+  const handleConexaoDisparoUpdated = (nextConfig) => {
     setEmpresaSelecionada((prev) => (
-      prev ? { ...prev, conexao_disparo_id: nextConexaoId } : prev
+      prev ? { ...prev, ...nextConfig } : prev
     ));
     setEmpresas((prev) => prev.map((empresa) => (
       empresa.id === empresaSelecionada?.id
-        ? { ...empresa, conexao_disparo_id: nextConexaoId }
+        ? { ...empresa, ...nextConfig }
         : empresa
     )));
   };
@@ -598,6 +598,8 @@ export default function Empresas() {
                   empresaId={empresaSelecionada.id}
                   empresaNome={empresaSelecionada.nome_empresa}
                   conexaoDisparoId={empresaSelecionada.conexao_disparo_id}
+                  disparoDelayMin={empresaSelecionada.disparo_delay_min}
+                  disparoDelayMax={empresaSelecionada.disparo_delay_max}
                   onConexaoDisparoUpdated={handleConexaoDisparoUpdated}
                 />
               ) : (

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.empresas import require_ia_config_access
+from app.services.evolution_service import obter_qr_code
 from app.schemas import ConexaoCreate, ConexaoResponse, ConexaoUpdate
 from db.database import get_db
 from db.models import Conexao, Empresa, TipoConexao, Usuario, is_root_admin_email, normalize_user_role
@@ -451,4 +452,37 @@ async def status_conexao(
         "conexao_id": str(conexao.id),
         "status": current_status,
         "online": online,
+    }
+
+
+@status_router.get("/{conexao_id}/qrcode", status_code=status.HTTP_200_OK)
+async def obter_qrcode_conexao(
+    conexao_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_user_id: str | None = Header(None),
+):
+    try:
+        conexao_uuid = uuid.UUID(conexao_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Identificador inválido.") from exc
+
+    result = await db.execute(select(Conexao).where(Conexao.id == conexao_uuid))
+    conexao = result.scalars().first()
+    if not conexao:
+        raise HTTPException(status_code=404, detail="Conexão não encontrada.")
+
+    await _validar_acesso_conexao(conexao, db, x_user_id)
+
+    if conexao.tipo != TipoConexao.EVOLUTION:
+        raise HTTPException(status_code=400, detail="QR Code disponível apenas para conexões Evolution.")
+
+    resultado = await obter_qr_code(conexao.id)
+    if not resultado.get("success"):
+        status_code = 409 if resultado.get("already_connected") else 400
+        raise HTTPException(status_code=status_code, detail=resultado.get("detail") or "Falha ao obter QR Code.")
+
+    return {
+        "conexao_id": str(conexao.id),
+        "base64": resultado.get("base64"),
+        "detail": resultado.get("detail"),
     }

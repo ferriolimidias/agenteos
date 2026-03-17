@@ -41,6 +41,8 @@ export default function EmpresaConexoesManager({
   empresaId,
   empresaNome,
   conexaoDisparoId = null,
+  disparoDelayMin = 3,
+  disparoDelayMax = 7,
   onConexaoDisparoUpdated,
 }) {
   const [conexoes, setConexoes] = useState([]);
@@ -55,11 +57,33 @@ export default function EmpresaConexoesManager({
   const [editingConexao, setEditingConexao] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [selectedConexaoDisparoId, setSelectedConexaoDisparoId] = useState(conexaoDisparoId || "");
+  const [selectedDisparoDelayMin, setSelectedDisparoDelayMin] = useState(disparoDelayMin ?? 3);
+  const [selectedDisparoDelayMax, setSelectedDisparoDelayMax] = useState(disparoDelayMax ?? 7);
   const [savingConexaoDisparo, setSavingConexaoDisparo] = useState(false);
+  const [qrModalConexao, setQrModalConexao] = useState(null);
+  const [qrCodeBase64, setQrCodeBase64] = useState("");
+  const [loadingQrCode, setLoadingQrCode] = useState(false);
+  const [qrCodeError, setQrCodeError] = useState("");
+  const [checkingQrStatus, setCheckingQrStatus] = useState(false);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     setSelectedConexaoDisparoId(conexaoDisparoId || "");
   }, [conexaoDisparoId]);
+
+  useEffect(() => {
+    setSelectedDisparoDelayMin(disparoDelayMin ?? 3);
+  }, [disparoDelayMin]);
+
+  useEffect(() => {
+    setSelectedDisparoDelayMax(disparoDelayMax ?? 7);
+  }, [disparoDelayMax]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const loadStatusForConexoes = async (listaConexoes) => {
     try {
@@ -107,6 +131,31 @@ export default function EmpresaConexoesManager({
   useEffect(() => {
     fetchConexoes();
   }, [empresaId]);
+
+  useEffect(() => {
+    if (!qrModalConexao?.id) return undefined;
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const res = await api.get(`/conexoes/${qrModalConexao.id}/status`);
+        setStatusMap((prev) => ({ ...prev, [qrModalConexao.id]: res.data }));
+        if (String(res.data?.status || "").toUpperCase() === "CONNECTED" || res.data?.online) {
+          setQrModalConexao(null);
+          setQrCodeBase64("");
+          setQrCodeError("");
+          setToast({
+            type: "success",
+            message: `Conexão "${qrModalConexao.nome_instancia}" conectada com sucesso.`,
+          });
+          await fetchConexoes();
+        }
+      } catch (err) {
+        console.error("Erro no polling de status da conexão:", err);
+      }
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [qrModalConexao]);
 
   const resetForm = () => {
     setForm(initialForm);
@@ -225,10 +274,32 @@ export default function EmpresaConexoesManager({
   const handleSaveConexaoDisparo = async () => {
     try {
       setSavingConexaoDisparo(true);
+      const delayMin = Number(selectedDisparoDelayMin);
+      const delayMax = Number(selectedDisparoDelayMax);
+
+      if (Number.isNaN(delayMin) || Number.isNaN(delayMax)) {
+        alert("Informe valores válidos para o intervalo de disparo.");
+        return;
+      }
+      if (delayMin < 0 || delayMax < 0) {
+        alert("Os intervalos de disparo não podem ser negativos.");
+        return;
+      }
+      if (delayMin > delayMax) {
+        alert("O intervalo mínimo de disparo não pode ser maior que o máximo.");
+        return;
+      }
+
       await api.put(`/empresas/${empresaId}`, {
         conexao_disparo_id: selectedConexaoDisparoId || "",
+        disparo_delay_min: delayMin,
+        disparo_delay_max: delayMax,
       });
-      onConexaoDisparoUpdated?.(selectedConexaoDisparoId || null);
+      onConexaoDisparoUpdated?.({
+        conexao_disparo_id: selectedConexaoDisparoId || null,
+        disparo_delay_min: delayMin,
+        disparo_delay_max: delayMax,
+      });
     } catch (err) {
       console.error("Erro ao salvar conexão padrão de disparo:", err);
       alert(err.response?.data?.detail || "Erro ao salvar conexão padrão para disparos.");
@@ -237,8 +308,95 @@ export default function EmpresaConexoesManager({
     }
   };
 
+  const closeQrModal = () => {
+    setQrModalConexao(null);
+    setQrCodeBase64("");
+    setQrCodeError("");
+    setLoadingQrCode(false);
+    setCheckingQrStatus(false);
+  };
+
+  const handleOpenQrModal = async (conexao) => {
+    setQrModalConexao(conexao);
+    setQrCodeBase64("");
+    setQrCodeError("");
+    setLoadingQrCode(true);
+
+    try {
+      const res = await api.get(`/conexoes/${conexao.id}/qrcode`);
+      setQrCodeBase64(res.data?.base64 || "");
+    } catch (err) {
+      console.error("Erro ao obter QR Code:", err);
+      const detail = err.response?.data?.detail || "Não foi possível gerar o QR Code desta conexão.";
+      setQrCodeError(detail);
+      if (err.response?.status === 409) {
+        setToast({
+          type: "success",
+          message: detail,
+        });
+        closeQrModal();
+        await fetchConexoes();
+      }
+    } finally {
+      setLoadingQrCode(false);
+    }
+  };
+
+  const handleRefreshQrStatus = async () => {
+    if (!qrModalConexao?.id) return;
+    try {
+      setCheckingQrStatus(true);
+      const res = await api.get(`/conexoes/${qrModalConexao.id}/status`);
+      setStatusMap((prev) => ({ ...prev, [qrModalConexao.id]: res.data }));
+      if (String(res.data?.status || "").toUpperCase() === "CONNECTED" || res.data?.online) {
+        setToast({
+          type: "success",
+          message: `Conexão "${qrModalConexao.nome_instancia}" conectada com sucesso.`,
+        });
+        closeQrModal();
+        await fetchConexoes();
+      }
+    } catch (err) {
+      console.error("Erro ao atualizar status da conexão:", err);
+      setQrCodeError(err.response?.data?.detail || "Não foi possível atualizar o status da conexão.");
+    } finally {
+      setCheckingQrStatus(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {toast ? (
+        <div className="fixed right-6 top-6 z-[80]">
+          <div
+            className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
+              toast.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`rounded-full p-1 ${toast.type === "success" ? "bg-emerald-100" : "bg-red-100"}`}>
+                {toast.type === "success" ? <Check size={14} /> : <X size={14} />}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">
+                  {toast.type === "success" ? "Tudo certo" : "Atenção"}
+                </p>
+                <p className="mt-0.5 text-sm">{toast.message}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                className="rounded-lg p-1 opacity-70 transition-opacity hover:opacity-100"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-gray-800">Canais / Conexões</h3>
@@ -274,24 +432,56 @@ export default function EmpresaConexoesManager({
 
         <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="flex-1">
-              <label className="mb-1 block text-sm font-semibold text-gray-800">
-                Conexão Padrão para Disparos
-              </label>
-              <select
-                value={selectedConexaoDisparoId}
-                onChange={(e) => setSelectedConexaoDisparoId(e.target.value)}
-                className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">Nenhuma conexão padrão selecionada</option>
-                {conexoes.map((conexao) => (
-                  <option key={conexao.id} value={conexao.id}>
-                    {getTipoLabel(conexao.tipo)} - {conexao.nome_instancia}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-500">
-                Essa conexão será usada como canal padrão para disparos em massa da empresa.
+            <div className="flex-1 space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-gray-800">
+                  Conexão Padrão para Disparos
+                </label>
+                <select
+                  value={selectedConexaoDisparoId}
+                  onChange={(e) => setSelectedConexaoDisparoId(e.target.value)}
+                  className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">Nenhuma conexão padrão selecionada</option>
+                  {conexoes.map((conexao) => (
+                    <option key={conexao.id} value={conexao.id}>
+                      {getTipoLabel(conexao.tipo)} - {conexao.nome_instancia}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Essa conexão será usada como canal padrão para disparos em massa da empresa.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-semibold text-gray-800">
+                    Intervalo Mín. de Disparo (seg)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={selectedDisparoDelayMin}
+                    onChange={(e) => setSelectedDisparoDelayMin(e.target.value)}
+                    className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-semibold text-gray-800">
+                    Intervalo Máx. de Disparo (seg)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={selectedDisparoDelayMax}
+                    onChange={(e) => setSelectedDisparoDelayMax(e.target.value)}
+                    className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                O disparo em massa aguardará um tempo aleatório entre esses dois valores para reduzir risco de bloqueio.
               </p>
             </div>
 
@@ -336,6 +526,9 @@ export default function EmpresaConexoesManager({
                 {(() => {
                   const statusInfo = statusMap[conexao.id] || {};
                   const isOnline = Boolean(statusInfo.online);
+                  const isDisconnectedEvolution =
+                    conexao.tipo === "evolution" &&
+                    (!isOnline || String(statusInfo.status || "").toUpperCase() === "DISCONNECTED");
                   return (
                 <div className="mb-3 flex items-start justify-between gap-4">
                   <div className="flex items-start gap-3">
@@ -365,6 +558,16 @@ export default function EmpresaConexoesManager({
                       </p>
                     </div>
                   </div>
+                  {isDisconnectedEvolution ? (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenQrModal(conexao)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
+                    >
+                      <MessageCircle size={16} />
+                      Conectar (QR Code)
+                    </button>
+                  ) : null}
                 </div>
                   );
                 })()}
@@ -596,6 +799,88 @@ export default function EmpresaConexoesManager({
           </div>
         </div>
       )}
+
+      {qrModalConexao ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">Conectar WhatsApp</h3>
+                <p className="text-sm text-gray-500">
+                  Escaneie o QR Code com o celular para conectar a instância `{qrModalConexao.nome_instancia}`.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeQrModal}
+                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                O status será verificado automaticamente a cada 5 segundos. Quando a conexão ficar ativa, esta janela será fechada.
+              </div>
+
+              {loadingQrCode ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                  <RefreshCw size={22} className="mb-3 animate-spin" />
+                  Gerando QR Code...
+                </div>
+              ) : qrCodeError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+                  {qrCodeError}
+                </div>
+              ) : qrCodeBase64 ? (
+                <div className="flex flex-col items-center rounded-2xl border border-gray-200 bg-gray-50 p-6">
+                  <img
+                    src={`data:image/png;base64,${qrCodeBase64}`}
+                    alt="QR Code para conectar WhatsApp"
+                    className="h-72 w-72 rounded-xl border border-gray-200 bg-white p-3 shadow-sm"
+                  />
+                  <p className="mt-4 text-center text-sm text-gray-500">
+                    Abra o WhatsApp no celular, vá em aparelhos conectados e escaneie o código acima.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
+                  A Evolution não retornou um QR Code neste momento. Tente novamente em instantes.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeQrModal}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshQrStatus}
+                  disabled={checkingQrStatus}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {checkingQrStatus ? (
+                    <>
+                      <RefreshCw size={14} className="animate-spin" />
+                      Verificando...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={14} />
+                      Atualizar Status
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -9,9 +9,21 @@ class EmpresaBase(BaseModel):
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
     ia_instrucoes_personalizadas: str | None = None
     ia_tom_voz: str | None = None
+    disparo_delay_min: int = 3
+    disparo_delay_max: int = 7
 
 class EmpresaCreate(EmpresaBase):
     pass
+
+
+class EmpresaUpdate(BaseModel):
+    nome_empresa: str | None = None
+    area_atuacao: str | None = None
+    ia_instrucoes_personalizadas: str | None = None
+    ia_tom_voz: str | None = None
+    conexao_disparo_id: str | None = None
+    disparo_delay_min: int | None = None
+    disparo_delay_max: int | None = None
 
 class EmpresaResponse(EmpresaBase):
     id: UUID4
