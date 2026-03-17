@@ -11,6 +11,8 @@ from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/api/empresas", tags=["Inbox Live Chat"])
 
+SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
+
 class SendMessagePayload(BaseModel):
     texto: str
 
@@ -42,7 +44,7 @@ async def listar_inbox(empresa_id: str):
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
                     "etapa_crm": l.etapa.nome if l.etapa else None,
                     "tags": l.tags or [],
-                    "historico_resumo": l.historico_resumo,
+                    "historico_resumo": l.historico_resumo or "",
                     "dados_adicionais": l.dados_adicionais or {},
                 })
             
@@ -52,6 +54,8 @@ async def listar_inbox(empresa_id: str):
 
 @router.get("/{empresa_id}/inbox/{telefone}")
 async def listar_historico_lead(empresa_id: str, telefone: str):
+    if telefone == SIMULADOR_LEAD_ID:
+        return []
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:

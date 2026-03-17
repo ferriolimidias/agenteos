@@ -50,6 +50,40 @@ router = APIRouter(
     tags=["Empresas"]
 )
 
+SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
+
+
+def _parse_uuid_or_none(value: str | None) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+async def _limpar_estado_simulador_redis(sessao_id: str = SIMULADOR_LEAD_ID) -> None:
+    try:
+        from app.api.main import redis_client
+
+        if redis_client is None:
+            return
+
+        keys = [
+            f"sim_resp:{sessao_id}",
+            f"queue:simulador:{sessao_id}",
+            f"last_msg:simulador:{sessao_id}",
+            f"lock:simulador:{sessao_id}",
+            f"followup_ativo:simulador:{sessao_id}",
+            f"followup_nivel:simulador:{sessao_id}",
+            f"last_msg_time:simulador:{sessao_id}",
+        ]
+
+        await redis_client.delete(*keys)
+
+        async for key in redis_client.scan_iter(match=f"processando:simulador:{sessao_id}:*"):
+            await redis_client.delete(key)
+    except Exception:
+        pass
+
 @router.post("/", response_model=EmpresaResponse, status_code=status.HTTP_201_CREATED)
 async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -1640,6 +1674,8 @@ async def resetar_simulador(empresa_id: str, db: AsyncSession = Depends(get_db))
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
+    await _limpar_estado_simulador_redis()
+
     result = await db.execute(select(CRMLead).where(
         CRMLead.empresa_id == emp_uuid,
         CRMLead.telefone_contato == "ID_TESTE_SIMULADOR"
@@ -1661,13 +1697,15 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
     """
     Remove fisicamente um Lead e todo o seu histórico de mensagens do banco de dados (Hard Delete).
     """
-    import uuid
     from db.models import CRMLead
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-        l_uuid = uuid.UUID(lead_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa ou lead inválido")
+    emp_uuid = _parse_uuid_or_none(empresa_id)
+    if not emp_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    l_uuid = _parse_uuid_or_none(lead_id)
+    if lead_id == SIMULADOR_LEAD_ID or not l_uuid:
+        await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
+        return
 
     result = await db.execute(select(CRMLead).where(CRMLead.id == l_uuid, CRMLead.empresa_id == emp_uuid))
     lead = result.scalars().first()
