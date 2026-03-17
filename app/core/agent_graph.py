@@ -172,107 +172,6 @@ async def transferir_para_humano(telefone: str, empresa_id: str) -> str:
         return f"Erro ao transferir para humano: {str(e)}"
 
 
-async def action_atualizar_tags(
-    lead_id: str,
-    empresa_id: str,
-    operacao: Literal["adicionar", "remover"],
-    tags: List[str],
-    motivo: Optional[str] = None,
-) -> str:
-    import uuid
-
-    try:
-        lead_uuid = uuid.UUID(lead_id)
-        empresa_uuid = uuid.UUID(empresa_id)
-    except (ValueError, TypeError):
-        return "Erro ao atualizar tags: lead_id ou empresa_id inválido."
-
-    tags_normalizadas: list[str] = []
-    vistos: set[str] = set()
-    for tag in tags or []:
-        tag_limpa = str(tag or "").strip()
-        if not tag_limpa:
-            continue
-        chave = tag_limpa.lower()
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        tags_normalizadas.append(tag_limpa)
-
-    if not tags_normalizadas:
-        return "Erro ao atualizar tags: informe ao menos uma tag válida."
-
-    try:
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(CRMLead).where(
-                    CRMLead.id == lead_uuid,
-                    CRMLead.empresa_id == empresa_uuid,
-                )
-            )
-            lead = result.scalars().first()
-            if not lead:
-                return "Erro ao atualizar tags: lead não encontrado para esta empresa."
-
-            tags_atuais = lead.tags if isinstance(lead.tags, list) else []
-            mapa_tags = {
-                str(tag).strip().lower(): str(tag).strip()
-                for tag in tags_atuais
-                if str(tag).strip()
-            }
-
-            if operacao == "adicionar":
-                for tag in tags_normalizadas:
-                    mapa_tags[tag.lower()] = tag
-            elif operacao == "remover":
-                for tag in tags_normalizadas:
-                    mapa_tags.pop(tag.lower(), None)
-            else:
-                return "Erro ao atualizar tags: operação inválida. Use 'adicionar' ou 'remover'."
-
-            lead.tags = list(mapa_tags.values())
-            await session.commit()
-
-            contexto_motivo = f" Motivo registrado: {motivo.strip()}" if motivo and motivo.strip() else ""
-            return f"Sucesso: tags do lead atualizadas para {lead.tags}.{contexto_motivo}"
-    except Exception as e:
-        return f"Erro ao atualizar tags do lead: {str(e)}"
-
-
-class ActionAtualizarTagsInput(BaseModel):
-    operacao: Literal["adicionar", "remover"] = Field(
-        description="Use 'adicionar' para incluir tags ou 'remover' para retirar tags existentes do lead."
-    )
-    tags: List[str] = Field(
-        description="Lista de tags que devem ser adicionadas ou removidas do lead."
-    )
-    motivo: Optional[str] = Field(
-        default=None,
-        description="Motivo curto da atualização com base no contexto da conversa.",
-    )
-
-
-def criar_ferramenta_atualizar_tags_contextual(lead_id: str, empresa_id: str) -> StructuredTool:
-    async def _tool(operacao: str, tags: List[str], motivo: Optional[str] = None) -> str:
-        return await action_atualizar_tags(
-            lead_id=lead_id,
-            empresa_id=empresa_id,
-            operacao=operacao,
-            tags=tags,
-            motivo=motivo,
-        )
-
-    return StructuredTool(
-        name="action_atualizar_tags",
-        description=(
-            "Atualiza as tags do lead atual com base no contexto da conversa. "
-            "Use para adicionar ou remover marcadores como interesse, perfil, objeção, prioridade ou estágio comportamental."
-        ),
-        args_schema=ActionAtualizarTagsInput,
-        coroutine=_tool,
-    )
-
-
 class ActionTransferirAtendimentoInput(BaseModel):
     destino_id: str = Field(
         description="UUID do destino de transferência que deve receber o transbordo."
@@ -993,15 +892,6 @@ async def node_especialista_dinamico(state: AgentState):
                     except Exception as e:
                         print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
 
-        tags_crm_prompt = await listar_tags_crm_para_prompt(empresa_id) if empresa_id else ""
-
-        if lead_id and empresa_id and "action_atualizar_tags" not in nomes_tools_registradas:
-            tool_tags = criar_ferramenta_atualizar_tags_contextual(lead_id=lead_id, empresa_id=empresa_id)
-            tools_disponiveis.append(tool_tags)
-            descricoes_tools.append(
-                "- action_atualizar_tags: atualiza tags do lead atual para registrar contexto comercial, perfil, objeções e sinais de engajamento."
-            )
-
         if lead_id and empresa_id and destinos_transferencia_prompt and "action_transferir_atendimento" not in nomes_tools_registradas:
             tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
                 lead_id=lead_id,
@@ -1028,13 +918,6 @@ async def node_especialista_dinamico(state: AgentState):
                 "Após usar a ferramenta, encerre sua resposta ao cliente de forma cordial avisando que um humano continuará o atendimento em instantes."
             )
 
-        if tags_crm_prompt:
-            system_message_adicional += (
-                "\n\nVocê pode classificar o lead usando a tool 'action_atualizar_tags'. "
-                "Tags disponíveis:\n"
-                f"{tags_crm_prompt}"
-            )
-            
         if state.get("handoff_requested", False):
             system_message_adicional += (
                 "\n\nInformação importante: O usuário pediu atendimento humano. "

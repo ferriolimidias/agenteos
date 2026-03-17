@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Depends
+import base64
+
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Dict, Any, List
 from pydantic import BaseModel
 import uuid
@@ -19,6 +21,15 @@ def _telefone_eh_simulador(telefone: str | None) -> bool:
 
 class SendMessagePayload(BaseModel):
     texto: str
+
+
+def _inferir_tipo_mensagem(content_type: str | None) -> str:
+    ct = str(content_type or "").lower()
+    if ct.startswith("image/"):
+        return "image"
+    if ct.startswith("audio/"):
+        return "audio"
+    return "document"
 
 @router.get("/{empresa_id}/inbox")
 async def listar_inbox(empresa_id: str):
@@ -58,7 +69,7 @@ async def listar_inbox(empresa_id: str):
 
 @router.get("/{empresa_id}/inbox/{telefone}")
 async def listar_historico_lead(empresa_id: str, telefone: str):
-    if telefone == SIMULADOR_LEAD_ID:
+    if _telefone_eh_simulador(telefone):
         return []
     try:
         empresa_uuid = uuid.UUID(empresa_id)
@@ -85,6 +96,8 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
                 retorno.append({
                     "id": str(m.id),
                     "texto": m.texto,
+                    "tipo_mensagem": m.tipo_mensagem or "text",
+                    "media_url": m.media_url,
                     "from_me": m.from_me,
                     "criado_em": m.criado_em.isoformat()
                 })
@@ -122,6 +135,8 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
                 lead_id=lead.id,
                 conexao_id=conexao.id if conexao else None,
                 texto=payload.texto,
+                tipo_mensagem="text",
+                media_url=None,
                 from_me=True
             )
             session.add(nova_msg)
@@ -134,6 +149,95 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
             await enviar_mensagem_whatsapp(empresa_uuid, telefone, payload.texto, session)
             
             return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{empresa_id}/inbox/{telefone}/send_media")
+async def enviar_midia(
+    empresa_id: str,
+    telefone: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+):
+    if _telefone_eh_simulador(telefone):
+        return {"status": "sucesso", "mensagem": "Ação simulada"}
+
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID da empresa inválido")
+
+    if not file:
+        raise HTTPException(status_code=400, detail="Arquivo não informado")
+
+    tipo_mensagem = _inferir_tipo_mensagem(file.content_type)
+    mimetype = file.content_type or "application/octet-stream"
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+    media_b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_conexao = await session.execute(
+                select(Conexao).where(
+                    Conexao.empresa_id == empresa_uuid,
+                    Conexao.tipo == TipoConexao.EVOLUTION,
+                    Conexao.status == "ativo",
+                )
+            )
+            conexao = result_conexao.scalars().first()
+            if not conexao:
+                raise HTTPException(status_code=400, detail="Nenhuma conexão Evolution ativa encontrada")
+
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.empresa_id == empresa_uuid,
+                    CRMLead.telefone_contato == telefone
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+            from app.services.evolution_service import enviar_midia_base64
+            enviado = await enviar_midia_base64(
+                conexao=conexao,
+                numero=telefone,
+                base64_data=media_b64,
+                tipo=tipo_mensagem,
+                mimetype=mimetype,
+                caption=caption or "",
+            )
+            if not enviado:
+                raise HTTPException(status_code=502, detail="Falha ao enviar mídia para a Evolution API")
+
+            texto = (caption or "").strip()
+            if not texto:
+                if tipo_mensagem == "image":
+                    texto = "Imagem enviada"
+                elif tipo_mensagem == "audio":
+                    texto = "Áudio enviado"
+                else:
+                    texto = f"Documento enviado: {file.filename or 'arquivo'}"
+
+            nova_msg = MensagemHistorico(
+                lead_id=lead.id,
+                conexao_id=conexao.id,
+                texto=texto,
+                tipo_mensagem=tipo_mensagem,
+                media_url=media_b64,
+                from_me=True,
+            )
+            session.add(nova_msg)
+
+            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
+            await session.commit()
+
+            return {"status": "success", "tipo_mensagem": tipo_mensagem}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

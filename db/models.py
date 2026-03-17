@@ -374,6 +374,8 @@ class MensagemHistorico(Base):
     lead_id = Column(UUID(as_uuid=True), ForeignKey("crm_leads.id", ondelete="CASCADE"), nullable=False)
     conexao_id = Column(UUID(as_uuid=True), ForeignKey("conexoes.id", ondelete="SET NULL"), nullable=True)
     texto = Column(Text, nullable=False)
+    tipo_mensagem = Column(String, nullable=False, default="text")
+    media_url = Column(Text, nullable=True)
     from_me = Column(Boolean, nullable=False, default=False)
     criado_em = Column(DateTime, default=datetime.utcnow)
 

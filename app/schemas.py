@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, UUID4
+from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator
 
 # --- Schemas para Empresa ---
 class EmpresaBase(BaseModel):
@@ -11,6 +11,16 @@ class EmpresaBase(BaseModel):
     ia_tom_voz: str | None = None
     disparo_delay_min: int = 3
     disparo_delay_max: int = 7
+
+    @field_validator("disparo_delay_min", mode="before")
+    @classmethod
+    def _default_delay_min(cls, value):
+        return 3 if value is None else value
+
+    @field_validator("disparo_delay_max", mode="before")
+    @classmethod
+    def _default_delay_max(cls, value):
+        return 7 if value is None else value
 
 class EmpresaCreate(EmpresaBase):
     pass

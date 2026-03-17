@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { ArrowRightLeft, BotOff, MessageSquare, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
+import { ArrowRightLeft, BotOff, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -16,7 +16,10 @@ export default function Inbox() {
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
   const [toast, setToast] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [mediaCaption, setMediaCaption] = useState("");
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const user = getStoredUser();
   const empresa_id = getActiveEmpresaId();
@@ -117,6 +120,110 @@ export default function Inbox() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSelectFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+  };
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    setMediaCaption("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleSendMedia = async () => {
+    if (!selectedLead || !selectedFile) return;
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("caption", mediaCaption || "");
+      await api.post(`/empresas/${empresa_id}/inbox/${selectedLead.telefone_contato}/send_media`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      clearSelectedFile();
+      await fetchMessages(selectedLead.telefone_contato);
+      await fetchLeads();
+    } catch (e) {
+      console.error("Erro ao enviar mídia", e);
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Não foi possível enviar a mídia.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const baixarDocumento = (base64Data, nome = "documento") => {
+    try {
+      const binary = window.atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nome;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Erro ao baixar documento:", err);
+    }
+  };
+
+  const renderMensagemConteudo = (msg) => {
+    const tipo = String(msg?.tipo_mensagem || "text").toLowerCase();
+    const media = msg?.media_url;
+
+    if (tipo === "image" && media) {
+      return (
+        <div className="space-y-2">
+          <img
+            src={`data:image/jpeg;base64,${media}`}
+            alt="Imagem recebida"
+            className="max-h-64 max-w-xs rounded-lg object-cover"
+          />
+          {msg?.texto ? <p className="text-sm whitespace-pre-wrap">{msg.texto}</p> : null}
+        </div>
+      );
+    }
+
+    if (tipo === "audio" && media) {
+      return (
+        <div className="space-y-2">
+          <audio controls src={`data:audio/mpeg;base64,${media}`} className="max-w-xs" />
+          {msg?.texto ? <p className="text-sm whitespace-pre-wrap">{msg.texto}</p> : null}
+        </div>
+      );
+    }
+
+    if (tipo === "document" && media) {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white/70 px-3 py-2">
+            <FileText size={16} />
+            <button
+              type="button"
+              onClick={() => baixarDocumento(media, "documento_recebido")}
+              className="text-sm font-medium underline"
+            >
+              Baixar documento
+            </button>
+          </div>
+          {msg?.texto ? <p className="text-sm whitespace-pre-wrap">{msg.texto}</p> : null}
+        </div>
+      );
+    }
+
+    return <p className="text-sm whitespace-pre-wrap">{msg?.texto}</p>;
   };
 
   const handleReativarBot = async () => {
@@ -364,14 +471,14 @@ export default function Inbox() {
                 return (
                   <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                     <div
-                      className={`max-w-[70%] rounded-2xl px-4 py-2 shadow-sm relative ${
+                      className={`max-w-[72%] rounded-2xl px-4 py-2 shadow-sm relative ${
                         isMine
-                          ? "bg-blue-600 text-white rounded-br-none"
+                          ? "bg-emerald-500 text-white rounded-br-none"
                           : "bg-white text-gray-800 border border-gray-100 rounded-bl-none"
                       }`}
                     >
-                      <p className="text-sm whitespace-pre-wrap">{msg?.texto}</p>
-                      <span className={`text-[10px] absolute bottom-1 right-2 opacity-70 ${isMine ? "text-blue-100" : "text-gray-400"}`}>
+                      {renderMensagemConteudo(msg)}
+                      <span className={`text-[10px] absolute bottom-1 right-2 opacity-70 ${isMine ? "text-emerald-100" : "text-gray-400"}`}>
                         {msg?.criado_em ? new Date(msg.criado_em).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}
                       </span>
                     </div>
@@ -388,19 +495,55 @@ export default function Inbox() {
 
             {/* Chat Input */}
             <div className="p-4 bg-white border-t border-gray-200">
-              <form onSubmit={handleSendMessage} className="flex space-x-2">
+              {selectedFile ? (
+                <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm text-gray-700">
+                      {selectedFile.type.startsWith("image/") ? <FileImage size={16} /> : selectedFile.type.startsWith("audio/") ? <FileAudio size={16} /> : <FileText size={16} />}
+                      <span className="max-w-[340px] truncate font-medium">{selectedFile.name}</span>
+                    </div>
+                    <button type="button" onClick={clearSelectedFile} className="rounded-lg p-1 text-gray-500 hover:bg-gray-200">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <input
+                    value={mediaCaption}
+                    onChange={(e) => setMediaCaption(e.target.value)}
+                    placeholder="Legenda opcional..."
+                    className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              ) : null}
+
+              <form onSubmit={handleSendMessage} className="flex items-center space-x-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,audio/*,application/pdf,.pdf,.doc,.docx"
+                  onChange={handleSelectFile}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded-xl p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                  title="Anexar mídia"
+                >
+                  <Paperclip size={18} />
+                </button>
                 <input
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Escreva sua mensagem..."
-                  className="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="flex-1 rounded-xl border border-transparent px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={loading}
                 />
                 <button
-                  type="submit"
-                  disabled={!newMessage.trim() || loading}
-                  className="bg-blue-600 text-white rounded-lg px-5 py-3 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  type={selectedFile ? "button" : "submit"}
+                  onClick={selectedFile ? handleSendMedia : undefined}
+                  disabled={selectedFile ? loading : (!newMessage.trim() || loading)}
+                  className="rounded-xl bg-emerald-600 p-3 text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Send size={20} />
                 </button>

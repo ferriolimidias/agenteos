@@ -223,7 +223,18 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
     empresa = result.scalars().first()
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
-    return empresa
+    # Hardening para bases legadas onde os campos podem estar nulos.
+    return {
+        "id": empresa.id,
+        "nome_empresa": empresa.nome_empresa,
+        "area_atuacao": empresa.area_atuacao,
+        "credenciais_canais": empresa.credenciais_canais or {},
+        "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas,
+        "ia_tom_voz": empresa.ia_tom_voz,
+        "conexao_disparo_id": empresa.conexao_disparo_id,
+        "disparo_delay_min": empresa.disparo_delay_min if empresa.disparo_delay_min is not None else 3,
+        "disparo_delay_max": empresa.disparo_delay_max if empresa.disparo_delay_max is not None else 7,
+    }
 
 # --- ROTAS DA IA CONFIGURATOR ---
 from fastapi import Header
@@ -2141,15 +2152,16 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
     """
     Remove fisicamente um Lead e todo o seu histórico de mensagens do banco de dados (Hard Delete).
     """
+    if _lead_id_eh_simulador_ou_invalido(lead_id):
+        await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
+        return
+
     from db.models import CRMLead
     emp_uuid = _parse_uuid_or_none(empresa_id)
     if not emp_uuid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
     l_uuid = _parse_uuid_or_none(lead_id)
-    if _lead_id_eh_simulador_ou_invalido(lead_id):
-        await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
-        return
 
     result = await db.execute(select(CRMLead).where(CRMLead.id == l_uuid, CRMLead.empresa_id == emp_uuid))
     lead = result.scalars().first()

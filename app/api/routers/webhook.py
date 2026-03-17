@@ -55,11 +55,16 @@ async def save_history_and_check_pause(
     texto: str,
     from_me: bool,
     conexao_id: str | None = None,
+    tipo_mensagem: str = "text",
+    media_url: str | None = None,
 ) -> bool:
     should_process = True
     async with AsyncSessionLocal() as session:
         empresa_uuid = uuid.UUID(empresa_id)
-        conexao_uuid = uuid.UUID(conexao_id) if conexao_id else None
+        try:
+            conexao_uuid = uuid.UUID(conexao_id) if conexao_id else None
+        except (ValueError, TypeError):
+            conexao_uuid = None
         result = await session.execute(
             select(CRMLead).where(CRMLead.empresa_id == empresa_uuid, CRMLead.telefone_contato == telefone)
         )
@@ -71,6 +76,8 @@ async def save_history_and_check_pause(
                 lead_id=lead.id,
                 conexao_id=conexao_uuid,
                 texto=texto,
+                tipo_mensagem=tipo_mensagem,
+                media_url=media_url,
                 from_me=from_me
             )
             session.add(nova_msg)
@@ -148,7 +155,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             print(f"[WEBHOOK EVOLUTION] Nenhuma conexão ativa encontrada para instance='{instance_name}' na empresa {empresa_id}")
     
     texto = ""
-    is_audio = False
+    tipo_mensagem = "text"
     
     if "conversation" in message:
         texto = message["conversation"]
@@ -156,10 +163,17 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         texto = message["extendedTextMessage"].get("text", "")
     elif "imageMessage" in message:
          texto = message["imageMessage"].get("caption", "Imagem recebida")
+         tipo_mensagem = "image"
     elif "audioMessage" in message:
-         is_audio = True
+         texto = "Áudio recebido"
+         tipo_mensagem = "audio"
+    elif "documentMessage" in message:
+         document = message.get("documentMessage", {}) or {}
+         nome_documento = document.get("fileName") or "Documento"
+         texto = document.get("caption") or f"{nome_documento} recebido"
+         tipo_mensagem = "document"
 
-    if is_audio:
+    if tipo_mensagem == "audio":
          async def transcribe_audio():
              try:
                  from app.services.evolution_service import get_base64_media
@@ -192,8 +206,26 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                  
              if not base64_data:
                  print("[WEBHOOK EVOLUTION] Não foi possível baixar áudio da Evolution.")
+                 await save_history_and_check_pause(
+                    empresa_id,
+                    telefone,
+                    "[Áudio não pôde ser baixado]",
+                    fromMe,
+                    conexao_id,
+                    tipo_mensagem="audio",
+                    media_url=None,
+                 )
                  texto_transcrito = "[Áudio não pôde ser baixado]"
              else:
+                 await save_history_and_check_pause(
+                    empresa_id,
+                    telefone,
+                    "Áudio recebido",
+                    fromMe,
+                    conexao_id,
+                    tipo_mensagem="audio",
+                    media_url=base64_data,
+                 )
                  try:
                      if "," in base64_data:
                          base64_data = base64_data.split(",")[1]
@@ -231,12 +263,29 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
              
          background_tasks.add_task(transcribe_audio)
          return {"status": "received", "message": "Transcription in background"}
-         
-    if not texto:
-         return {"status": "ignored", "reason": "No text content found"}
-         
-    # Check history and pause logic for direct text messages
-    should_process = await save_history_and_check_pause(empresa_id, telefone, texto, fromMe, conexao_id)
+
+    media_base64 = None
+    if tipo_mensagem in {"image", "document"}:
+        try:
+            from app.services.evolution_service import get_base64_media
+
+            async with AsyncSessionLocal() as session:
+                media_base64 = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+        except Exception as e:
+            print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {e}")
+
+    if not texto and tipo_mensagem == "text":
+        return {"status": "ignored", "reason": "No text content found"}
+
+    should_process = await save_history_and_check_pause(
+        empresa_id,
+        telefone,
+        texto or "Mensagem recebida",
+        fromMe,
+        conexao_id,
+        tipo_mensagem=tipo_mensagem,
+        media_url=media_base64,
+    )
     
     if should_process:
         msg = StandardMessage(

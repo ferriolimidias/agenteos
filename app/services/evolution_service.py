@@ -71,6 +71,56 @@ async def enviar_mensagem_whatsapp(empresa_id: UUID, telefone: str, texto: str, 
         print(f"[Evolution Service] 🔥 Falha severa ao enviar mensagem para {telefone}: {str(e)}")
         return False
 
+
+async def enviar_midia_base64(
+    conexao: Conexao,
+    numero: str,
+    base64_data: str,
+    tipo: str,
+    mimetype: str,
+    caption: str | None = None,
+) -> bool:
+    """
+    Envia mídia em base64 via Evolution API.
+    Tipos suportados: image, audio, document.
+    """
+    try:
+        credenciais = conexao.credenciais or {}
+        evolution_url = credenciais.get("evolution_url")
+        evolution_apikey = credenciais.get("evolution_apikey")
+        evolution_instance = credenciais.get("evolution_instance")
+
+        if not all([evolution_url, evolution_apikey, evolution_instance]):
+            print("[Evolution Service] Configuração incompleta para envio de mídia.")
+            return False
+
+        base_url = str(evolution_url).rstrip("/")
+        endpoint = f"{base_url}/message/sendMedia/{evolution_instance}"
+        headers = {
+            "apikey": evolution_apikey,
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "number": str(numero or "").strip(),
+            "mediatype": str(tipo or "document").strip().lower(),
+            "mimetype": mimetype or "application/octet-stream",
+            "media": base64_data,
+            "caption": caption or "",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(endpoint, headers=headers, json=payload, timeout=30.0)
+
+        if response.status_code in (200, 201):
+            return True
+
+        print(f"[Evolution Service] Erro ao enviar mídia. Status={response.status_code} Body={response.text[:250]}")
+        return False
+    except Exception as e:
+        print(f"[Evolution Service] Falha ao enviar mídia: {str(e)}")
+        return False
+
 async def _obter_credenciais_evolution(
     empresa_id: UUID,
     db: AsyncSession,
