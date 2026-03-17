@@ -1743,8 +1743,6 @@ async def atualizar_lead_crm(
             "etapa_id": data.etapa_id or None,
             "tags": data.tags or [],
             "dados_adicionais": data.dados_adicionais or {},
-            "status": "sucesso",
-            "mensagem": "Ação simulada",
         }
 
     try:
@@ -1812,7 +1810,7 @@ async def transferir_lead_manual(
     data: TransferenciaManualRequest,
 ):
     if _lead_id_eh_simulador_ou_invalido(lead_id):
-        return {"status": "sucesso", "mensagem": "Ação simulada"}
+        return {"success": True, "detail": "Ação simulada"}
 
     resultado = await executar_transferencia_atendimento(
         empresa_id=empresa_id,
@@ -2138,11 +2136,12 @@ async def resetar_simulador(empresa_id: str, db: AsyncSession = Depends(get_db))
     lead = result.scalars().first()
     
     if not lead:
-        return
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
         
     try:
         await db.delete(lead)
         await db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao resetar simulador: {str(e)}")
@@ -2154,7 +2153,7 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
     """
     if _lead_id_eh_simulador_ou_invalido(lead_id):
         await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
-        return
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     from db.models import CRMLead
     emp_uuid = _parse_uuid_or_none(empresa_id)
@@ -2172,6 +2171,7 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
     try:
         await db.delete(lead)
         await db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao deletar lead: {str(e)}")

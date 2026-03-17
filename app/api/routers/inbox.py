@@ -108,7 +108,7 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
     if _telefone_eh_simulador(telefone):
-        return {"status": "sucesso", "mensagem": "Ação simulada"}
+        return {"status": "success"}
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
@@ -161,7 +161,7 @@ async def enviar_midia(
     caption: str = Form(""),
 ):
     if _telefone_eh_simulador(telefone):
-        return {"status": "sucesso", "mensagem": "Ação simulada"}
+        return {"status": "success", "tipo_mensagem": "document"}
 
     try:
         empresa_uuid = uuid.UUID(empresa_id)
@@ -244,7 +244,7 @@ async def enviar_midia(
 @router.post("/{empresa_id}/inbox/{telefone}/reativar_bot")
 async def reativar_bot(empresa_id: str, telefone: str):
     if _telefone_eh_simulador(telefone):
-        return {"status": "sucesso", "mensagem": "Ação simulada"}
+        return {"status": "success", "message": "Bot reativado"}
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
