@@ -90,7 +90,7 @@ export default function EmpresaConexoesManager({
       const results = await Promise.all(
         (listaConexoes || []).map(async (conexao) => {
           try {
-            const res = await api.get(`/conexoes/${conexao.id}/status`);
+            const res = await api.get(`/conexoes/status/${conexao.id}`);
             return [conexao.id, res.data];
           } catch (err) {
             return [
@@ -137,9 +137,10 @@ export default function EmpresaConexoesManager({
 
     const intervalId = window.setInterval(async () => {
       try {
-        const res = await api.get(`/conexoes/${qrModalConexao.id}/status`);
+        const res = await api.get(`/conexoes/status/${qrModalConexao.id}`);
         setStatusMap((prev) => ({ ...prev, [qrModalConexao.id]: res.data }));
-        if (String(res.data?.status || "").toUpperCase() === "CONNECTED" || res.data?.online) {
+        const status = String(res.data?.status || "").toLowerCase();
+        if (status === "open" || res.data?.online) {
           setQrModalConexao(null);
           setQrCodeBase64("");
           setQrCodeError("");
@@ -317,6 +318,17 @@ export default function EmpresaConexoesManager({
   };
 
   const handleOpenQrModal = async (conexao) => {
+    const cred = conexao?.credenciais_masked || {};
+    const evolutionUrl = String(cred?.evolution_url || "").trim();
+    const evolutionApiKey = String(cred?.evolution_apikey || "").trim();
+    if (!evolutionUrl || !evolutionApiKey) {
+      setToast({
+        type: "error",
+        message: "Configure URL da Evolution e API Key antes de gerar o QR Code.",
+      });
+      return;
+    }
+
     setQrModalConexao(conexao);
     setQrCodeBase64("");
     setQrCodeError("");
@@ -346,9 +358,10 @@ export default function EmpresaConexoesManager({
     if (!qrModalConexao?.id) return;
     try {
       setCheckingQrStatus(true);
-      const res = await api.get(`/conexoes/${qrModalConexao.id}/status`);
+      const res = await api.get(`/conexoes/status/${qrModalConexao.id}`);
       setStatusMap((prev) => ({ ...prev, [qrModalConexao.id]: res.data }));
-      if (String(res.data?.status || "").toUpperCase() === "CONNECTED" || res.data?.online) {
+      const status = String(res.data?.status || "").toLowerCase();
+      if (status === "open" || res.data?.online) {
         setToast({
           type: "success",
           message: `Conexão "${qrModalConexao.nome_instancia}" conectada com sucesso.`,

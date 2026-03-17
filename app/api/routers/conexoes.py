@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.empresas import require_ia_config_access
-from app.services.evolution_service import obter_qr_code
+from app.services.evolution_service import obter_qr_code, consultar_status_conexao
 from app.schemas import ConexaoCreate, ConexaoResponse, ConexaoUpdate
 from db.database import get_db
 from db.models import Conexao, Empresa, TipoConexao, Usuario, is_root_admin_email, normalize_user_role
@@ -439,20 +439,49 @@ async def status_conexao(
     await _validar_acesso_conexao(conexao, db, x_user_id)
 
     try:
+        if conexao.tipo == TipoConexao.EVOLUTION:
+            status_result = await consultar_status_conexao(conexao.id)
+            if status_result.get("success"):
+                status_normalizado = str(status_result.get("status") or "disconnected").lower()
+                online = status_normalizado == "open"
+                status_db = "CONNECTED" if online else ("CONNECTING" if status_normalizado == "connecting" else "DISCONNECTED")
+                if str(conexao.status or "").upper() != status_db:
+                    conexao.status = status_db
+                    await db.commit()
+                return {
+                    "conexao_id": str(conexao.id),
+                    "status": status_normalizado,
+                    "online": online,
+                }
+            return {
+                "conexao_id": str(conexao.id),
+                "status": "disconnected",
+                "online": False,
+                "detail": status_result.get("detail"),
+            }
+
         current_status, online = await _consultar_status_conexao(conexao)
+        return {
+            "conexao_id": str(conexao.id),
+            "status": str(current_status or "").lower(),
+            "online": online,
+        }
     except Exception as exc:
         return {
             "conexao_id": str(conexao.id),
-            "status": "DISCONNECTED",
+            "status": "disconnected",
             "online": False,
             "detail": str(exc),
         }
 
-    return {
-        "conexao_id": str(conexao.id),
-        "status": current_status,
-        "online": online,
-    }
+
+@status_router.get("/status/{conexao_id}", status_code=status.HTTP_200_OK)
+async def status_conexao_alias(
+    conexao_id: str,
+    db: AsyncSession = Depends(get_db),
+    x_user_id: str | None = Header(None),
+):
+    return await status_conexao(conexao_id=conexao_id, db=db, x_user_id=x_user_id)
 
 
 @status_router.get("/{conexao_id}/qrcode", status_code=status.HTTP_200_OK)

@@ -6,6 +6,24 @@ from db.models import Empresa, Conexao
 from db.database import AsyncSessionLocal
 
 
+def _mask_apikey(value: str | None) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 6:
+        return "*" * len(key)
+    return f"{key[:3]}***{key[-3:]}"
+
+
+def _normalizar_status_evolution(raw_status: str | None) -> str:
+    status = str(raw_status or "").strip().lower()
+    if status in {"open", "connected", "online"}:
+        return "open"
+    if status in {"connecting", "qrcode", "qr", "pairing"}:
+        return "connecting"
+    return "disconnected"
+
+
 async def enviar_mensagem_whatsapp_por_credenciais(
     telefone: str,
     texto: str,
@@ -146,6 +164,37 @@ async def _obter_credenciais_evolution(
     return empresa.credenciais_canais
 
 
+async def _obter_credenciais_conexao_ou_empresa(session: AsyncSession, conexao: Conexao) -> dict | None:
+    credenciais_conexao = dict(conexao.credenciais or {})
+    evolution_url = str(credenciais_conexao.get("evolution_url") or "").strip()
+    evolution_apikey = str(credenciais_conexao.get("evolution_apikey") or "").strip()
+    evolution_instance = str(credenciais_conexao.get("evolution_instance") or "").strip()
+
+    if all([evolution_url, evolution_apikey, evolution_instance]):
+        return {
+            "evolution_url": evolution_url,
+            "evolution_apikey": evolution_apikey,
+            "evolution_instance": evolution_instance,
+        }
+
+    result_empresa = await session.execute(select(Empresa).where(Empresa.id == conexao.empresa_id))
+    empresa = result_empresa.scalars().first()
+    credenciais_empresa = dict((empresa.credenciais_canais or {}) if empresa else {})
+
+    evolution_url = evolution_url or str(credenciais_empresa.get("evolution_url") or "").strip()
+    evolution_apikey = evolution_apikey or str(credenciais_empresa.get("evolution_apikey") or "").strip()
+    evolution_instance = evolution_instance or str(credenciais_empresa.get("evolution_instance") or "").strip()
+
+    if not all([evolution_url, evolution_apikey, evolution_instance]):
+        return None
+
+    return {
+        "evolution_url": evolution_url,
+        "evolution_apikey": evolution_apikey,
+        "evolution_instance": evolution_instance,
+    }
+
+
 def _extrair_base64_qrcode(payload: dict | None) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -193,16 +242,15 @@ async def obter_qr_code(conexao_id: str | UUID) -> dict:
         if not conexao:
             return {"success": False, "detail": "Conexão não encontrada."}
 
-        credenciais = conexao.credenciais or {}
-        evolution_url = credenciais.get("evolution_url")
-        evolution_apikey = credenciais.get("evolution_apikey")
-        evolution_instance = credenciais.get("evolution_instance")
-
-        if not all([evolution_url, evolution_apikey, evolution_instance]):
+        credenciais = await _obter_credenciais_conexao_ou_empresa(session, conexao)
+        if not credenciais:
             return {
                 "success": False,
                 "detail": "Configuração incompleta da conexão Evolution para gerar QR Code.",
             }
+        evolution_url = credenciais["evolution_url"]
+        evolution_apikey = credenciais["evolution_apikey"]
+        evolution_instance = credenciais["evolution_instance"]
 
         headers = {"apikey": evolution_apikey}
         base_url = str(evolution_url).rstrip("/")
@@ -238,6 +286,11 @@ async def obter_qr_code(conexao_id: str | UUID) -> dict:
                 }
 
         if response.status_code >= 400:
+            if response.status_code in (400, 401):
+                print(
+                    f"[Evolution Service] Falha auth/req QRCode | url={endpoint_connect} | "
+                    f"headers={{'apikey': '{_mask_apikey(evolution_apikey)}'}} | status={response.status_code}"
+                )
             detalhe = response.text[:500] if response.text else f"status {response.status_code}"
             if "connected" in detalhe.lower():
                 return {
@@ -266,6 +319,92 @@ async def obter_qr_code(conexao_id: str | UUID) -> dict:
             "success": True,
             "base64": qr_code_base64,
             "detail": "QR Code gerado com sucesso.",
+        }
+
+
+async def consultar_status_instancia(
+    instance_name: str,
+    evolution_url: str,
+    evolution_apikey: str,
+) -> dict:
+    base_url = str(evolution_url or "").rstrip("/")
+    instance = str(instance_name or "").strip()
+    apikey = str(evolution_apikey or "").strip()
+
+    if not base_url:
+        return {"success": False, "detail": "Evolution URL não configurada."}
+    if not instance:
+        return {"success": False, "detail": "Nome da instância não informado."}
+    if not apikey:
+        return {"success": False, "detail": "API Key da Evolution não configurada."}
+
+    endpoint_status = f"{base_url}/instance/connectionState/{instance}"
+    headers = {"apikey": apikey}
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
+            response = await client.get(endpoint_status, headers=headers)
+    except Exception as exc:
+        return {"success": False, "detail": f"Falha ao consultar status da instância: {exc}"}
+
+    if response.status_code >= 400:
+        if response.status_code in (400, 401):
+            print(
+                f"[Evolution Service] Falha auth/req Status | url={endpoint_status} | "
+                f"headers={{'apikey': '{_mask_apikey(apikey)}'}} | status={response.status_code}"
+            )
+        detalhe = response.text[:300] if response.text else f"status {response.status_code}"
+        return {"success": False, "detail": f"Erro ao consultar status da instância: {detalhe}"}
+
+    try:
+        data = response.json() if response.content else {}
+    except Exception:
+        data = {}
+
+    raw_status = (
+        data.get("instance", {}).get("state")
+        or data.get("state")
+        or data.get("status")
+        or data.get("connectionStatus")
+        or ""
+    )
+    status_normalizado = _normalizar_status_evolution(raw_status)
+    return {
+        "success": True,
+        "status": status_normalizado,
+        "raw_status": raw_status,
+    }
+
+
+async def consultar_status_conexao(conexao_id: str | UUID) -> dict:
+    try:
+        conexao_uuid = UUID(str(conexao_id))
+    except (ValueError, TypeError):
+        return {"success": False, "detail": "Conexão inválida."}
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Conexao).where(Conexao.id == conexao_uuid))
+        conexao = result.scalars().first()
+        if not conexao:
+            return {"success": False, "detail": "Conexão não encontrada."}
+
+        credenciais = await _obter_credenciais_conexao_ou_empresa(session, conexao)
+        if not credenciais:
+            return {"success": False, "detail": "Configuração incompleta da conexão Evolution."}
+
+        resultado = await consultar_status_instancia(
+            instance_name=credenciais["evolution_instance"],
+            evolution_url=credenciais["evolution_url"],
+            evolution_apikey=credenciais["evolution_apikey"],
+        )
+        if not resultado.get("success"):
+            return resultado
+
+        return {
+            "success": True,
+            "status": resultado.get("status", "disconnected"),
+            "raw_status": resultado.get("raw_status"),
+            "conexao_id": str(conexao.id),
         }
 
 
