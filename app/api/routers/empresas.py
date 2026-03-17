@@ -7,6 +7,7 @@ from datetime import datetime
 import PyPDF2
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import delete, update
 from typing import List
 from fastapi.responses import Response
 
@@ -21,6 +22,7 @@ from db.models import (
     CRMFunil,
     CRMEtapa,
     CRMLead,
+    MensagemHistorico,
     AgendaConfiguracao,
     AgendamentoLocal,
     Conexao,
@@ -2155,7 +2157,6 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
         await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    from db.models import CRMLead
     emp_uuid = _parse_uuid_or_none(empresa_id)
     if not emp_uuid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
@@ -2169,6 +2170,19 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado ou não pertence a esta empresa")
         
     try:
+        # Limpeza explícita de dependências para evitar falha por FK em bases legadas sem ON DELETE efetivo.
+        await db.execute(
+            delete(MensagemHistorico).where(MensagemHistorico.lead_id == lead.id)
+        )
+        await db.execute(
+            delete(HistoricoTransferencia).where(HistoricoTransferencia.lead_id == lead.id)
+        )
+        await db.execute(
+            update(AgendamentoLocal)
+            .where(AgendamentoLocal.lead_id == lead.id)
+            .values(lead_id=None)
+        )
+
         await db.delete(lead)
         await db.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
