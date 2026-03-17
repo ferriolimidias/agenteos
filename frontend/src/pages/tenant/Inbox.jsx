@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { ArrowRightLeft, BotOff, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
+import { ArrowRightLeft, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -13,6 +13,7 @@ export default function Inbox() {
   const [destinos, setDestinos] = useState([]);
   const [availableTags, setAvailableTags] = useState([]);
   const [showTransferPanel, setShowTransferPanel] = useState(false);
+  const [showTagsPanel, setShowTagsPanel] = useState(false);
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
   const [toast, setToast] = useState(null);
@@ -89,6 +90,7 @@ export default function Inbox() {
 
   useEffect(() => {
     setShowTransferPanel(false);
+    setShowTagsPanel(false);
     setSelectedDestinoId("");
   }, [selectedLead?.id]);
 
@@ -289,18 +291,20 @@ export default function Inbox() {
 
   if (!user || !empresa_id) {
     return (
-      <div className="flex h-[80vh] bg-white border border-gray-200 rounded-xl items-center justify-center shadow-sm">
+      <div className="flex h-[calc(100vh-12rem)] items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="text-center text-gray-500">
           <MessageSquare size={48} className="mx-auto mb-4 opacity-50" />
           <h2 className="text-xl font-semibold">Carregando Ambiente...</h2>
-          <p className="text-sm mt-2">Autenticando sessão do usuário.</p>
+          <p className="mt-2 text-sm">Autenticando sessão do usuário.</p>
         </div>
       </div>
     );
   }
 
+  const hasPayload = Boolean(selectedFile || newMessage.trim());
+
   return (
-    <div className="flex h-[80vh] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+    <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
       {toast ? (
         <div className="fixed right-6 top-6 z-[80]">
           <div
@@ -325,114 +329,121 @@ export default function Inbox() {
           </div>
         </div>
       ) : null}
-      {/* Sidebar: Lista de Leads */}
-      <div className="w-80 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
-        <div className="p-4 border-b border-gray-200 bg-white">
-          <h2 className="text-lg font-semibold text-gray-800">Mensagens</h2>
+
+      <aside className="w-80 flex-shrink-0 border-r border-gray-200 bg-white">
+        <div className="border-b border-gray-200 px-4 py-4">
+          <h2 className="text-lg font-semibold text-gray-800">Conversas</h2>
         </div>
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <div className="h-[calc(100%-64px)] overflow-y-auto">
           {leads?.map((lead) => (
             <div
               key={lead.id}
               onClick={() => setSelectedLead(lead)}
-              className={`p-4 border-b border-gray-100 cursor-pointer transition-colors ${
-                selectedLead?.id === lead.id ? "bg-blue-50 border-l-4 border-blue-500" : "hover:bg-gray-100"
+              className={`cursor-pointer border-b border-gray-100 px-4 py-3 transition-colors ${
+                selectedLead?.id === lead.id ? "bg-blue-50" : "hover:bg-gray-50"
               }`}
             >
-              <div className="flex justify-between items-start mb-1">
-                <span className="font-medium text-gray-900 truncate pr-2">
-                  {lead.nome_contato}
-                </span>
-                {lead.etapa_crm === "Aguardando Humano" && (
-                  <span className="bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0">
-                    Aguardando Humano
-                  </span>
-                )}
-              </div>
-              <div className="text-sm text-gray-500 mb-2 truncate">
-                {lead.telefone_contato}
-              </div>
-              {lead.bot_pausado && (
-                <div className="flex items-center text-xs text-orange-600 bg-orange-50 w-max px-2 py-0.5 rounded border border-orange-100">
-                  <BotOff size={12} className="mr-1" /> Bot Pausado
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-600">
+                  <UserCircle size={20} />
                 </div>
-              )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-semibold text-gray-900">{lead.nome_contato}</p>
+                    {lead.bot_pausado ? (
+                      <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+                        Pausado
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="truncate text-xs text-gray-500">
+                    {lead.historico_resumo || lead.telefone_contato || "Sem mensagens recentes"}
+                  </p>
+                  {lead.etapa_crm ? (
+                    <p className="mt-1 truncate text-[11px] font-medium text-gray-400">{lead.etapa_crm}</p>
+                  ) : null}
+                </div>
+              </div>
             </div>
           ))}
           {(!leads || leads.length === 0) && (
-            <div className="p-6 text-center text-gray-400 text-sm">
-              Nenhum lead encontrado.
+            <div className="p-6 text-center text-sm text-gray-400">
+              Nenhuma conversa encontrada.
             </div>
           )}
         </div>
-      </div>
+      </aside>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 min-w-0 flex flex-col bg-slate-50 relative">
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#efeae2]">
         {selectedLead ? (
           <>
-            {/* Chat Header */}
-            <div className="border-b border-gray-200 bg-white px-6 py-4 shadow-sm z-10">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-start space-x-3">
-                  <UserCircle size={40} className="mt-0.5 flex-shrink-0 text-gray-400" />
+            <header className="z-20 border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-600">
+                    <UserCircle size={22} />
+                  </div>
                   <div className="min-w-0">
-                    <h3 className="truncate font-semibold text-gray-800">{selectedLead.nome_contato}</h3>
-                    <p className="text-xs text-gray-500">{selectedLead.telefone_contato}</p>
-                    {selectedLead.historico_resumo ? (
-                      <p className="mt-1 line-clamp-2 max-w-2xl text-xs text-gray-500">
-                        {selectedLead.historico_resumo}
-                      </p>
-                    ) : null}
+                    <h3 className="truncate text-sm font-semibold text-gray-900">{selectedLead.nome_contato}</h3>
+                    <p className="truncate text-xs text-gray-500">{selectedLead.telefone_contato}</p>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  {selectedLead.bot_pausado && (
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowTagsPanel((prev) => !prev)}
+                    className="rounded-lg px-2.5 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100"
+                  >
+                    Tags
+                  </button>
+                  {selectedLead.bot_pausado ? (
                     <button
                       onClick={handleReativarBot}
-                      className="flex items-center space-x-2 bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-blue-200"
+                      className="rounded-lg px-2.5 py-2 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
                     >
-                      <span>Reativar IA</span>
+                      Reativar IA
                     </button>
-                  )}
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setShowTransferPanel((prev) => !prev)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
+                    className="rounded-lg p-2 text-emerald-700 transition-colors hover:bg-emerald-50"
+                    title="Transferir"
                   >
                     <ArrowRightLeft size={16} />
-                    Transferir
                   </button>
                   <button
                     onClick={handleExcluirLead}
-                    title="Excluir Lead e Histórico"
-                    className="flex items-center justify-center bg-red-50 text-red-600 hover:bg-red-100 p-2 rounded-lg transition-colors border border-red-100"
+                    title="Excluir lead"
+                    className="rounded-lg p-2 text-red-600 transition-colors hover:bg-red-50"
                   >
-                    <Trash2 size={20} />
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                <LeadTagsEditor
-                  tags={selectedLead.tags || []}
-                  compact
-                  placeholder="Nova tag + Enter"
-                  onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
-                  tagDefinitions={availableTags}
-                />
+              {(showTagsPanel || showTransferPanel) ? (
+                <div className="mt-3 space-y-2">
+                  {showTagsPanel ? (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-2.5">
+                      <LeadTagsEditor
+                        tags={selectedLead.tags || []}
+                        compact
+                        placeholder="Nova tag + Enter"
+                        onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
+                        tagDefinitions={availableTags}
+                      />
+                    </div>
+                  ) : null}
 
-                <div className="space-y-2">
                   {showTransferPanel ? (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-emerald-800">
-                        Destino de transferência
-                      </label>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5">
                       <div className="flex gap-2">
                         <select
                           value={selectedDestinoId}
                           onChange={(e) => setSelectedDestinoId(e.target.value)}
-                          className="flex-1 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                          className="flex-1 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500"
                         >
                           <option value="">Selecione um destino</option>
                           {destinos.map((destino) => (
@@ -445,119 +456,113 @@ export default function Inbox() {
                           type="button"
                           onClick={handleTransferirManual}
                           disabled={transferindo || !selectedDestinoId}
-                          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {transferindo ? <RefreshCw size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />}
-                          Confirmar
+                          {transferindo ? <RefreshCw size={14} className="animate-spin" /> : "Confirmar"}
                         </button>
                       </div>
-                      <p className="mt-2 text-xs text-emerald-700">
-                        Esta ação reutiliza o mesmo motor de transferência da IA e pausa o bot automaticamente.
-                      </p>
                     </div>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                      Use "Transferir" para encaminhar este lead a um destino já configurado.
-                    </div>
-                  )}
+                  ) : null}
                 </div>
+              ) : null}
+            </header>
+
+            <div className="flex-1 overflow-y-auto px-4 py-5">
+              <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                {messages?.map((msg) => {
+                  const isMine = msg.from_me;
+                  return (
+                    <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                      <div
+                        className={`relative max-w-[80%] px-3 py-2 shadow-sm ${
+                          isMine
+                            ? "ml-auto rounded-lg rounded-tr-none bg-[#d9fdd3] text-gray-900"
+                            : "mr-auto rounded-lg rounded-tl-none bg-white text-gray-800"
+                        }`}
+                      >
+                        {renderMensagemConteudo(msg)}
+                        <div className="mt-1 text-right text-[10px] text-gray-500">
+                          {msg?.criado_em ? new Date(msg.criado_em).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
+                {(!messages || messages.length === 0) ? (
+                  <div className="py-12 text-center text-sm text-gray-500">Nenhuma mensagem neste histórico.</div>
+                ) : null}
               </div>
             </div>
 
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-              {messages?.map((msg) => {
-                const isMine = msg.from_me;
-                return (
-                  <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[72%] rounded-2xl px-4 py-2 shadow-sm relative ${
-                        isMine
-                          ? "bg-emerald-500 text-white rounded-br-none"
-                          : "bg-white text-gray-800 border border-gray-100 rounded-bl-none"
-                      }`}
-                    >
-                      {renderMensagemConteudo(msg)}
-                      <span className={`text-[10px] absolute bottom-1 right-2 opacity-70 ${isMine ? "text-emerald-100" : "text-gray-400"}`}>
-                        {msg?.criado_em ? new Date(msg.criado_em).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}
-                      </span>
+            <footer className="border-t border-gray-200 bg-gray-100 p-3">
+              <div className="mx-auto max-w-4xl">
+                {selectedFile ? (
+                  <div className="mb-2 rounded-xl border border-gray-200 bg-white p-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-sm text-gray-700">
+                        {selectedFile.type.startsWith("image/") ? <FileImage size={16} /> : selectedFile.type.startsWith("audio/") ? <FileAudio size={16} /> : <FileText size={16} />}
+                        <span className="max-w-[320px] truncate font-medium">{selectedFile.name}</span>
+                      </div>
+                      <button type="button" onClick={clearSelectedFile} className="rounded-md p-1 text-gray-500 hover:bg-gray-100">
+                        <X size={14} />
+                      </button>
                     </div>
+                    <input
+                      value={mediaCaption}
+                      onChange={(e) => setMediaCaption(e.target.value)}
+                      placeholder="Legenda opcional..."
+                      className="mt-2 w-full rounded-full border-none bg-gray-100 px-3 py-2 text-sm outline-none focus:ring-0"
+                    />
                   </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-              {(!messages || messages.length === 0) && (
-                <div className="flex justify-center items-center h-full">
-                  <span className="text-gray-400 text-sm">Nenhuma mensagem neste histórico.</span>
-                </div>
-              )}
-            </div>
+                ) : null}
 
-            {/* Chat Input */}
-            <div className="p-4 bg-white border-t border-gray-200">
-              {selectedFile ? (
-                <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-sm text-gray-700">
-                      {selectedFile.type.startsWith("image/") ? <FileImage size={16} /> : selectedFile.type.startsWith("audio/") ? <FileAudio size={16} /> : <FileText size={16} />}
-                      <span className="max-w-[340px] truncate font-medium">{selectedFile.name}</span>
-                    </div>
-                    <button type="button" onClick={clearSelectedFile} className="rounded-lg p-1 text-gray-500 hover:bg-gray-200">
-                      <X size={16} />
-                    </button>
-                  </div>
+                <form onSubmit={handleSendMessage} className="flex items-center gap-2">
                   <input
-                    value={mediaCaption}
-                    onChange={(e) => setMediaCaption(e.target.value)}
-                    placeholder="Legenda opcional..."
-                    className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500"
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    accept="image/*,audio/*,application/pdf,.pdf,.doc,.docx"
+                    onChange={handleSelectFile}
                   />
-                </div>
-              ) : null}
-
-              <form onSubmit={handleSendMessage} className="flex items-center space-x-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,audio/*,application/pdf,.pdf,.doc,.docx"
-                  onChange={handleSelectFile}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="rounded-xl p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-                  title="Anexar mídia"
-                >
-                  <Paperclip size={18} />
-                </button>
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Escreva sua mensagem..."
-                  className="flex-1 rounded-xl border border-transparent px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  disabled={loading}
-                />
-                <button
-                  type={selectedFile ? "button" : "submit"}
-                  onClick={selectedFile ? handleSendMedia : undefined}
-                  disabled={selectedFile ? loading : (!newMessage.trim() || loading)}
-                  className="rounded-xl bg-emerald-600 p-3 text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Send size={20} />
-                </button>
-              </form>
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="rounded-full bg-white p-2.5 text-gray-600 shadow-sm transition-colors hover:bg-gray-50"
+                    title="Anexar"
+                  >
+                    <Paperclip size={18} />
+                  </button>
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Digite uma mensagem"
+                    className="flex-1 rounded-full border-none bg-white px-4 py-2.5 text-sm outline-none shadow-sm focus:ring-0"
+                    disabled={loading}
+                  />
+                  <button
+                    type={selectedFile ? "button" : "submit"}
+                    onClick={selectedFile ? handleSendMedia : undefined}
+                    disabled={selectedFile ? loading : (!newMessage.trim() || loading)}
+                    className={`rounded-full p-3 text-white shadow-sm transition-colors ${
+                      hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
+                    } disabled:cursor-not-allowed disabled:opacity-80`}
+                  >
+                    <Send size={18} />
+                  </button>
+                </form>
+              </div>
+            </footer>
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
-            <MessageSquare size={64} className="mb-4 text-gray-300" />
-            <p className="text-lg font-medium">Selecione um lead</p>
-            <p className="text-sm">Para visualizar o histórico de mensagens</p>
+          <div className="flex flex-1 flex-col items-center justify-center text-gray-500">
+            <MessageSquare size={54} className="mb-3 text-gray-400" />
+            <p className="text-base font-medium">Selecione uma conversa</p>
+            <p className="text-sm text-gray-400">Escolha um lead na lateral para iniciar o atendimento.</p>
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
