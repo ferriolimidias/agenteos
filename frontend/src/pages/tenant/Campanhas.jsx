@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
   FileText,
+  List,
   Megaphone,
   Pencil,
   Plus,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 
 import api from "../../services/api";
+import LeadDetailsModal from "../../components/LeadDetailsModal";
 import { getActiveEmpresaId } from "../../utils/auth";
 
 const initialTemplateForm = {
@@ -76,6 +78,13 @@ export default function Campanhas() {
   const [templates, setTemplates] = useState([]);
   const [campanhas, setCampanhas] = useState([]);
   const [tagsDisponiveis, setTagsDisponiveis] = useState([]);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [listas, setListas] = useState([]);
+  const [loadingListas, setLoadingListas] = useState(true);
+  const [selectedLista, setSelectedLista] = useState(null);
+  const [selectedListaLeads, setSelectedListaLeads] = useState([]);
+  const [loadingListaLeads, setLoadingListaLeads] = useState(false);
+  const [editingLead, setEditingLead] = useState(null);
   const [empresaConfig, setEmpresaConfig] = useState({
     disparo_delay_min: 3,
     disparo_delay_max: 7,
@@ -144,6 +153,46 @@ export default function Campanhas() {
     }
   };
 
+  const fetchOfficialTags = async () => {
+    if (!empresaId) return;
+    try {
+      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
+      setAvailableTags(res.data || []);
+    } catch (err) {
+      console.error("Erro ao carregar tags oficiais:", err);
+      setAvailableTags([]);
+    }
+  };
+
+  const fetchListas = async () => {
+    if (!empresaId) return;
+    try {
+      setLoadingListas(true);
+      const res = await api.get(`/empresas/${empresaId}/campanhas/listas`);
+      setListas(res.data || []);
+    } catch (err) {
+      console.error("Erro ao carregar listas de campanhas:", err);
+      setListas([]);
+    } finally {
+      setLoadingListas(false);
+    }
+  };
+
+  const fetchLeadsDaLista = async (lista) => {
+    if (!empresaId || !lista?.tag_id) return;
+    try {
+      setLoadingListaLeads(true);
+      const res = await api.get(`/empresas/${empresaId}/campanhas/listas/${lista.tag_id}/leads`);
+      setSelectedListaLeads(res.data || []);
+      setSelectedLista(lista);
+    } catch (err) {
+      console.error("Erro ao carregar leads da lista:", err);
+      setSelectedListaLeads([]);
+    } finally {
+      setLoadingListaLeads(false);
+    }
+  };
+
   const fetchEmpresaConfig = async () => {
     if (!empresaId) return;
     try {
@@ -165,7 +214,9 @@ export default function Campanhas() {
     fetchTemplates();
     fetchCampanhas();
     fetchTags();
+    fetchOfficialTags();
     fetchEmpresaConfig();
+    fetchListas();
   }, [empresaId]);
 
   useEffect(() => {
@@ -333,6 +384,30 @@ export default function Campanhas() {
     }
   };
 
+  const handleSaveLead = async (leadId, updates) => {
+    const res = await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
+    const nextLead = { ...updates, ...res.data };
+    setSelectedListaLeads((prev) =>
+      prev.map((lead) => (lead.id === leadId ? { ...lead, ...nextLead } : lead))
+    );
+  };
+
+  const handleSaveLeadTags = async (leadId, nextTags) => {
+    await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
+    setSelectedListaLeads((prev) =>
+      prev.map((lead) => (lead.id === leadId ? { ...lead, tags: nextTags } : lead))
+    );
+    await fetchListas();
+  };
+
+  const handleRemoveLeadFromList = async (lead, lista) => {
+    const nextTags = (lead.tags || []).filter(
+      (tag) => String(tag).trim().toLowerCase() !== String(lista.tag).trim().toLowerCase()
+    );
+    await handleSaveLeadTags(lead.id, nextTags);
+    setSelectedListaLeads((prev) => prev.filter((item) => item.id !== lead.id));
+  };
+
   return (
     <div className="space-y-6">
       {toast ? (
@@ -376,7 +451,10 @@ export default function Campanhas() {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={fetchCampanhas}
+            onClick={async () => {
+              await fetchCampanhas();
+              await fetchListas();
+            }}
             className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
           >
             <RefreshCw size={16} />
@@ -391,7 +469,7 @@ export default function Campanhas() {
               <Plus size={16} />
               Novo template
             </button>
-          ) : (
+          ) : activeTab === "disparos" ? (
             <button
               type="button"
               onClick={() => {
@@ -404,6 +482,15 @@ export default function Campanhas() {
             >
               <Send size={16} />
               Novo Disparo
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={fetchListas}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+            >
+              <List size={16} />
+              Atualizar listas
             </button>
           )}
         </div>
@@ -433,6 +520,17 @@ export default function Campanhas() {
               }`}
             >
               Disparos
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("listas")}
+              className={`rounded-t-xl px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "listas"
+                  ? "border border-b-white border-blue-200 bg-blue-50 text-blue-700"
+                  : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+              }`}
+            >
+              Listas
             </button>
           </div>
         </div>
@@ -504,7 +602,7 @@ export default function Campanhas() {
                 ))}
               </div>
             )
-          ) : loadingCampanhas ? (
+          ) : activeTab === "disparos" ? loadingCampanhas ? (
             <div className="flex items-center justify-center py-14 text-gray-500">
               <RefreshCw size={18} className="mr-2 animate-spin" />
               Carregando campanhas...
@@ -544,9 +642,150 @@ export default function Campanhas() {
                 </tbody>
               </table>
             </div>
+          ) : loadingListas ? (
+            <div className="flex items-center justify-center py-14 text-gray-500">
+              <RefreshCw size={18} className="mr-2 animate-spin" />
+              Carregando listas...
+            </div>
+          ) : listas.length === 0 ? (
+            <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-14 text-center">
+              <List className="mx-auto mb-3 text-gray-300" size={36} />
+              <p className="text-sm font-medium text-gray-700">Nenhuma lista disponível.</p>
+              <p className="mt-1 text-sm text-gray-500">
+                Cadastre tags oficiais para visualizar audiências e quantidades por lista.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-gray-200">
+              <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
+                <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Lista</th>
+                    <th className="px-4 py-3 font-semibold">Quantidade de Leads</th>
+                    <th className="px-4 py-3 font-semibold">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {listas.map((lista) => (
+                    <tr key={lista.tag_id}>
+                      <td className="px-4 py-3">
+                        <span
+                          className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold"
+                          style={{ backgroundColor: `${lista.cor}18`, borderColor: `${lista.cor}55`, color: lista.cor }}
+                        >
+                          {lista.tag}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{lista.total_leads}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => fetchLeadsDaLista(lista)}
+                          className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50"
+                        >
+                          Ver leads
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>
+
+      {selectedLista ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Lista: {selectedLista.tag}</h2>
+                <p className="text-sm text-gray-500">
+                  Leads vinculados a esta audiência oficial de disparo.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedLista(null);
+                  setSelectedListaLeads([]);
+                }}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {loadingListaLeads ? (
+                <div className="flex items-center justify-center py-14 text-gray-500">
+                  <RefreshCw size={18} className="mr-2 animate-spin" />
+                  Carregando leads da lista...
+                </div>
+              ) : selectedListaLeads.length === 0 ? (
+                <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-14 text-center">
+                  <p className="text-sm font-medium text-gray-700">Nenhum lead nesta lista.</p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Quando leads receberem essa tag oficial, eles aparecerão aqui.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-gray-200">
+                  <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
+                    <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Nome</th>
+                        <th className="px-4 py-3 font-semibold">Telefone</th>
+                        <th className="px-4 py-3 font-semibold">Status</th>
+                        <th className="px-4 py-3 font-semibold">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {selectedListaLeads.map((lead) => (
+                        <tr key={lead.id}>
+                          <td className="px-4 py-3 font-medium text-gray-900">{lead.nome_contato}</td>
+                          <td className="px-4 py-3 text-gray-700">{lead.telefone_contato || "-"}</td>
+                          <td className="px-4 py-3 text-gray-600">{lead.status || "-"}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingLead(lead)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm text-blue-700 transition-colors hover:bg-blue-50"
+                              >
+                                <Pencil size={14} />
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLeadFromList(lead, selectedLista)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+                              >
+                                <Trash2 size={14} />
+                                Remover da Lista
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <LeadDetailsModal
+        open={Boolean(editingLead)}
+        lead={editingLead}
+        onClose={() => setEditingLead(null)}
+        onSaveLead={handleSaveLead}
+        onSaveTags={handleSaveLeadTags}
+        availableTags={availableTags}
+      />
 
       {showTemplateModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

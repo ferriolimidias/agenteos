@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import api from "../../services/api";
-import { Users, Plus, Phone, Clock, MessageSquare, X } from "lucide-react";
+import { Users, Plus, Phone, Clock, MessageSquare, Upload, X } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
+import LeadDetailsModal from "../../components/LeadDetailsModal";
 
 function formatDate(value) {
   if (!value) return "Hoje";
@@ -13,6 +14,13 @@ export default function Crm() {
   const [funil, setFunil] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState(null);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importPreviewColumns, setImportPreviewColumns] = useState([]);
+  const [importSelectedTags, setImportSelectedTags] = useState([]);
+  const [importSaving, setImportSaving] = useState(false);
+  const [importInfo, setImportInfo] = useState("");
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
@@ -29,8 +37,21 @@ export default function Crm() {
     }
   };
 
+  const fetchOfficialTags = async () => {
+    try {
+      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
+      setAvailableTags(res.data || []);
+    } catch (err) {
+      console.error("Erro ao carregar tags oficiais:", err);
+      setAvailableTags([]);
+    }
+  };
+
   useEffect(() => {
-    if (empresaId) fetchCrmData();
+    if (empresaId) {
+      fetchCrmData();
+      fetchOfficialTags();
+    }
   }, [empresaId]);
 
   const updateLeadInState = (leadId, updates) => {
@@ -54,6 +75,75 @@ export default function Crm() {
     updateLeadInState(leadId, { tags: nextTags });
   };
 
+  const handleLeadSave = async (leadId, updates) => {
+    const res = await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
+    updateLeadInState(leadId, {
+      ...updates,
+      tags: res.data?.tags || updates.tags,
+      dados_adicionais: res.data?.dados_adicionais || updates.dados_adicionais,
+    });
+  };
+
+  const resetImportModal = () => {
+    setShowImportModal(false);
+    setImportFile(null);
+    setImportPreviewColumns([]);
+    setImportSelectedTags([]);
+    setImportInfo("");
+  };
+
+  const handleImportFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    setImportFile(file || null);
+    setImportInfo("");
+    if (!file) {
+      setImportPreviewColumns([]);
+      return;
+    }
+
+    if (String(file.name || "").toLowerCase().endsWith(".xlsx")) {
+      setImportPreviewColumns([]);
+      setImportInfo("Arquivo Excel selecionado. O preview de colunas será detectado no backend durante a importação.");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || "";
+      const separator = firstLine.includes(";") ? ";" : ",";
+      const columns = firstLine.split(separator).map((item) => item.trim()).filter(Boolean);
+      setImportPreviewColumns(columns);
+    } catch (err) {
+      console.error("Erro ao ler preview do arquivo:", err);
+      setImportPreviewColumns([]);
+      setImportInfo("Não foi possível ler o preview do arquivo no navegador.");
+    }
+  };
+
+  const handleSubmitImport = async (e) => {
+    e.preventDefault();
+    if (!importFile) return;
+    try {
+      setImportSaving(true);
+      const formData = new FormData();
+      formData.append("file", importFile);
+      formData.append("tags_iniciais", JSON.stringify(importSelectedTags));
+      const res = await api.post(`/empresas/${empresaId}/leads/importar`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      resetImportModal();
+      await fetchCrmData();
+      setImportInfo(
+        `Importação concluída: ${res.data?.inseridos || 0} inseridos, ${res.data?.atualizados || 0} atualizados.`
+      );
+    } catch (err) {
+      console.error("Erro ao importar leads:", err);
+      alert(err.response?.data?.detail || "Não foi possível importar os leads.");
+    } finally {
+      setImportSaving(false);
+    }
+  };
+
   if (!user) return <div className="p-8 text-center text-gray-500">Faça login novamente.</div>;
 
   return (
@@ -69,13 +159,22 @@ export default function Crm() {
           </p>
         </div>
 
-        <button
-          onClick={() => alert("Criação manual de Lead em breve! A IA já faz isso automaticamente.")}
-          className="flex items-center space-x-2 rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
-        >
-          <Plus size={20} />
-          <span>Novo Lead</span>
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center space-x-2 rounded-lg border border-blue-200 bg-white px-4 py-2.5 font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-50"
+          >
+            <Upload size={18} />
+            <span>Importar Leads</span>
+          </button>
+          <button
+            onClick={() => alert("Criação manual de Lead em breve! A IA já faz isso automaticamente.")}
+            className="flex items-center space-x-2 rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+          >
+            <Plus size={20} />
+            <span>Novo Lead</span>
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -141,6 +240,7 @@ export default function Crm() {
                           compact
                           placeholder="Nova tag + Enter"
                           onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
+                          tagDefinitions={availableTags}
                         />
 
                         <div className="mt-3 flex items-center justify-between border-t border-gray-50 pt-3">
@@ -167,55 +267,96 @@ export default function Crm() {
         </div>
       )}
 
-      {selectedLead ? (
+      <LeadDetailsModal
+        open={Boolean(selectedLead)}
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+        onSaveLead={handleLeadSave}
+        onSaveTags={handleLeadTagsChange}
+        availableTags={availableTags}
+      />
+
+      {showImportModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">{selectedLead.nome_contato}</h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  Lead criado em {formatDate(selectedLead.criado_em)}
-                </p>
+                <h2 className="text-xl font-bold text-gray-900">Importar Leads</h2>
+                <p className="text-sm text-gray-500">Envie um CSV ou Excel com colunas de Nome e Telefone.</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedLead(null)}
-                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-              >
+              <button type="button" onClick={resetImportModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
                 <X size={18} />
               </button>
             </div>
 
-            <div className="space-y-6 p-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Telefone</p>
-                  <p className="text-sm font-medium text-gray-800">{selectedLead.telefone || "Não informado"}</p>
-                </div>
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags do lead</p>
-                  <LeadTagsEditor
-                    tags={selectedLead.tags || []}
-                    placeholder="Adicionar tag e pressionar Enter"
-                    onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
-                  />
-                </div>
+            <form onSubmit={handleSubmitImport} className="space-y-5 p-6">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Arquivo</label>
+                <input
+                  type="file"
+                  accept=".csv,.xlsx"
+                  onChange={handleImportFileChange}
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800"
+                />
               </div>
 
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Resumo do histórico</p>
-                <p className="text-sm leading-6 text-gray-700">
-                  {selectedLead.historico_resumo || "Nenhum resumo disponível para este lead."}
-                </p>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Preview das colunas</p>
+                {importPreviewColumns.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {importPreviewColumns.map((column) => (
+                      <span key={column} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                        {column}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">
+                    {importInfo || "Selecione um arquivo para visualizar ou detectar as colunas."}
+                  </p>
+                )}
               </div>
 
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Dados adicionais</p>
-                <pre className="overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-gray-600">
-                  {JSON.stringify(selectedLead.dados_adicionais || {}, null, 2)}
-                </pre>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags iniciais da lista</p>
+                <div className="flex flex-wrap gap-2">
+                  {availableTags.map((tag) => {
+                    const selected = importSelectedTags.includes(tag.nome);
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() =>
+                          setImportSelectedTags((prev) =>
+                            selected ? prev.filter((item) => item !== tag.nome) : [...prev, tag.nome]
+                          )
+                        }
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                          selected
+                            ? "border-blue-300 bg-blue-600 text-white"
+                            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
+                        }`}
+                      >
+                        {tag.nome}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={resetImportModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!importFile || importSaving}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {importSaving ? "Importando..." : "Importar leads"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : null}

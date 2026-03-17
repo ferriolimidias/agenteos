@@ -11,6 +11,7 @@ export default function Inbox() {
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [destinos, setDestinos] = useState([]);
+  const [availableTags, setAvailableTags] = useState([]);
   const [showTransferPanel, setShowTransferPanel] = useState(false);
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
@@ -58,9 +59,21 @@ export default function Inbox() {
     }
   };
 
+  const fetchOfficialTags = async () => {
+    if (!empresa_id) return;
+    try {
+      const res = await api.get(`/empresas/${empresa_id}/crm/tags/oficiais`);
+      setAvailableTags(res.data || []);
+    } catch (e) {
+      console.error("Erro ao buscar tags oficiais:", e);
+      setAvailableTags([]);
+    }
+  };
+
   useEffect(() => {
     fetchLeads();
     fetchDestinos();
+    fetchOfficialTags();
     const interval = setInterval(fetchLeads, 10000);
     return () => clearInterval(interval);
   }, [empresa_id]);
@@ -299,6 +312,7 @@ export default function Inbox() {
                   compact
                   placeholder="Nova tag + Enter"
                   onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
+                  tagDefinitions={availableTags}
                 />
 
                 <div className="space-y-2">

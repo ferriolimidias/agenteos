@@ -62,6 +62,8 @@ from app.services.transferencia_service import (
     executar_transferencia_atendimento,
     listar_destinos_transferencia_para_prompt,
 )
+from app.services.tag_crm_service import listar_tags_crm_para_prompt
+from app.core.tools import tool_atualizar_tags_lead
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
@@ -278,6 +280,63 @@ class ActionTransferirAtendimentoInput(BaseModel):
     resumo_conversa: str = Field(
         description="Resumo curto e objetivo do motivo da transferência e do que o cliente precisa."
     )
+
+
+class ToolAtualizarTagsLeadInput(BaseModel):
+    lead_id: str = Field(description="UUID do lead atual que deve receber a classificação por tags.")
+    tags: List[str] = Field(description="Lista de tags oficiais que devem ser aplicadas ao lead.")
+
+
+async def node_especialista_tags(state: AgentState):
+    lead_id = state.get("lead_id")
+    empresa_id = state.get("empresa_id")
+    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+    tags_crm_prompt = await listar_tags_crm_para_prompt(empresa_id) if empresa_id else ""
+
+    if not lead_id or not empresa_id or not tags_crm_prompt:
+        return state
+
+    llm = await get_llm(empresa_id)
+
+    async def _tool(lead_id: str, tags: List[str]) -> str:
+        return await tool_atualizar_tags_lead(lead_id=lead_id, tags=tags)
+
+    tool_tags = StructuredTool(
+        name="tool_atualizar_tags_lead",
+        description="Aplica tags oficiais do CRM ao lead atual com base nas regras de classificação.",
+        args_schema=ToolAtualizarTagsLeadInput,
+        coroutine=_tool,
+    )
+
+    prompt = f"""Sua função é classificar o usuário com a tool 'tool_atualizar_tags_lead', seguindo estas regras:
+{tags_crm_prompt}
+
+Lead atual: {lead_id}
+
+Classifique o lead apenas com tags oficiais coerentes com a conversa.
+Após classificar, encerre com uma resposta interna curta confirmando a classificação."""
+
+    llm_with_tools = llm.bind_tools([tool_tags])
+    tool_node = ToolNode([tool_tags])
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    mensagens = [SystemMessage(content=prompt), HumanMessage(content=ultima_mensagem)]
+    resposta_parcial = "Classificação de tags concluída."
+
+    for _ in range(4):
+        resposta = await llm_with_tools.ainvoke(mensagens)
+        mensagens.append(resposta)
+        if hasattr(resposta, "tool_calls") and resposta.tool_calls:
+            resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
+            mensagens.extend(resultado_toolnode["messages"])
+        else:
+            resposta_parcial = resposta.content or resposta_parcial
+            break
+
+    state["respostas_especialistas"].append(f"[TAGS_CRM]: {resposta_parcial}")
+    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "tags_crm"]
+    return state
 
 
 def criar_ferramenta_transferir_atendimento_contextual(
@@ -665,6 +724,13 @@ async def node_roteador_maestro(state: AgentState):
                     linhas_esp.append(f"- '{e.nome}': {desc}")
                 especialistas_str = "\n".join(linhas_esp)
 
+            tags_prompt_roteador = await listar_tags_crm_para_prompt(empresa_uuid)
+            if tags_prompt_roteador:
+                especialistas_str += (
+                    "\n- 'tags_crm': Classifica o lead com tags oficiais do CRM quando a mensagem indicar perfil, interesse, urgência, objeções, origem, qualificação ou qualquer regra abaixo.\n"
+                    f"{tags_prompt_roteador}"
+                )
+
     prompt = f"""[ROTEADOR MECÂNICO]
 Sua função é APENAS rotear.
 {contexto_empresa}
@@ -674,6 +740,7 @@ ESPECIALISTAS DISPONÍVEIS:
 
 Com base na última mensagem do cliente, retorne um ARRAY/LISTA contendo os nomes exatos dos especialistas que devem atuar. 
 Se a requisição tiver múltiplos assuntos, retorne múltiplos nomes (Ex: ['Comercial', 'Suporte']).
+Se a mensagem ativar alguma regra de tag oficial, inclua obrigatoriamente 'tags_crm' na lista.
 Se nenhum encaixar perfeitamente, retorne ['geral']."""
     
     mensagens_para_llm = [SystemMessage(content=prompt)] + state.get("mensagens", [])
@@ -926,6 +993,8 @@ async def node_especialista_dinamico(state: AgentState):
                     except Exception as e:
                         print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
 
+        tags_crm_prompt = await listar_tags_crm_para_prompt(empresa_id) if empresa_id else ""
+
         if lead_id and empresa_id and "action_atualizar_tags" not in nomes_tools_registradas:
             tool_tags = criar_ferramenta_atualizar_tags_contextual(lead_id=lead_id, empresa_id=empresa_id)
             tools_disponiveis.append(tool_tags)
@@ -957,6 +1026,13 @@ async def node_especialista_dinamico(state: AgentState):
                 f"{destinos_transferencia_prompt}\n"
                 "Quando o cenário bater com as instruções de ativação acima, use a ferramenta 'action_transferir_atendimento'. "
                 "Após usar a ferramenta, encerre sua resposta ao cliente de forma cordial avisando que um humano continuará o atendimento em instantes."
+            )
+
+        if tags_crm_prompt:
+            system_message_adicional += (
+                "\n\nVocê pode classificar o lead usando a tool 'action_atualizar_tags'. "
+                "Tags disponíveis:\n"
+                f"{tags_crm_prompt}"
             )
             
         if state.get("handoff_requested", False):
@@ -1020,6 +1096,7 @@ workflow.add_node("node_crm", node_crm)
 workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
+workflow.add_node("node_especialista_tags", node_especialista_tags)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
 
 workflow.set_entry_point("node_crm")
@@ -1049,7 +1126,37 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("node_roteador_maestro", "node_especialista_dinamico")
+def router_maestro(state: AgentState):
+    intencoes = state.get("intencao") or []
+    if "tags_crm" in intencoes:
+        return "node_especialista_tags"
+    return "node_especialista_dinamico"
+
+
+workflow.add_conditional_edges(
+    "node_roteador_maestro",
+    router_maestro,
+    {
+        "node_especialista_tags": "node_especialista_tags",
+        "node_especialista_dinamico": "node_especialista_dinamico",
+    }
+)
+
+def router_pos_tags(state: AgentState):
+    intencoes = state.get("intencao") or []
+    if intencoes:
+        return "node_especialista_dinamico"
+    return "node_atendente"
+
+
+workflow.add_conditional_edges(
+    "node_especialista_tags",
+    router_pos_tags,
+    {
+        "node_especialista_dinamico": "node_especialista_dinamico",
+        "node_atendente": "node_atendente",
+    }
+)
 workflow.add_edge("node_especialista_dinamico", "node_atendente")
 
 from langgraph.checkpoint.memory import MemorySaver

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, UploadFile, File, Form
 import io
 import csv
+import json
 import uuid
 from datetime import datetime
 import PyPDF2
@@ -25,6 +26,7 @@ from db.models import (
     Conexao,
     DestinosTransferencia,
     HistoricoTransferencia,
+    TagCRM,
     TemplateMensagem,
     is_root_admin_email,
     normalize_user_email,
@@ -35,6 +37,7 @@ from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
+from app.services.tag_crm_service import listar_tags_oficiais_ou_existentes, normalizar_tags
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
 class EvolutionCredentials(BaseModel):
@@ -87,6 +90,89 @@ async def _limpar_estado_simulador_redis(sessao_id: str = SIMULADOR_LEAD_ID) -> 
 
 def _lead_id_eh_simulador_ou_invalido(lead_id: str | None) -> bool:
     return str(lead_id or "") == SIMULADOR_LEAD_ID or _parse_uuid_or_none(lead_id) is None
+
+
+def _normalizar_cor_tag(cor: str | None) -> str:
+    cor_limpa = str(cor or "").strip()
+    if not cor_limpa:
+        return "#2563eb"
+    if cor_limpa.startswith("#") and len(cor_limpa) in {4, 7}:
+        return cor_limpa
+    return "#2563eb"
+
+
+def _detect_lead_columns(fieldnames: list[str]) -> tuple[str | None, str | None]:
+    normalized = {str(name).strip().lower(): name for name in fieldnames if str(name).strip()}
+
+    nome_candidates = ["nome", "nome_contato", "lead", "cliente", "contato"]
+    telefone_candidates = ["telefone", "telefone_contato", "whatsapp", "celular", "phone"]
+
+    nome_col = next((normalized[key] for key in nome_candidates if key in normalized), None)
+    telefone_col = next((normalized[key] for key in telefone_candidates if key in normalized), None)
+    return nome_col, telefone_col
+
+
+def _load_spreadsheet_rows(file_bytes: bytes, filename: str | None) -> tuple[list[str], list[dict[str, Any]]]:
+    nome_arquivo = str(filename or "").lower()
+
+    if nome_arquivo.endswith(".xlsx"):
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Importação de Excel requer a biblioteca openpyxl instalada no servidor.",
+            ) from exc
+
+        workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        sheet = workbook.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return [], []
+
+        headers = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
+        parsed_rows: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            parsed_rows.append(
+                {
+                    headers[index]: ("" if value is None else str(value))
+                    for index, value in enumerate(row)
+                    if index < len(headers) and headers[index]
+                }
+            )
+        return headers, parsed_rows
+
+    content = file_bytes.decode("utf-8-sig")
+    sample = content[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;|\t")
+    except Exception:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+    return reader.fieldnames or [], list(reader)
+
+
+async def _garantir_etapa_inicial_crm(db: AsyncSession, empresa_uuid: uuid.UUID) -> uuid.UUID | None:
+    result_funil = await db.execute(
+        select(CRMFunil)
+        .where(CRMFunil.empresa_id == empresa_uuid)
+        .options(selectinload(CRMFunil.etapas))
+    )
+    funil = result_funil.scalars().first()
+
+    if not funil:
+        funil = CRMFunil(empresa_id=empresa_uuid, nome="Pipeline Padrão")
+        db.add(funil)
+        await db.flush()
+
+    etapas = sorted(getattr(funil, "etapas", []) or [], key=lambda etapa: etapa.ordem)
+    if etapas:
+        return etapas[0].id
+
+    etapa_inicial = CRMEtapa(funil_id=funil.id, nome="Novo Lead", tipo="entrada", ordem=1)
+    db.add(etapa_inicial)
+    await db.flush()
+    return etapa_inicial.id
 
 @router.post("/", response_model=EmpresaResponse, status_code=status.HTTP_201_CREATED)
 async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_db)):
@@ -546,6 +632,44 @@ class HistoricoTransferenciaResponse(BaseModel):
 
 class TransferenciaManualRequest(BaseModel):
     destino_id: str
+
+
+class TagCRMBase(BaseModel):
+    nome: str
+    cor: str = "#2563eb"
+    instrucao_ia: str | None = None
+
+
+class TagCRMCreate(TagCRMBase):
+    pass
+
+
+class TagCRMUpdate(BaseModel):
+    nome: str | None = None
+    cor: str | None = None
+    instrucao_ia: str | None = None
+
+
+class TagCRMResponse(TagCRMBase):
+    id: str
+    criado_em: str | None = None
+
+
+class CampanhaListaResponse(BaseModel):
+    tag_id: str
+    tag: str
+    cor: str
+    total_leads: int
+
+
+class CampanhaListaLeadResponse(BaseModel):
+    id: str
+    nome_contato: str
+    telefone_contato: str | None = None
+    status: str | None = None
+    tags: List[str] = Field(default_factory=list)
+    historico_resumo: str | None = None
+    dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TemplateMensagemBase(BaseModel):
@@ -1023,25 +1147,164 @@ async def listar_historico_transferencia(empresa_id: str, db: AsyncSession = Dep
     ]
 
 
-@router.get("/{empresa_id}/crm/tags", response_model=List[str])
-async def listar_tags_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
+@router.get("/{empresa_id}/crm/tags/oficiais", response_model=List[TagCRMResponse])
+async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(get_db)):
     try:
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
     result = await db.execute(
-        select(CRMLead.tags).where(CRMLead.empresa_id == emp_uuid)
+        select(TagCRM)
+        .where(TagCRM.empresa_id == emp_uuid)
+        .order_by(TagCRM.nome.asc())
     )
-    tags_unicas: set[str] = set()
-    for tags in result.scalars().all():
-        if isinstance(tags, list):
-            for tag in tags:
-                tag_limpa = str(tag).strip()
-                if tag_limpa:
-                    tags_unicas.add(tag_limpa)
+    tags = result.scalars().all()
+    return [
+        {
+            "id": str(tag.id),
+            "nome": tag.nome,
+            "cor": tag.cor or "#2563eb",
+            "instrucao_ia": tag.instrucao_ia,
+            "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
+        }
+        for tag in tags
+    ]
 
-    return sorted(tags_unicas, key=lambda item: item.lower())
+
+@router.post("/{empresa_id}/crm/tags/oficiais", response_model=TagCRMResponse, status_code=status.HTTP_201_CREATED)
+async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    nome_limpo = str(data.nome or "").strip()
+    if not nome_limpo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da tag é obrigatório")
+
+    result = await db.execute(
+        select(TagCRM).where(
+            TagCRM.empresa_id == emp_uuid,
+            TagCRM.nome.ilike(nome_limpo),
+        )
+    )
+    existente = result.scalars().first()
+    if existente:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Já existe uma tag oficial com esse nome")
+
+    tag = TagCRM(
+        empresa_id=emp_uuid,
+        nome=nome_limpo,
+        cor=_normalizar_cor_tag(data.cor),
+        instrucao_ia=(data.instrucao_ia or "").strip() or None,
+    )
+    db.add(tag)
+
+    try:
+        await db.commit()
+        await db.refresh(tag)
+        return {
+            "id": str(tag.id),
+            "nome": tag.nome,
+            "cor": tag.cor,
+            "instrucao_ia": tag.instrucao_ia,
+            "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar tag oficial: {str(e)}")
+
+
+@router.put("/{empresa_id}/crm/tags/oficiais/{tag_id}", response_model=TagCRMResponse)
+async def atualizar_tag_crm_oficial(
+    empresa_id: str,
+    tag_id: str,
+    data: TagCRMUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        tag_uuid = uuid.UUID(tag_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TagCRM).where(
+            TagCRM.id == tag_uuid,
+            TagCRM.empresa_id == emp_uuid,
+        )
+    )
+    tag = result.scalars().first()
+    if not tag:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag oficial não encontrada")
+
+    if data.nome is not None:
+        nome_limpo = str(data.nome).strip()
+        if not nome_limpo:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da tag é obrigatório")
+        result_dup = await db.execute(
+            select(TagCRM).where(
+                TagCRM.empresa_id == emp_uuid,
+                TagCRM.nome.ilike(nome_limpo),
+                TagCRM.id != tag.id,
+            )
+        )
+        if result_dup.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Já existe uma tag oficial com esse nome")
+        tag.nome = nome_limpo
+    if data.cor is not None:
+        tag.cor = _normalizar_cor_tag(data.cor)
+    if data.instrucao_ia is not None:
+        tag.instrucao_ia = str(data.instrucao_ia).strip() or None
+
+    try:
+        await db.commit()
+        await db.refresh(tag)
+        return {
+            "id": str(tag.id),
+            "nome": tag.nome,
+            "cor": tag.cor,
+            "instrucao_ia": tag.instrucao_ia,
+            "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar tag oficial: {str(e)}")
+
+
+@router.delete("/{empresa_id}/crm/tags/oficiais/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def excluir_tag_crm_oficial(empresa_id: str, tag_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        tag_uuid = uuid.UUID(tag_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TagCRM).where(
+            TagCRM.id == tag_uuid,
+            TagCRM.empresa_id == emp_uuid,
+        )
+    )
+    tag = result.scalars().first()
+    if not tag:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag oficial não encontrada")
+
+    try:
+        await db.delete(tag)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao excluir tag oficial: {str(e)}")
+
+
+@router.get("/{empresa_id}/crm/tags", response_model=List[str])
+async def listar_tags_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await listar_tags_oficiais_ou_existentes(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
 
 @router.get("/{empresa_id}/campanhas/templates", response_model=List[TemplateMensagemResponse])
@@ -1208,6 +1471,87 @@ async def listar_campanhas_disparo(empresa_id: str, db: AsyncSession = Depends(g
             "criado_em": campanha.criado_em.isoformat() if campanha.criado_em else None,
         }
         for campanha in campanhas
+    ]
+
+
+@router.get("/{empresa_id}/campanhas/listas", response_model=List[CampanhaListaResponse])
+async def listar_listas_campanhas(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result_tags = await db.execute(
+        select(TagCRM)
+        .where(TagCRM.empresa_id == emp_uuid)
+        .order_by(TagCRM.nome.asc())
+    )
+    tags_oficiais = result_tags.scalars().all()
+
+    result_leads = await db.execute(
+        select(CRMLead.tags).where(CRMLead.empresa_id == emp_uuid)
+    )
+    leads_tags = result_leads.scalars().all()
+
+    def _contar(nome_tag: str) -> int:
+        nome_normalizado = str(nome_tag).strip().lower()
+        total = 0
+        for tags in leads_tags:
+            tags_normalizadas = {str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()}
+            if nome_normalizado in tags_normalizadas:
+                total += 1
+        return total
+
+    return [
+        {
+            "tag_id": str(tag.id),
+            "tag": tag.nome,
+            "cor": tag.cor or "#2563eb",
+            "total_leads": _contar(tag.nome),
+        }
+        for tag in tags_oficiais
+    ]
+
+
+@router.get("/{empresa_id}/campanhas/listas/{tag_id}/leads", response_model=List[CampanhaListaLeadResponse])
+async def listar_leads_da_lista_campanha(empresa_id: str, tag_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        tag_uuid = uuid.UUID(tag_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result_tag = await db.execute(
+        select(TagCRM).where(
+            TagCRM.id == tag_uuid,
+            TagCRM.empresa_id == emp_uuid,
+        )
+    )
+    tag = result_tag.scalars().first()
+    if not tag:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag oficial não encontrada")
+
+    result_leads = await db.execute(
+        select(CRMLead)
+        .where(CRMLead.empresa_id == emp_uuid)
+        .options(selectinload(CRMLead.etapa))
+        .order_by(CRMLead.criado_em.desc())
+    )
+    leads = result_leads.scalars().all()
+    tag_normalizada = tag.nome.strip().lower()
+
+    return [
+        {
+            "id": str(lead.id),
+            "nome_contato": lead.nome_contato,
+            "telefone_contato": lead.telefone_contato,
+            "status": lead.etapa.nome if lead.etapa else None,
+            "tags": lead.tags or [],
+            "historico_resumo": lead.historico_resumo,
+            "dados_adicionais": lead.dados_adicionais or {},
+        }
+        for lead in leads
+        if tag_normalizada in {str(item).strip().lower() for item in (lead.tags or []) if str(item).strip()}
     ]
 
 
@@ -1470,6 +1814,86 @@ async def transferir_lead_manual(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=resultado)
 
     return {"success": True, "detail": resultado}
+
+
+@router.post("/{empresa_id}/leads/importar", status_code=status.HTTP_201_CREATED)
+async def importar_leads(
+    empresa_id: str,
+    file: UploadFile = File(...),
+    tags_iniciais: str = Form("[]"),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo inválido")
+
+    try:
+        tags_iniciais_lista = normalizar_tags(json.loads(tags_iniciais or "[]"))
+        file_bytes = await file.read()
+        headers, rows = _load_spreadsheet_rows(file_bytes, file.filename)
+        nome_col, telefone_col = _detect_lead_columns(headers)
+        if not nome_col or not telefone_col:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Não encontrei as colunas de Nome e Telefone no arquivo enviado.",
+            )
+
+        etapa_inicial_id = await _garantir_etapa_inicial_crm(db, emp_uuid)
+        inseridos = 0
+        atualizados = 0
+
+        for row in rows:
+            nome = str((row or {}).get(nome_col, "")).strip()
+            telefone = str((row or {}).get(telefone_col, "")).strip()
+            if not nome and not telefone:
+                continue
+
+            lead = None
+            if telefone:
+                result_lead = await db.execute(
+                    select(CRMLead).where(
+                        CRMLead.empresa_id == emp_uuid,
+                        CRMLead.telefone_contato == telefone,
+                    )
+                )
+                lead = result_lead.scalars().first()
+
+            if lead:
+                if nome:
+                    lead.nome_contato = nome
+                lead.tags = normalizar_tags((lead.tags or []) + tags_iniciais_lista)
+                atualizados += 1
+            else:
+                novo_lead = CRMLead(
+                    empresa_id=emp_uuid,
+                    etapa_id=etapa_inicial_id,
+                    nome_contato=nome or telefone or "Lead importado",
+                    telefone_contato=telefone or None,
+                    tags=tags_iniciais_lista,
+                )
+                db.add(novo_lead)
+                inseridos += 1
+
+        await db.commit()
+        return {
+            "status": "sucesso",
+            "mensagem": "Importação concluída.",
+            "colunas_detectadas": headers,
+            "tags_iniciais": tags_iniciais_lista,
+            "inseridos": inseridos,
+            "atualizados": atualizados,
+            "total_processado": inseridos + atualizados,
+        }
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao importar leads: {str(e)}")
 
 
 @router.get("/{empresa_id}/exportar-leads")

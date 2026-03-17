@@ -15,6 +15,7 @@ import Inbox from "./pages/tenant/Inbox";
 import Integracoes from "./pages/tenant/Integracoes";
 import Transferencias from "./pages/tenant/Transferencias";
 import Campanhas from "./pages/tenant/Campanhas";
+import GestaoTags from "./pages/tenant/GestaoTags";
 
 function App() {
   useEffect(() => {
@@ -46,6 +47,7 @@ function App() {
         <Route path="integracoes" element={<Integracoes />} />
         <Route path="transferencias" element={<Transferencias />} />
         <Route path="campanhas" element={<Campanhas />} />
+        <Route path="tags" element={<GestaoTags />} />
       </Route>
     </Routes>
   );

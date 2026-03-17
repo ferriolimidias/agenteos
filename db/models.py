@@ -100,6 +100,7 @@ class Empresa(Base):
     webhooks_saida = relationship("WebhookSaida", back_populates="empresa", cascade="all, delete-orphan")
     conexoes = relationship("Conexao", back_populates="empresa", cascade="all, delete-orphan", foreign_keys="Conexao.empresa_id")
     conexao_disparo = relationship("Conexao", back_populates="empresas_como_canal_disparo", foreign_keys=[conexao_disparo_id], post_update=True)
+    tags_crm = relationship("TagCRM", back_populates="empresa", cascade="all, delete-orphan")
     templates_mensagem = relationship("TemplateMensagem", back_populates="empresa", cascade="all, delete-orphan")
     campanhas_disparo = relationship("CampanhaDisparo", back_populates="empresa", cascade="all, delete-orphan")
     destinos_transferencia = relationship("DestinosTransferencia", back_populates="empresa", cascade="all, delete-orphan")
@@ -351,6 +352,20 @@ class CRMLead(Base):
     agendamentos = relationship("AgendamentoLocal", back_populates="lead")
     mensagens = relationship("MensagemHistorico", back_populates="lead", cascade="all, delete-orphan")
     historicos_transferencia = relationship("HistoricoTransferencia", back_populates="lead", cascade="all, delete-orphan")
+
+
+class TagCRM(Base):
+    __tablename__ = "tags_crm"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String, nullable=False)
+    cor = Column(String, nullable=False, default="#2563eb")
+    instrucao_ia = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="tags_crm")
+
 
 class MensagemHistorico(Base):
     __tablename__ = "mensagens_historico"

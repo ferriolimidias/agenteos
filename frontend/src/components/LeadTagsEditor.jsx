@@ -20,6 +20,26 @@ function getTagColorClass(tag) {
   return TAG_COLOR_VARIANTS[Math.abs(hash) % TAG_COLOR_VARIANTS.length];
 }
 
+function getTagDefinitionMap(tagDefinitions) {
+  const output = new Map();
+  (tagDefinitions || []).forEach((definition) => {
+    const nome = String(definition?.nome || definition || "").trim();
+    if (!nome) return;
+    output.set(nome.toLowerCase(), definition);
+  });
+  return output;
+}
+
+function getTagInlineStyle(tagDefinition) {
+  const cor = String(tagDefinition?.cor || "").trim();
+  if (!cor) return undefined;
+  return {
+    backgroundColor: `${cor}18`,
+    borderColor: `${cor}55`,
+    color: cor,
+  };
+}
+
 function normalizeTags(tags) {
   const output = [];
   const seen = new Set();
@@ -42,12 +62,26 @@ export default function LeadTagsEditor({
   compact = false,
   className = "",
   placeholder = "Digite uma tag e pressione Enter",
+  tagDefinitions = [],
 }) {
   const [inputValue, setInputValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const datalistId = useMemo(
+    () => `lead-tags-${Math.random().toString(36).slice(2, 10)}`,
+    []
+  );
 
   const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
+  const tagDefinitionsMap = useMemo(() => getTagDefinitionMap(tagDefinitions), [tagDefinitions]);
+  const suggestedTags = useMemo(
+    () =>
+      (tagDefinitions || []).filter((definition) => {
+        const nome = String(definition?.nome || "").trim();
+        return nome && !normalizedTags.some((tag) => tag.toLowerCase() === nome.toLowerCase());
+      }),
+    [tagDefinitions, normalizedTags]
+  );
 
   const submitTags = async (nextTags) => {
     if (!onChange) return;
@@ -88,6 +122,7 @@ export default function LeadTagsEditor({
             <span
               key={tag}
               className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${getTagColorClass(tag)}`}
+              style={getTagInlineStyle(tagDefinitionsMap.get(tag.toLowerCase()))}
             >
               <Tag size={12} />
               <span>{tag}</span>
@@ -110,6 +145,26 @@ export default function LeadTagsEditor({
         )}
       </div>
 
+      {suggestedTags.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {suggestedTags.map((definition) => (
+            <button
+              key={definition.id || definition.nome}
+              type="button"
+              disabled={saving}
+              onClick={(e) => {
+                e.stopPropagation();
+                submitTags([...normalizedTags, definition.nome]);
+              }}
+              className="rounded-full border px-3 py-1 text-xs font-semibold transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              style={getTagInlineStyle(definition) || undefined}
+            >
+              {definition.nome}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Plus
@@ -119,6 +174,7 @@ export default function LeadTagsEditor({
             }`}
           />
           <input
+            list={tagDefinitions.length > 0 ? datalistId : undefined}
             value={inputValue}
             disabled={saving}
             onClick={(e) => e.stopPropagation()}
@@ -137,6 +193,13 @@ export default function LeadTagsEditor({
                 : "px-3 py-2.5 text-sm"
             } ${compact ? "" : "pl-9"}`}
           />
+          {tagDefinitions.length > 0 ? (
+            <datalist id={datalistId}>
+              {tagDefinitions.map((definition) => (
+                <option key={definition.id || definition.nome} value={definition.nome} />
+              ))}
+            </datalist>
+          ) : null}
         </div>
         {!compact && (
           <button
