@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
   FileText,
@@ -24,6 +24,8 @@ const initialCampanhaForm = {
   template_id: "",
   tag: "",
 };
+
+const suggestedTemplateVariables = ["nome", "telefone", "historico_resumo", "cidade", "produto_interesse"];
 
 function formatEstimatedDuration(totalSeconds) {
   if (!totalSeconds || totalSeconds <= 0) return "~ 0 min";
@@ -68,6 +70,7 @@ function StatusBadge({ status }) {
 
 export default function Campanhas() {
   const empresaId = getActiveEmpresaId();
+  const templateTextareaRef = useRef(null);
 
   const [activeTab, setActiveTab] = useState("templates");
   const [templates, setTemplates] = useState([]);
@@ -258,6 +261,29 @@ export default function Campanhas() {
     } finally {
       setSavingTemplate(false);
     }
+  };
+
+  const handleInsertTemplateVariable = (variableName) => {
+    const textarea = templateTextareaRef.current;
+    const token = `{{${variableName}}}`;
+
+    if (!textarea) {
+      setTemplateForm((prev) => ({ ...prev, texto_template: `${prev.texto_template || ""}${token}` }));
+      return;
+    }
+
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? start;
+    const currentValue = templateForm.texto_template || "";
+    const nextValue = `${currentValue.slice(0, start)}${token}${currentValue.slice(end)}`;
+
+    setTemplateForm((prev) => ({ ...prev, texto_template: nextValue }));
+
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      const nextCursor = start + token.length;
+      textarea.setSelectionRange(nextCursor, nextCursor);
+    });
   };
 
   const handleDeleteTemplate = async (template) => {
@@ -552,6 +578,7 @@ export default function Campanhas() {
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Texto do template</label>
                 <textarea
+                  ref={templateTextareaRef}
                   required
                   rows={8}
                   value={templateForm.texto_template}
@@ -562,7 +589,21 @@ export default function Campanhas() {
               </div>
 
               <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                Dica: além de {`{{nome}}`} e {`{{telefone}}`}, você pode usar campos existentes em `dados_adicionais` do lead.
+                <p className="mb-3">
+                  Dica: além de {`{{nome}}`} e {`{{telefone}}`}, você pode usar campos existentes em `dados_adicionais` do lead.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedTemplateVariables.map((variableName) => (
+                    <button
+                      key={variableName}
+                      type="button"
+                      onClick={() => handleInsertTemplateVariable(variableName)}
+                      className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+                    >
+                      {`{{${variableName}}}`}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex justify-end gap-3 pt-2">

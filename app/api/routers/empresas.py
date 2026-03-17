@@ -35,7 +35,7 @@ from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
-from app.services.transferencia_service import testar_destino_transferencia
+from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
 class EvolutionCredentials(BaseModel):
     evolution_url: str
@@ -504,6 +504,10 @@ class HistoricoTransferenciaResponse(BaseModel):
     destino_nome: str | None = None
     motivo_ia: str | None = None
     resumo_enviado: str | None = None
+
+
+class TransferenciaManualRequest(BaseModel):
+    destino_id: str
 
 
 class TemplateMensagemBase(BaseModel):
@@ -1393,6 +1397,25 @@ async def atualizar_lead_crm(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar lead: {str(e)}")
+
+
+@router.post("/{empresa_id}/leads/{lead_id}/transferir_manual", status_code=status.HTTP_200_OK)
+async def transferir_lead_manual(
+    empresa_id: str,
+    lead_id: str,
+    data: TransferenciaManualRequest,
+):
+    resultado = await executar_transferencia_atendimento(
+        empresa_id=empresa_id,
+        lead_id=lead_id,
+        destino_id=data.destino_id,
+        resumo_conversa="Transferência manual realizada pelo atendente no painel",
+    )
+
+    if resultado.lower().startswith("erro ao transferir atendimento"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=resultado)
+
+    return {"success": True, "detail": resultado}
 
 
 @router.get("/{empresa_id}/exportar-leads")

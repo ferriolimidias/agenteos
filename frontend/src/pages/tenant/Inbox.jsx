@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import { UserCircle, Send, BotOff, MessageSquare, Trash2 } from "lucide-react";
+import { ArrowRightLeft, BotOff, MessageSquare, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import LeadTagsEditor from "../../components/LeadTagsEditor";
 
 export default function Inbox() {
   const [leads, setLeads] = useState([]);
@@ -9,6 +10,11 @@ export default function Inbox() {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [destinos, setDestinos] = useState([]);
+  const [showTransferPanel, setShowTransferPanel] = useState(false);
+  const [selectedDestinoId, setSelectedDestinoId] = useState("");
+  const [transferindo, setTransferindo] = useState(false);
+  const [toast, setToast] = useState(null);
   const messagesEndRef = useRef(null);
 
   const user = getStoredUser();
@@ -18,7 +24,12 @@ export default function Inbox() {
     if (!empresa_id) return;
     try {
       const res = await api.get(`/empresas/${empresa_id}/inbox`);
-      setLeads(res.data || []);
+      const nextLeads = res.data || [];
+      setLeads(nextLeads);
+      setSelectedLead((prev) => {
+        if (!prev?.id) return prev;
+        return nextLeads.find((lead) => lead.id === prev.id) || prev;
+      });
     } catch (e) {
       console.error("Erro ao buscar leads no Inbox:", e);
       setLeads([]);
@@ -36,11 +47,34 @@ export default function Inbox() {
     }
   };
 
+  const fetchDestinos = async () => {
+    if (!empresa_id) return;
+    try {
+      const res = await api.get(`/empresas/${empresa_id}/transferencias/destinos`);
+      setDestinos(res.data || []);
+    } catch (e) {
+      console.error("Erro ao buscar destinos de transferência:", e);
+      setDestinos([]);
+    }
+  };
+
   useEffect(() => {
     fetchLeads();
+    fetchDestinos();
     const interval = setInterval(fetchLeads, 10000);
     return () => clearInterval(interval);
   }, [empresa_id]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    setShowTransferPanel(false);
+    setSelectedDestinoId("");
+  }, [selectedLead?.id]);
 
   useEffect(() => {
     if (selectedLead) {
@@ -98,6 +132,41 @@ export default function Inbox() {
     }
   };
 
+  const updateLeadInState = (leadId, updates) => {
+    setLeads((prev) => (prev || []).map((lead) => (lead.id === leadId ? { ...lead, ...updates } : lead)));
+    setSelectedLead((prev) => (prev?.id === leadId ? { ...prev, ...updates } : prev));
+  };
+
+  const handleLeadTagsChange = async (leadId, nextTags) => {
+    await api.put(`/empresas/${empresa_id}/crm/leads/${leadId}`, { tags: nextTags });
+    updateLeadInState(leadId, { tags: nextTags });
+  };
+
+  const handleTransferirManual = async () => {
+    if (!selectedLead?.id || !selectedDestinoId) return;
+    try {
+      setTransferindo(true);
+      const res = await api.post(`/empresas/${empresa_id}/leads/${selectedLead.id}/transferir_manual`, {
+        destino_id: selectedDestinoId,
+      });
+      setToast({
+        type: "success",
+        message: res.data?.detail || "Transferência manual realizada com sucesso.",
+      });
+      setShowTransferPanel(false);
+      setSelectedDestinoId("");
+      await fetchLeads();
+    } catch (e) {
+      console.error("Erro ao transferir lead manualmente:", e);
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Erro ao transferir o lead manualmente.",
+      });
+    } finally {
+      setTransferindo(false);
+    }
+  };
+
   if (!user || !empresa_id) {
     return (
       <div className="flex h-[80vh] bg-white border border-gray-200 rounded-xl items-center justify-center shadow-sm">
@@ -112,8 +181,32 @@ export default function Inbox() {
 
   return (
     <div className="flex h-[80vh] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+      {toast ? (
+        <div className="fixed right-6 top-6 z-[80]">
+          <div
+            className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
+              toast.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`rounded-full p-1 ${toast.type === "success" ? "bg-emerald-100" : "bg-red-100"}`}>
+                {toast.type === "success" ? <ArrowRightLeft size={14} /> : <X size={14} />}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{toast.type === "success" ? "Tudo certo" : "Atenção"}</p>
+                <p className="mt-0.5 text-sm">{toast.message}</p>
+              </div>
+              <button type="button" onClick={() => setToast(null)} className="rounded-lg p-1 opacity-70 hover:opacity-100">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {/* Sidebar: Lista de Leads */}
-      <div className="w-1/3 border-r border-gray-200 bg-gray-50 flex flex-col">
+      <div className="w-80 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
         <div className="p-4 border-b border-gray-200 bg-white">
           <h2 className="text-lg font-semibold text-gray-800">Mensagens</h2>
         </div>
@@ -155,34 +248,98 @@ export default function Inbox() {
       </div>
 
       {/* Main Chat Area */}
-      <div className="w-2/3 flex flex-col bg-slate-50 relative">
+      <div className="flex-1 min-w-0 flex flex-col bg-slate-50 relative">
         {selectedLead ? (
           <>
             {/* Chat Header */}
-            <div className="h-16 border-b border-gray-200 bg-white flex items-center justify-between px-6 shadow-sm z-10">
-              <div className="flex items-center space-x-3">
-                <UserCircle size={40} className="text-gray-400" />
-                <div>
-                  <h3 className="font-semibold text-gray-800">{selectedLead.nome_contato}</h3>
-                  <p className="text-xs text-gray-500">{selectedLead.telefone_contato}</p>
+            <div className="border-b border-gray-200 bg-white px-6 py-4 shadow-sm z-10">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-start space-x-3">
+                  <UserCircle size={40} className="mt-0.5 flex-shrink-0 text-gray-400" />
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-gray-800">{selectedLead.nome_contato}</h3>
+                    <p className="text-xs text-gray-500">{selectedLead.telefone_contato}</p>
+                    {selectedLead.historico_resumo ? (
+                      <p className="mt-1 line-clamp-2 max-w-2xl text-xs text-gray-500">
+                        {selectedLead.historico_resumo}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {selectedLead.bot_pausado && (
+                    <button
+                      onClick={handleReativarBot}
+                      className="flex items-center space-x-2 bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-blue-200"
+                    >
+                      <span>Reativar IA</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowTransferPanel((prev) => !prev)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
+                  >
+                    <ArrowRightLeft size={16} />
+                    Transferir
+                  </button>
+                  <button
+                    onClick={handleExcluirLead}
+                    title="Excluir Lead e Histórico"
+                    className="flex items-center justify-center bg-red-50 text-red-600 hover:bg-red-100 p-2 rounded-lg transition-colors border border-red-100"
+                  >
+                    <Trash2 size={20} />
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center space-x-2">
-                {selectedLead.bot_pausado && (
-                  <button
-                    onClick={handleReativarBot}
-                    className="flex items-center space-x-2 bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-blue-200"
-                  >
-                    <span>Reativar IA</span>
-                  </button>
-                )}
-                <button
-                  onClick={handleExcluirLead}
-                  title="Excluir Lead e Histórico"
-                  className="flex items-center justify-center bg-red-50 text-red-600 hover:bg-red-100 p-2 rounded-lg transition-colors border border-red-100"
-                >
-                  <Trash2 size={20} />
-                </button>
+
+              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <LeadTagsEditor
+                  tags={selectedLead.tags || []}
+                  compact
+                  placeholder="Nova tag + Enter"
+                  onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
+                />
+
+                <div className="space-y-2">
+                  {showTransferPanel ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                        Destino de transferência
+                      </label>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedDestinoId}
+                          onChange={(e) => setSelectedDestinoId(e.target.value)}
+                          className="flex-1 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-all focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">Selecione um destino</option>
+                          {destinos.map((destino) => (
+                            <option key={destino.id} value={destino.id}>
+                              {destino.nome_destino}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={handleTransferirManual}
+                          disabled={transferindo || !selectedDestinoId}
+                          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {transferindo ? <RefreshCw size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />}
+                          Confirmar
+                        </button>
+                      </div>
+                      <p className="mt-2 text-xs text-emerald-700">
+                        Esta ação reutiliza o mesmo motor de transferência da IA e pausa o bot automaticamente.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                      Use "Transferir" para encaminhar este lead a um destino já configurado.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

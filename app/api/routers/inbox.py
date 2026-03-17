@@ -40,7 +40,10 @@ async def listar_inbox(empresa_id: str):
                     "telefone_contato": l.telefone_contato,
                     "bot_pausado": bot_pausado,
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
-                    "etapa_crm": l.etapa.nome if l.etapa else None
+                    "etapa_crm": l.etapa.nome if l.etapa else None,
+                    "tags": l.tags or [],
+                    "historico_resumo": l.historico_resumo,
+                    "dados_adicionais": l.dados_adicionais or {},
                 })
             
             return leads_retorno
