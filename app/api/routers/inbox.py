@@ -13,6 +13,10 @@ router = APIRouter(prefix="/api/empresas", tags=["Inbox Live Chat"])
 
 SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
 
+
+def _telefone_eh_simulador(telefone: str | None) -> bool:
+    return str(telefone or "") == SIMULADOR_LEAD_ID
+
 class SendMessagePayload(BaseModel):
     texto: str
 
@@ -90,6 +94,8 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
+    if _telefone_eh_simulador(telefone):
+        return {"status": "sucesso", "mensagem": "Ação simulada"}
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
@@ -133,6 +139,8 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
 
 @router.post("/{empresa_id}/inbox/{telefone}/reativar_bot")
 async def reativar_bot(empresa_id: str, telefone: str):
+    if _telefone_eh_simulador(telefone):
+        return {"status": "sucesso", "mensagem": "Ação simulada"}
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:

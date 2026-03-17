@@ -84,6 +84,10 @@ async def _limpar_estado_simulador_redis(sessao_id: str = SIMULADOR_LEAD_ID) -> 
     except Exception:
         pass
 
+
+def _lead_id_eh_simulador_ou_invalido(lead_id: str | None) -> bool:
+    return str(lead_id or "") == SIMULADOR_LEAD_ID or _parse_uuid_or_none(lead_id) is None
+
 @router.post("/", response_model=EmpresaResponse, status_code=status.HTTP_201_CREATED)
 async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -1375,6 +1379,19 @@ async def atualizar_lead_crm(
     """
     Atualiza dados de um lead do CRM, incluindo dados_adicionais.
     """
+    if _lead_id_eh_simulador_ou_invalido(lead_id):
+        return {
+            "id": lead_id,
+            "nome_contato": data.nome_contato or "[Simulador]",
+            "telefone_contato": data.telefone_contato or SIMULADOR_LEAD_ID,
+            "historico_resumo": data.historico_resumo or "",
+            "etapa_id": data.etapa_id or None,
+            "tags": data.tags or [],
+            "dados_adicionais": data.dados_adicionais or {},
+            "status": "sucesso",
+            "mensagem": "Ação simulada",
+        }
+
     try:
         emp_uuid = uuid.UUID(empresa_id)
         lead_uuid = uuid.UUID(lead_id)
@@ -1439,6 +1456,9 @@ async def transferir_lead_manual(
     lead_id: str,
     data: TransferenciaManualRequest,
 ):
+    if _lead_id_eh_simulador_ou_invalido(lead_id):
+        return {"status": "sucesso", "mensagem": "Ação simulada"}
+
     resultado = await executar_transferencia_atendimento(
         empresa_id=empresa_id,
         lead_id=lead_id,
@@ -1703,7 +1723,7 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
     l_uuid = _parse_uuid_or_none(lead_id)
-    if lead_id == SIMULADOR_LEAD_ID or not l_uuid:
+    if _lead_id_eh_simulador_ou_invalido(lead_id):
         await _limpar_estado_simulador_redis(lead_id if lead_id == SIMULADOR_LEAD_ID else SIMULADOR_LEAD_ID)
         return
 
