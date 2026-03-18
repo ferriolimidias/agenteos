@@ -71,46 +71,58 @@ async def listar_inbox(empresa_id: str):
 
 @router.get("/{empresa_id}/inbox/{telefone}")
 async def listar_historico_lead(empresa_id: str, telefone: str):
-    if _telefone_eh_simulador(telefone):
-        return []
-    try:
-        empresa_uuid = uuid.UUID(empresa_id)
-        async with AsyncSessionLocal() as session:
-            result_lead = await session.execute(
-                select(CRMLead).where(
-                    CRMLead.empresa_id == empresa_uuid,
-                    CRMLead.telefone_contato == telefone
-                )
-            )
-            lead = result_lead.scalars().first()
-            if not lead:
-                return []
-                
-            result_msgs = await session.execute(
-                select(MensagemHistorico)
-                .where(MensagemHistorico.lead_id == lead.id)
-                .order_by(MensagemHistorico.criado_em.asc())
-            )
-            mensagens = result_msgs.scalars().all()
-
-            output = []
-            for m in mensagens:
-                try:
-                    output.append({
-                        "id": str(m.id),
-                        "texto": str(m.texto or ""),
-                        "from_me": bool(m.from_me),
-                        "tipo_mensagem": str(m.tipo_mensagem or "text"),
-                        "media_url": str(m.media_url) if m.media_url else None,
-                        "criado_em": m.criado_em.isoformat() if m.criado_em else None,
-                    })
-                except Exception as e:
-                    print(f"FALHA NO ITEM: {m.id}")
-                    print(f"ERRO: {e}")
-            return output
-    except Exception as e:
-        print(f"ERRO NA SERIALIZAÇÃO: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    print(">>> DEBUG: Rota de histórico acessada com sucesso! <<<")
+    # TESTE TEMPORÁRIO DE ISOLAMENTO:
+    # Bloco de banco desativado intencionalmente para validar infraestrutura/roteamento.
+    # if _telefone_eh_simulador(telefone):
+    #     return []
+    # try:
+    #     empresa_uuid = uuid.UUID(empresa_id)
+    #     async with AsyncSessionLocal() as session:
+    #         result_lead = await session.execute(
+    #             select(CRMLead).where(
+    #                 CRMLead.empresa_id == empresa_uuid,
+    #                 CRMLead.telefone_contato == telefone
+    #             )
+    #         )
+    #         lead = result_lead.scalars().first()
+    #         if not lead:
+    #             return []
+    #
+    #         result_msgs = await session.execute(
+    #             select(MensagemHistorico)
+    #             .where(MensagemHistorico.lead_id == lead.id)
+    #             .order_by(MensagemHistorico.criado_em.asc())
+    #         )
+    #         mensagens = result_msgs.scalars().all()
+    #
+    #         output = []
+    #         for m in mensagens:
+    #             try:
+    #                 output.append({
+    #                     "id": str(m.id),
+    #                     "texto": str(m.texto or ""),
+    #                     "from_me": bool(m.from_me),
+    #                     "tipo_mensagem": str(m.tipo_mensagem or "text"),
+    #                     "media_url": str(m.media_url) if m.media_url else None,
+    #                     "criado_em": m.criado_em.isoformat() if m.criado_em else None,
+    #                 })
+    #             except Exception as e:
+    #                 print(f"FALHA NO ITEM: {m.id}")
+    #                 print(f"ERRO: {e}")
+    #         return output
+    # except Exception as e:
+    #     print(f"ERRO NA SERIALIZAÇÃO: {e}")
+    #     raise HTTPException(status_code=500, detail=str(e))
+    return [
+        {
+            "id": "teste-123",
+            "texto": "Conexão OK - O Backend está vivo!",
+            "from_me": True,
+            "tipo_mensagem": "text",
+            "criado_em": "2026-03-18T10:00:00",
+        }
+    ]
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
