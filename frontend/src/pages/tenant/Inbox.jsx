@@ -109,41 +109,67 @@ export default function Inbox() {
 
     const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
     const wsUrl = `${wsProtocol}${window.location.host}/api/empresas/${empresa_id}/ws`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+    let isActive = true;
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data || "{}");
-        const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
-        if (tipoEvento !== "nova_mensagem_inbound" && tipoEvento !== "nova_mensagem_outbound") return;
+    const connect = () => {
+      if (!isActive) return;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-        const telefoneEvento = String(data?.telefone || "");
-        const novaMensagem = data?.mensagem;
-        const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
+      ws.onopen = () => {
+        reconnectAttempts = 0;
+      };
 
-        if (telefoneSelecionado && telefoneEvento && telefoneSelecionado === telefoneEvento && novaMensagem) {
-          setMessages((prev) => {
-            const lista = prev || [];
-            const novaId = novaMensagem?.id;
-            if (novaId && lista.some((msg) => msg?.id === novaId)) return lista;
-            return [...lista, novaMensagem];
-          });
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data || "{}");
+          const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
+          if (tipoEvento !== "nova_mensagem_inbound" && tipoEvento !== "nova_mensagem_outbound") return;
+
+          const telefoneEvento = String(data?.telefone || "");
+          const novaMensagem = data?.mensagem;
+          const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
+
+          if (telefoneSelecionado && telefoneEvento && telefoneSelecionado === telefoneEvento && novaMensagem) {
+            setMessages((prev) => {
+              const lista = prev || [];
+              const novaId = novaMensagem?.id;
+              if (novaId && lista.some((msg) => msg?.id === novaId)) return lista;
+              return [...lista, novaMensagem];
+            });
+          }
+
+          fetchLeads();
+        } catch (err) {
+          console.error("Erro ao processar evento websocket do Inbox:", err);
         }
+      };
 
-        fetchLeads();
-      } catch (err) {
-        console.error("Erro ao processar evento websocket do Inbox:", err);
-      }
+      ws.onerror = (err) => {
+        console.error("Erro no WebSocket do Inbox:", err);
+      };
+
+      ws.onclose = () => {
+        if (!isActive) return;
+        const timeoutMs = Math.min(1000 * (2 ** reconnectAttempts), 30000);
+        reconnectAttempts += 1;
+        reconnectTimer = window.setTimeout(() => {
+          connect();
+        }, timeoutMs);
+      };
     };
 
-    ws.onerror = (err) => {
-      console.error("Erro no WebSocket do Inbox:", err);
-    };
+    connect();
 
     return () => {
+      isActive = false;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
       try {
-        ws.close();
+        wsRef.current?.close();
       } catch (_) {
         // no-op
       }
