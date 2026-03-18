@@ -8,8 +8,8 @@ import uuid
 from datetime import datetime, timedelta
 
 from db.database import AsyncSessionLocal, get_db
-from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil, Conexao, TipoConexao
-from sqlalchemy import select
+from db.models import CRMLead, MensagemHistorico, CRMEtapa, CRMFunil, Conexao
+from sqlalchemy import select, func, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.schemas import ConversaListaResponse
@@ -139,11 +139,13 @@ async def enviar_mensagem(
         return {"status": "success"}
     try:
         empresa_uuid = uuid.UUID(empresa_id)
+        tipos_aceitos = ["evolution", "EVOLUTION"]
+        status_aceitos = ["ativo", "connected", "conectado", "open"]
         result_conexao = await db.execute(
             select(Conexao).where(
                 Conexao.empresa_id == empresa_uuid,
-                Conexao.tipo == TipoConexao.EVOLUTION,
-                Conexao.status == "ativo"
+                cast(Conexao.tipo, String).in_(tipos_aceitos),
+                func.lower(Conexao.status).in_(status_aceitos),
             )
         )
         conexao = result_conexao.scalars().first()
@@ -174,20 +176,6 @@ async def enviar_mensagem(
         if not lead:
             raise HTTPException(status_code=404, detail="Lead não encontrado")
         
-        nova_msg = MensagemHistorico(
-            lead_id=lead.id,
-            conexao_id=conexao.id if conexao else None,
-            texto=payload.texto,
-            tipo_mensagem="text",
-            media_url=None,
-            from_me=True
-        )
-        db.add(nova_msg)
-        
-        lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
-        
-        await db.commit()
-        
         outbound_payload = StandardOutgoingMessage(
             identificador_contato=str(telefone or "").strip(),
             canal="whatsapp",
@@ -200,6 +188,19 @@ async def enviar_mensagem(
             conexao=conexao,
             payload=outbound_payload,
         )
+
+        # Só persiste no histórico local após envio outbound com sucesso
+        nova_msg = MensagemHistorico(
+            lead_id=lead.id,
+            conexao_id=conexao.id if conexao else None,
+            texto=payload.texto,
+            tipo_mensagem="text",
+            media_url=None,
+            from_me=True
+        )
+        db.add(nova_msg)
+        lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
+        await db.commit()
         
         return {"status": "success"}
     except HTTPException:
@@ -238,11 +239,13 @@ async def enviar_midia(
 
     try:
         async with AsyncSessionLocal() as session:
+            tipos_aceitos = ["evolution", "EVOLUTION"]
+            status_aceitos = ["ativo", "connected", "conectado", "open"]
             result_conexao = await session.execute(
                 select(Conexao).where(
                     Conexao.empresa_id == empresa_uuid,
-                    Conexao.tipo == TipoConexao.EVOLUTION,
-                    Conexao.status == "ativo",
+                    cast(Conexao.tipo, String).in_(tipos_aceitos),
+                    func.lower(Conexao.status).in_(status_aceitos),
                 )
             )
             conexao = result_conexao.scalars().first()

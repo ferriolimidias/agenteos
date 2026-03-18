@@ -58,14 +58,24 @@ class EvolutionProvider(BaseProvider):
     def _obter_config(self, credenciais: dict[str, Any]) -> tuple[str, str, str]:
         cfg = credenciais or {}
         evolution_url = str(
-            cfg.get("evolution_url") or cfg.get("url") or ""
+            cfg.get("evolution_url")
+            or cfg.get("api_url")
+            or cfg.get("base_url")
+            or cfg.get("url")
+            or ""
         ).strip().rstrip("/")
         evolution_apikey = str(
-            cfg.get("evolution_apikey") or cfg.get("apikey") or ""
+            cfg.get("evolution_apikey")
+            or cfg.get("api_key")
+            or cfg.get("apikey")
+            or cfg.get("token")
+            or cfg.get("access_token")
+            or ""
         ).strip()
         instance_name = str(
             cfg.get("evolution_instance")
             or cfg.get("instanceName")
+            or cfg.get("instance_name")
             or cfg.get("nome_instancia")
             or ""
         ).strip()
@@ -78,18 +88,24 @@ class EvolutionProvider(BaseProvider):
         return evolution_url, evolution_apikey, instance_name
 
     async def _post(self, endpoint: str, payload: dict[str, Any], apikey: str) -> dict[str, Any]:
-        headers = {"apikey": apikey, "Content-Type": "application/json"}
+        headers_apikey = {"apikey": apikey, "Content-Type": "application/json"}
+        headers_bearer = {"Authorization": f"Bearer {apikey}", "Content-Type": "application/json"}
         print(f"DEBUG ENVIO: URL -> {endpoint}")
         print(f"DEBUG ENVIO: Payload -> {payload}")
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(endpoint, headers=headers, json=payload)
+                response = await client.post(endpoint, headers=headers_apikey, json=payload)
+                print(f"DEBUG ENVIO: Status Code -> {response.status_code}")
+                print(f"DEBUG ENVIO: Response -> {response.text}")
+
+                # Fallback para versões da Evolution que usam Authorization Bearer
+                if response.status_code in (400, 401):
+                    response = await client.post(endpoint, headers=headers_bearer, json=payload)
+                    print(f"DEBUG ENVIO (Bearer): Status Code -> {response.status_code}")
+                    print(f"DEBUG ENVIO (Bearer): Response -> {response.text}")
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Falha de rede com Evolution: {exc}") from exc
-
-        print(f"DEBUG ENVIO: Status -> {response.status_code}")
-        print(f"DEBUG ENVIO: Response -> {response.text}")
 
         if response.status_code not in (200, 201):
             raise HTTPException(

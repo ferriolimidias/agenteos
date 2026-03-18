@@ -15,7 +15,8 @@ async def dispatch_outbound_message(
     payload: StandardOutgoingMessage,
 ) -> dict[str, Any]:
     try:
-        tipo_conexao = str(getattr(conexao, "tipo", "")).lower()
+        tipo_raw = getattr(conexao, "tipo", "")
+        tipo_conexao = str(getattr(tipo_raw, "value", tipo_raw)).lower()
         if "evolution" in tipo_conexao:
             provider = EvolutionProvider()
         else:
