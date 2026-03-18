@@ -339,7 +339,7 @@ export default function Inbox() {
             <div
               key={lead.id}
               onClick={() => setSelectedLead(lead)}
-              className={`cursor-pointer border-b border-gray-100 px-4 py-3 transition-colors ${
+              className={`cursor-pointer border-b border-gray-100 px-4 py-3 transition-colors duration-200 ${
                 selectedLead?.id === lead.id ? "bg-blue-50" : "hover:bg-gray-50"
               }`}
             >
@@ -468,20 +468,32 @@ export default function Inbox() {
             </header>
 
             <div className="flex-1 overflow-y-auto px-4 py-5">
-              <div className="mx-auto flex max-w-4xl flex-col gap-3">
-                {messages?.map((msg) => {
+              <div
+                className="mx-auto flex max-w-4xl flex-col"
+                style={{
+                  backgroundImage:
+                    "radial-gradient(rgba(0,0,0,0.03) 1px, transparent 1px)",
+                  backgroundSize: "14px 14px",
+                }}
+              >
+                {messages?.map((msg, idx) => {
                   const isMine = msg.from_me;
+                  const anterior = idx > 0 ? messages[idx - 1] : null;
+                  const mesmoAutorSequencia = Boolean(anterior) && Boolean(anterior?.from_me) === Boolean(msg?.from_me);
                   return (
-                    <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                    <div
+                      key={msg.id}
+                      className={`flex ${isMine ? "justify-end" : "justify-start"} ${mesmoAutorSequencia ? "mt-1" : "mt-3"}`}
+                    >
                       <div
-                        className={`relative max-w-[80%] px-3 py-2 shadow-sm ${
+                        className={`relative max-w-[80%] px-3 py-2 pb-5 shadow-sm ${
                           isMine
                             ? "ml-auto rounded-lg rounded-tr-none bg-[#d9fdd3] text-gray-900"
                             : "mr-auto rounded-lg rounded-tl-none bg-white text-gray-800"
                         }`}
                       >
                         {renderMensagemConteudo(msg)}
-                        <div className="mt-1 text-right text-[10px] text-gray-500">
+                        <div className="absolute bottom-1 right-2 text-xs text-gray-500/80">
                           {msg?.criado_em ? new Date(msg.criado_em).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
                         </div>
                       </div>

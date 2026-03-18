@@ -10,6 +10,7 @@ from db.database import AsyncSessionLocal
 from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil, Conexao, TipoConexao
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from app.schemas import ConversaListaResponse
 
 router = APIRouter(prefix="/api/empresas", tags=["Inbox Live Chat"])
 
@@ -31,7 +32,7 @@ def _inferir_tipo_mensagem(content_type: str | None) -> str:
         return "audio"
     return "document"
 
-@router.get("/{empresa_id}/inbox")
+@router.get("/{empresa_id}/inbox", response_model=List[ConversaListaResponse])
 async def listar_inbox(empresa_id: str):
     try:
         empresa_uuid = uuid.UUID(empresa_id)
@@ -55,6 +56,7 @@ async def listar_inbox(empresa_id: str):
                     "id": str(l.id),
                     "nome_contato": l.nome_contato,
                     "telefone_contato": l.telefone_contato,
+                    "ultima_mensagem": l.historico_resumo or None,
                     "bot_pausado": bot_pausado,
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
                     "etapa_crm": l.etapa.nome if l.etapa else None,
@@ -89,20 +91,25 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
                 .where(MensagemHistorico.lead_id == lead.id)
                 .order_by(MensagemHistorico.criado_em.asc())
             )
-            msgs = result_msgs.scalars().all()
-            
-            retorno = []
-            for m in msgs:
-                retorno.append({
-                    "id": str(m.id),
-                    "texto": m.texto,
-                    "tipo_mensagem": m.tipo_mensagem or "text",
-                    "media_url": m.media_url,
-                    "from_me": m.from_me,
-                    "criado_em": m.criado_em.isoformat()
-                })
-            return retorno
+            mensagens = result_msgs.scalars().all()
+
+            output = []
+            for m in mensagens:
+                try:
+                    output.append({
+                        "id": str(m.id),
+                        "texto": str(m.texto or ""),
+                        "from_me": bool(m.from_me),
+                        "tipo_mensagem": str(m.tipo_mensagem or "text"),
+                        "media_url": str(m.media_url) if m.media_url else None,
+                        "criado_em": m.criado_em.isoformat() if m.criado_em else None,
+                    })
+                except Exception as e:
+                    print(f"FALHA NO ITEM: {m.id}")
+                    print(f"ERRO: {e}")
+            return output
     except Exception as e:
+        print(f"ERRO NA SERIALIZAÇÃO: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")

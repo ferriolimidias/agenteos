@@ -3,6 +3,7 @@ from typing import Dict, Any
 import uuid
 import os
 import base64
+import re
 from datetime import datetime, timedelta
 
 from app.api.schemas import StandardMessage
@@ -19,6 +20,45 @@ def _mask_phone(telefone: str) -> str:
     if len(digits) <= 8:
         return digits
     return f"{digits[:5]}{'*' * max(len(digits) - 9, 4)}{digits[-4:]}"
+
+
+def _normalizar_telefone_remote_jid(remote_jid: str | None) -> str:
+    bruto = str(remote_jid or "")
+    sem_sufixo = bruto.replace("@s.whatsapp.net", "").replace("@g.us", "")
+    return re.sub(r"\D", "", sem_sufixo)
+
+
+def extrair_conteudo_mensagem(data_json: dict) -> str:
+    message = (data_json or {}).get("message", {}) or {}
+    texto = (
+        message.get("conversation")
+        or (message.get("extendedTextMessage", {}) or {}).get("text")
+        or (message.get("imageMessage", {}) or {}).get("caption")
+        or (message.get("videoMessage", {}) or {}).get("caption")
+    )
+    if texto:
+        return str(texto)
+
+    if message.get("audioMessage"):
+        return "[Áudio]"
+    if message.get("imageMessage"):
+        return "[Imagem]"
+    if message.get("videoMessage") or message.get("documentMessage"):
+        return "[Arquivo]"
+    if message.get("stickerMessage"):
+        return "[Sticker]"
+    return "[Mensagem não suportada]"
+
+
+def _extrair_tipo_mensagem(data_json: dict) -> str:
+    message = (data_json or {}).get("message", {}) or {}
+    if message.get("imageMessage"):
+        return "image"
+    if message.get("audioMessage"):
+        return "audio"
+    if message.get("documentMessage") or message.get("videoMessage"):
+        return "document"
+    return "text"
 
 async def get_conexao_id_por_tipo(
     session,
@@ -124,73 +164,121 @@ async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_task
 @router.post("/{empresa_id}/evolution")
 async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
     print(f"\n[WEBHOOK EVOLUTION] Recebido para empresa: {empresa_id}")
-    
-    event = payload.get("event")
-    if event != "messages.upsert":
-        return {"status": "ignored", "reason": f"Event {event} ignored"}
-    
-    data = payload.get("data", {})
-    key = data.get("key", {})
-    message = data.get("message", {})
-    instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
-    print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
-    
-    fromMe = key.get("fromMe", False)
-    remote_jid = key.get("remoteJid", "")
-    telefone = remote_jid.replace("@s.whatsapp.net", "")
-    print(
-        f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | "
-        f"Empresa: {empresa_id} | Telefone: {_mask_phone(telefone)}"
-    )
-    empresa_uuid = uuid.UUID(empresa_id)
+    try:
+        event = payload.get("event")
+        if event != "messages.upsert":
+            return {"status": "ignored", "reason": f"Event {event} ignored"}
 
-    async with AsyncSessionLocal() as session:
-        conexao_id = await get_conexao_id_por_tipo(
-            session,
-            empresa_uuid,
-            TipoConexao.EVOLUTION,
-            nome_instancia=instance_name,
+        data = payload.get("data", {}) or {}
+        key = data.get("key", {}) or {}
+        message = data.get("message", {}) or {}
+        instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
+        print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
+
+        fromMe = bool(key.get("fromMe", False))
+        remote_jid = key.get("remoteJid", "")
+        telefone = _normalizar_telefone_remote_jid(remote_jid)
+        if not telefone:
+            print(f"DEBUG: Formato de mensagem desconhecido (remoteJid inválido: {remote_jid})")
+            telefone = "0000000000"
+
+        print(
+            f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | "
+            f"Empresa: {empresa_id} | Telefone: {_mask_phone(telefone)}"
         )
-        if instance_name and not conexao_id:
-            print(f"[WEBHOOK EVOLUTION] Nenhuma conexão ativa encontrada para instance='{instance_name}' na empresa {empresa_id}")
-    
-    texto = ""
-    tipo_mensagem = "text"
-    
-    if "conversation" in message:
-        texto = message["conversation"]
-    elif "extendedTextMessage" in message:
-        texto = message["extendedTextMessage"].get("text", "")
-    elif "imageMessage" in message:
-         texto = message["imageMessage"].get("caption", "Imagem recebida")
-         tipo_mensagem = "image"
-    elif "audioMessage" in message:
-         texto = "Áudio recebido"
-         tipo_mensagem = "audio"
-    elif "documentMessage" in message:
-         document = message.get("documentMessage", {}) or {}
-         nome_documento = document.get("fileName") or "Documento"
-         texto = document.get("caption") or f"{nome_documento} recebido"
-         tipo_mensagem = "document"
+        empresa_uuid = uuid.UUID(empresa_id)
 
-    if tipo_mensagem == "audio":
-         async def transcribe_audio():
-             try:
-                 from app.services.evolution_service import get_base64_media
-                 from openai import AsyncOpenAI
-                 
-                 async with AsyncSessionLocal() as session:
-                     base64_data = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+        async with AsyncSessionLocal() as session:
+            conexao_id = await get_conexao_id_por_tipo(
+                session,
+                empresa_uuid,
+                TipoConexao.EVOLUTION,
+                nome_instancia=instance_name,
+            )
+            if instance_name and not conexao_id:
+                print(f"[WEBHOOK EVOLUTION] Nenhuma conexão ativa encontrada para instance='{instance_name}' na empresa {empresa_id}")
+
+        texto = extrair_conteudo_mensagem(data)
+        tipo_mensagem = _extrair_tipo_mensagem(data)
+        if texto == "[Mensagem não suportada]":
+            print("DEBUG: Formato de mensagem desconhecido")
+
+        if tipo_mensagem == "audio":
+             async def transcribe_audio():
+                 try:
+                     from app.services.evolution_service import get_base64_media
+                     from openai import AsyncOpenAI
                      
-                     openai_key = None
-                     result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                     empresa = result.scalars().first()
-                     if empresa and empresa.credenciais_canais:
-                         openai_key = empresa.credenciais_canais.get("openai_api_key")
+                     async with AsyncSessionLocal() as session:
+                         base64_data = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
                          
-             except Exception as e:
-                 print(f"[WEBHOOK EVOLUTION] Erro ao transcrever áudio: {e}")
-                 texto_transcrito = "[Áudio recebido, mas falha na transcrição]"
+                         openai_key = None
+                         result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                         empresa = result.scalars().first()
+                         if empresa and empresa.credenciais_canais:
+                             openai_key = empresa.credenciais_canais.get("openai_api_key")
+                             
+                 except Exception as e:
+                     print(f"[WEBHOOK EVOLUTION] Erro ao transcrever áudio: {e}")
+                     texto_transcrito = "[Áudio recebido, mas falha na transcrição]"
+                     should_proc = await save_history_and_check_pause(empresa_id, telefone, texto_transcrito, fromMe, conexao_id)
+                     if should_proc:
+                         msg = StandardMessage(
+                             empresa_id=empresa_id,
+                             canal="evolution",
+                             identificador_origem=telefone,
+                             conexao_id=conexao_id,
+                             texto_mensagem=texto_transcrito,
+                             is_human_agent=False,
+                         )
+                         await handle_debouncer(msg)
+                     return
+                     
+                 if not base64_data:
+                     print("[WEBHOOK EVOLUTION] Não foi possível baixar áudio da Evolution.")
+                     await save_history_and_check_pause(
+                        empresa_id,
+                        telefone,
+                        "[Áudio não pôde ser baixado]",
+                        fromMe,
+                        conexao_id,
+                        tipo_mensagem="audio",
+                        media_url=None,
+                     )
+                     texto_transcrito = "[Áudio não pôde ser baixado]"
+                 else:
+                     await save_history_and_check_pause(
+                        empresa_id,
+                        telefone,
+                        "[Áudio]",
+                        fromMe,
+                        conexao_id,
+                        tipo_mensagem="audio",
+                        media_url=base64_data,
+                     )
+                     try:
+                         if "," in base64_data:
+                             base64_data = base64_data.split(",")[1]
+                         audio_bytes = base64.b64decode(base64_data)
+                         
+                         temp_audio_path = f"/tmp/audio_{uuid.uuid4()}.ogg"
+                         with open(temp_audio_path, "wb") as f:
+                             f.write(audio_bytes)
+                             
+                         client = AsyncOpenAI(api_key=openai_key) if openai_key else AsyncOpenAI()
+                         with open(temp_audio_path, "rb") as audio_file:
+                             transcript = await client.audio.transcriptions.create(
+                                 model="whisper-1", 
+                                 file=audio_file,
+                                 response_format="text"
+                             )
+                             
+                         os.remove(temp_audio_path)
+                         texto_transcrito = f"[Áudio Transcrito]: {transcript}"
+                     except Exception as e:
+                         print(f"[WEBHOOK EVOLUTION] Erro no Whisper: {e}")
+                         texto_transcrito = "[Erro na Transcrição Whisper]"
+
                  should_proc = await save_history_and_check_pause(empresa_id, telefone, texto_transcrito, fromMe, conexao_id)
                  if should_proc:
                      msg = StandardMessage(
@@ -202,103 +290,46 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                          is_human_agent=False,
                      )
                      await handle_debouncer(msg)
-                 return
                  
-             if not base64_data:
-                 print("[WEBHOOK EVOLUTION] Não foi possível baixar áudio da Evolution.")
-                 await save_history_and_check_pause(
-                    empresa_id,
-                    telefone,
-                    "[Áudio não pôde ser baixado]",
-                    fromMe,
-                    conexao_id,
-                    tipo_mensagem="audio",
-                    media_url=None,
-                 )
-                 texto_transcrito = "[Áudio não pôde ser baixado]"
-             else:
-                 await save_history_and_check_pause(
-                    empresa_id,
-                    telefone,
-                    "Áudio recebido",
-                    fromMe,
-                    conexao_id,
-                    tipo_mensagem="audio",
-                    media_url=base64_data,
-                 )
-                 try:
-                     if "," in base64_data:
-                         base64_data = base64_data.split(",")[1]
-                     audio_bytes = base64.b64decode(base64_data)
-                     
-                     temp_audio_path = f"/tmp/audio_{uuid.uuid4()}.ogg"
-                     with open(temp_audio_path, "wb") as f:
-                         f.write(audio_bytes)
-                         
-                     client = AsyncOpenAI(api_key=openai_key) if openai_key else AsyncOpenAI()
-                     with open(temp_audio_path, "rb") as audio_file:
-                         transcript = await client.audio.transcriptions.create(
-                             model="whisper-1", 
-                             file=audio_file,
-                             response_format="text"
-                         )
-                         
-                     os.remove(temp_audio_path)
-                     texto_transcrito = f"[Áudio Transcrito]: {transcript}"
-                 except Exception as e:
-                     print(f"[WEBHOOK EVOLUTION] Erro no Whisper: {e}")
-                     texto_transcrito = "[Erro na Transcrição Whisper]"
+             background_tasks.add_task(transcribe_audio)
+             return {"status": "received", "message": "Transcription in background"}
 
-             should_proc = await save_history_and_check_pause(empresa_id, telefone, texto_transcrito, fromMe, conexao_id)
-             if should_proc:
-                 msg = StandardMessage(
-                     empresa_id=empresa_id,
-                     canal="evolution",
-                     identificador_origem=telefone,
-                     conexao_id=conexao_id,
-                     texto_mensagem=texto_transcrito,
-                     is_human_agent=False,
-                 )
-                 await handle_debouncer(msg)
-             
-         background_tasks.add_task(transcribe_audio)
-         return {"status": "received", "message": "Transcription in background"}
+        media_base64 = None
+        if tipo_mensagem in {"image", "document"}:
+            try:
+                from app.services.evolution_service import get_base64_media
 
-    media_base64 = None
-    if tipo_mensagem in {"image", "document"}:
-        try:
-            from app.services.evolution_service import get_base64_media
+                async with AsyncSessionLocal() as session:
+                    media_base64 = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+            except Exception as e:
+                print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {e}")
 
-            async with AsyncSessionLocal() as session:
-                media_base64 = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
-        except Exception as e:
-            print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {e}")
-
-    if not texto and tipo_mensagem == "text":
-        return {"status": "ignored", "reason": "No text content found"}
-
-    should_process = await save_history_and_check_pause(
-        empresa_id,
-        telefone,
-        texto or "Mensagem recebida",
-        fromMe,
-        conexao_id,
-        tipo_mensagem=tipo_mensagem,
-        media_url=media_base64,
-    )
-    
-    if should_process:
-        msg = StandardMessage(
-            empresa_id=empresa_id,
-            canal="evolution",
-            identificador_origem=telefone,
-            conexao_id=conexao_id,
-            texto_mensagem=texto,
-            is_human_agent=False
+        should_process = await save_history_and_check_pause(
+            empresa_id,
+            telefone,
+            texto or "[Mensagem não suportada]",
+            fromMe,
+            conexao_id,
+            tipo_mensagem=tipo_mensagem,
+            media_url=media_base64,
         )
-        background_tasks.add_task(handle_debouncer, msg)
-    
-    return {"status": "received", "message": "Processed"}
+        
+        if should_process:
+            msg = StandardMessage(
+                empresa_id=empresa_id,
+                canal="evolution",
+                identificador_origem=telefone,
+                conexao_id=conexao_id,
+                texto_mensagem=texto or "[Mensagem não suportada]",
+                is_human_agent=False
+            )
+            background_tasks.add_task(handle_debouncer, msg)
+        
+        return {"status": "received", "message": "Processed"}
+
+    except Exception as e:
+        print(f"DEBUG: Formato de mensagem desconhecido: {e}")
+        return {"status": "received", "message": "Formato desconhecido tratado"}
 
 
 @router.post("/{empresa_id}/telegram")

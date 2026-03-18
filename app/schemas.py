@@ -120,6 +120,29 @@ class ConexaoResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class MensagemHistoricoResponse(BaseModel):
+    id: str
+    texto: str
+    tipo_mensagem: str | None = None
+    media_url: str | None = None
+    conexao_id: UUID4 | None = None
+    from_me: bool = False
+    criado_em: str | None = None
+
+
+class ConversaListaResponse(BaseModel):
+    id: str | None = None
+    nome_contato: str | None = None
+    telefone_contato: str | None = None
+    ultima_mensagem: str | None = None
+    bot_pausado: bool = False
+    bot_pausado_ate: str | None = None
+    etapa_crm: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    historico_resumo: str | None = None
+    dados_adicionais: dict[str, Any] = Field(default_factory=dict)
+
 # --- Schema para Vínculo Ferramenta Especialista ---
 class EspecialistaToolLink(BaseModel):
     especialista_id: UUID4
