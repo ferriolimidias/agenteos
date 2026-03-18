@@ -148,6 +148,17 @@ async def enviar_mensagem(
         )
         conexao = result_conexao.scalars().first()
         if not conexao:
+            todas_conexoes = await db.execute(
+                select(Conexao).where(Conexao.empresa_id == empresa_uuid)
+            )
+            lista_conexoes = todas_conexoes.scalars().all()
+            print(
+                f"DEBUG BANCO: Encontradas {len(lista_conexoes)} conexões para a empresa {empresa_id}"
+            )
+            for c in lista_conexoes:
+                print(
+                    f" -> ID: {c.id} | Tipo: {c.tipo} | Status: {c.status} | Instância: {c.nome_instancia}"
+                )
             raise HTTPException(
                 status_code=400,
                 detail="Conexão não encontrada para esta empresa",
