@@ -1,15 +1,16 @@
 import base64
 import traceback
 
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Dict, Any, List
 from pydantic import BaseModel
 import uuid
 from datetime import datetime, timedelta
 
-from db.database import AsyncSessionLocal
+from db.database import AsyncSessionLocal, get_db
 from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil, Conexao, TipoConexao
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.schemas import ConversaListaResponse
 from app.services.mensageria.dispatcher import dispatch_outbound_message
@@ -25,8 +26,6 @@ def _telefone_eh_simulador(telefone: str | None) -> bool:
 
 class SendMessagePayload(BaseModel):
     texto: str
-    tipo_mensagem: str = "text"
-    media_url: str | None = None
 
 
 def _inferir_tipo_mensagem(content_type: str | None) -> str:
@@ -130,69 +129,68 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 @router.post("/{empresa_id}/inbox/{telefone}/mensagens")
-async def enviar_mensagem(empresa_id: str, telefone: str, request: Request):
+async def enviar_mensagem(
+    empresa_id: str,
+    telefone: str,
+    payload: SendMessagePayload,
+    db: AsyncSession = Depends(get_db),
+):
     if _telefone_eh_simulador(telefone):
         return {"status": "success"}
-    body_json = await request.json()
-    print(f"DEBUG BODY BRUTO FRONTEND: {body_json}")
-    texto = (body_json or {}).get("texto", "")
-    tipo = (body_json or {}).get("tipo_mensagem", "text")
-    media_url = (body_json or {}).get("media_url", None)
     try:
         empresa_uuid = uuid.UUID(empresa_id)
-        async with AsyncSessionLocal() as session:
-            result_conexao = await session.execute(
-                select(Conexao).where(
-                    Conexao.empresa_id == empresa_uuid,
-                    Conexao.tipo == TipoConexao.EVOLUTION,
-                    Conexao.status == "ativo"
-                )
+        result_conexao = await db.execute(
+            select(Conexao).where(
+                Conexao.empresa_id == empresa_uuid,
+                Conexao.tipo == TipoConexao.EVOLUTION,
+                Conexao.status == "ativo"
             )
-            conexao = result_conexao.scalars().first()
-            if not conexao:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Conexão não encontrada para esta empresa",
-                )
+        )
+        conexao = result_conexao.scalars().first()
+        if not conexao:
+            raise HTTPException(
+                status_code=400,
+                detail="Conexão não encontrada para esta empresa",
+            )
 
-            result_lead = await session.execute(
-                select(CRMLead).where(
-                    CRMLead.empresa_id == empresa_uuid,
-                    CRMLead.telefone_contato == telefone
-                )
+        result_lead = await db.execute(
+            select(CRMLead).where(
+                CRMLead.empresa_id == empresa_uuid,
+                CRMLead.telefone_contato == telefone
             )
-            lead = result_lead.scalars().first()
-            if not lead:
-                raise HTTPException(status_code=404, detail="Lead não encontrado")
-            
-            nova_msg = MensagemHistorico(
-                lead_id=lead.id,
-                conexao_id=conexao.id if conexao else None,
-                texto=payload.texto,
-                tipo_mensagem="text",
-                media_url=None,
-                from_me=True
-            )
-            session.add(nova_msg)
-            
-            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
-            
-            await session.commit()
-            
-            outbound_payload = StandardOutgoingMessage(
-                identificador_contato=str(telefone or "").strip(),
-                canal="whatsapp",
-                texto=str(texto or ""),
-                tipo=str(tipo or "text"),
-                media_url=media_url,
-            )
-            await dispatch_outbound_message(
-                empresa_id=empresa_uuid,
-                conexao=conexao,
-                payload=outbound_payload,
-            )
-            
-            return {"status": "success"}
+        )
+        lead = result_lead.scalars().first()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead não encontrado")
+        
+        nova_msg = MensagemHistorico(
+            lead_id=lead.id,
+            conexao_id=conexao.id if conexao else None,
+            texto=payload.texto,
+            tipo_mensagem="text",
+            media_url=None,
+            from_me=True
+        )
+        db.add(nova_msg)
+        
+        lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
+        
+        await db.commit()
+        
+        outbound_payload = StandardOutgoingMessage(
+            identificador_contato=str(telefone or "").strip(),
+            canal="whatsapp",
+            texto=payload.texto,
+            tipo="text",
+            media_url=None,
+        )
+        await dispatch_outbound_message(
+            empresa_id=empresa_uuid,
+            conexao=conexao,
+            payload=outbound_payload,
+        )
+        
+        return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
