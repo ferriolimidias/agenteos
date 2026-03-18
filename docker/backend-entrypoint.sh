@@ -50,4 +50,4 @@ echo "Rodando migracoes customizadas..."
 python run_migrations.py
 
 echo "Iniciando API..."
-exec uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+exec uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
