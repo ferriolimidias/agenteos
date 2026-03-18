@@ -22,10 +22,13 @@ export default function Inbox() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttempts = useRef(0);
   const selectedLeadTelefoneRef = useRef(null);
 
   const user = getStoredUser();
-  const empresa_id = getActiveEmpresaId();
+  const activeEmpresaId = getActiveEmpresaId();
+  const empresa_id = activeEmpresaId;
 
   const fetchLeads = async () => {
     if (!empresa_id) return;
@@ -105,21 +108,23 @@ export default function Inbox() {
   }, [selectedLead?.telefone_contato]);
 
   useEffect(() => {
-    if (!empresa_id) return undefined;
-
-    const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-    const wsUrl = `${wsProtocol}${window.location.host}/api/empresas/${empresa_id}/ws`;
-    let reconnectAttempts = 0;
-    let reconnectTimer = null;
+    if (!activeEmpresaId) return undefined;
     let isActive = true;
 
     const connect = () => {
       if (!isActive) return;
+      const wsUrl =
+        (window.location.protocol === "https:" ? "wss://" : "ws://") +
+        window.location.host +
+        "/api/empresas/" +
+        activeEmpresaId +
+        "/ws";
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        reconnectAttempts = 0;
+        if (!isActive) return;
+        reconnectAttempts.current = 0;
       };
 
       ws.onmessage = (event) => {
@@ -153,9 +158,9 @@ export default function Inbox() {
 
       ws.onclose = () => {
         if (!isActive) return;
-        const timeoutMs = Math.min(1000 * (2 ** reconnectAttempts), 30000);
-        reconnectAttempts += 1;
-        reconnectTimer = window.setTimeout(() => {
+        const timeoutMs = Math.min(1000 * (2 ** reconnectAttempts.current), 30000);
+        reconnectAttempts.current += 1;
+        reconnectTimeoutRef.current = window.setTimeout(() => {
           connect();
         }, timeoutMs);
       };
@@ -165,8 +170,9 @@ export default function Inbox() {
 
     return () => {
       isActive = false;
-      if (reconnectTimer) {
-        window.clearTimeout(reconnectTimer);
+      if (reconnectTimeoutRef.current) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       try {
         wsRef.current?.close();
@@ -175,7 +181,7 @@ export default function Inbox() {
       }
       wsRef.current = null;
     };
-  }, [empresa_id]);
+  }, [activeEmpresaId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
