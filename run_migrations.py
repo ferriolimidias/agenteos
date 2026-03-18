@@ -44,6 +44,15 @@ async def run_migrations():
         except Exception as e:
             print(f"Join table error: {e}")
 
+        try:
+            print("Adding conexao_id to mensagens_historico...")
+            await conn.execute(
+                text("ALTER TABLE mensagens_historico ADD COLUMN IF NOT EXISTS conexao_id UUID;")
+            )
+            print("Column conexao_id ensured on mensagens_historico.")
+        except Exception as e:
+            print(f"mensagens_historico migration error: {e}")
+
     print("Migrations complete!")
 
 if __name__ == "__main__":
