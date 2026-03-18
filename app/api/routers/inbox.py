@@ -1,4 +1,5 @@
 import base64
+import traceback
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Dict, Any, List
@@ -11,6 +12,8 @@ from db.models import CRMLead, MensagemHistorico, Empresa, CRMEtapa, CRMFunil, C
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.schemas import ConversaListaResponse
+from app.services.mensageria.dispatcher import dispatch_outbound_message
+from app.services.mensageria.schemas import StandardOutgoingMessage
 
 router = APIRouter(prefix="/api/empresas", tags=["Inbox Live Chat"])
 
@@ -139,6 +142,11 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
                 )
             )
             conexao = result_conexao.scalars().first()
+            if not conexao:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Conexão não encontrada para esta empresa",
+                )
 
             result_lead = await session.execute(
                 select(CRMLead).where(
@@ -164,19 +172,25 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
             
             await session.commit()
             
-            from app.services.evolution_service import enviar_mensagem_whatsapp
-            enviado = await enviar_mensagem_whatsapp(empresa_uuid, telefone, payload.texto, session)
-            if not enviado:
-                print(
-                    f"[Inbox] Falha no envio Evolution | empresa_id={empresa_id} | "
-                    f"telefone={telefone}"
-                )
-                raise HTTPException(status_code=502, detail="Falha no envio da mensagem para Evolution API")
+            outbound_payload = StandardOutgoingMessage(
+                identificador_contato=str(telefone or "").strip(),
+                canal="whatsapp",
+                texto=payload.texto,
+                tipo="text",
+                media_url=None,
+            )
+            await dispatch_outbound_message(
+                empresa_id=empresa_uuid,
+                conexao=conexao,
+                payload=outbound_payload,
+            )
             
             return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
+        print(f"ERRO REAL DE ENVIO: {str(e)}")
+        traceback.print_exc()
         print(f"[Inbox] Erro ao enviar mensagem manualmente: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
