@@ -21,6 +21,7 @@ from app.api.routers import inbox
 from app.api.routers import integracoes
 from app.api.routers import conexoes
 from app.api.routers import dashboard
+from app.api.routers import websockets
 
 # Global Redis Client
 redis_client: redis.Redis = None
@@ -68,6 +69,7 @@ app.include_router(integracoes.router)
 app.include_router(conexoes.router, prefix="/api")
 app.include_router(conexoes.status_router, prefix="/api")
 app.include_router(dashboard.router)
+app.include_router(websockets.router)
 
 
 from app.api.schemas import StandardMessage

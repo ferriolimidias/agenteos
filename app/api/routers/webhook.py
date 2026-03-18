@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from app.api.schemas import StandardMessage
 from app.api.utils import handle_debouncer
+from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal
 from db.models import Empresa, CRMLead, MensagemHistorico, Conexao, TipoConexao
 from sqlalchemy import select
@@ -133,6 +134,22 @@ async def save_history_and_check_pause(
                     should_process = False
                     
             await session.commit()
+            mensagem_payload = {
+                "id": str(nova_msg.id),
+                "texto": str(nova_msg.texto or ""),
+                "from_me": bool(nova_msg.from_me),
+                "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+                "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+                "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+            }
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "tipo_evento": "nova_mensagem_inbound",
+                    "telefone": telefone,
+                    "mensagem": mensagem_payload,
+                },
+            )
         else:
             # Caso o lead ainda não exista, processar normalmente
             if from_me:

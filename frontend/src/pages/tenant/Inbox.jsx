@@ -21,6 +21,8 @@ export default function Inbox() {
   const [mediaCaption, setMediaCaption] = useState("");
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const wsRef = useRef(null);
+  const selectedLeadTelefoneRef = useRef(null);
 
   const user = getStoredUser();
   const empresa_id = getActiveEmpresaId();
@@ -78,8 +80,6 @@ export default function Inbox() {
     fetchLeads();
     fetchDestinos();
     fetchOfficialTags();
-    const interval = setInterval(fetchLeads, 10000);
-    return () => clearInterval(interval);
   }, [empresa_id]);
 
   useEffect(() => {
@@ -97,10 +97,59 @@ export default function Inbox() {
   useEffect(() => {
     if (selectedLead) {
       fetchMessages(selectedLead.telefone_contato);
-      const interval = setInterval(() => fetchMessages(selectedLead.telefone_contato), 5000);
-      return () => clearInterval(interval);
     }
   }, [selectedLead, empresa_id]);
+
+  useEffect(() => {
+    selectedLeadTelefoneRef.current = selectedLead?.telefone_contato || null;
+  }, [selectedLead?.telefone_contato]);
+
+  useEffect(() => {
+    if (!empresa_id) return undefined;
+
+    const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+    const wsUrl = `${wsProtocol}${window.location.host}/api/empresas/${empresa_id}/ws`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data || "{}");
+        const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
+        if (tipoEvento !== "nova_mensagem_inbound" && tipoEvento !== "nova_mensagem_outbound") return;
+
+        const telefoneEvento = String(data?.telefone || "");
+        const novaMensagem = data?.mensagem;
+        const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
+
+        if (telefoneSelecionado && telefoneEvento && telefoneSelecionado === telefoneEvento && novaMensagem) {
+          setMessages((prev) => {
+            const lista = prev || [];
+            const novaId = novaMensagem?.id;
+            if (novaId && lista.some((msg) => msg?.id === novaId)) return lista;
+            return [...lista, novaMensagem];
+          });
+        }
+
+        fetchLeads();
+      } catch (err) {
+        console.error("Erro ao processar evento websocket do Inbox:", err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error("Erro no WebSocket do Inbox:", err);
+    };
+
+    return () => {
+      try {
+        ws.close();
+      } catch (_) {
+        // no-op
+      }
+      wsRef.current = null;
+    };
+  }, [empresa_id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
