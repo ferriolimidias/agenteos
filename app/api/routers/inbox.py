@@ -25,6 +25,8 @@ def _telefone_eh_simulador(telefone: str | None) -> bool:
 
 class SendMessagePayload(BaseModel):
     texto: str
+    tipo_mensagem: str = "text"
+    media_url: str | None = None
 
 
 def _inferir_tipo_mensagem(content_type: str | None) -> str:
@@ -176,8 +178,8 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
                 identificador_contato=str(telefone or "").strip(),
                 canal="whatsapp",
                 texto=payload.texto,
-                tipo="text",
-                media_url=None,
+                tipo=str(payload.tipo_mensagem or "text"),
+                media_url=payload.media_url,
             )
             await dispatch_outbound_message(
                 empresa_id=empresa_uuid,
