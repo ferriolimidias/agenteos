@@ -72,57 +72,56 @@ async def listar_inbox(empresa_id: str):
 @router.get("/{empresa_id}/inbox/{telefone}")
 async def listar_historico_lead(empresa_id: str, telefone: str):
     print(">>> DEBUG: Rota de histórico acessada com sucesso! <<<")
-    # TESTE TEMPORÁRIO DE ISOLAMENTO:
-    # Bloco de banco desativado intencionalmente para validar infraestrutura/roteamento.
-    # if _telefone_eh_simulador(telefone):
-    #     return []
-    # try:
-    #     empresa_uuid = uuid.UUID(empresa_id)
-    #     async with AsyncSessionLocal() as session:
-    #         result_lead = await session.execute(
-    #             select(CRMLead).where(
-    #                 CRMLead.empresa_id == empresa_uuid,
-    #                 CRMLead.telefone_contato == telefone
-    #             )
-    #         )
-    #         lead = result_lead.scalars().first()
-    #         if not lead:
-    #             return []
-    #
-    #         result_msgs = await session.execute(
-    #             select(MensagemHistorico)
-    #             .where(MensagemHistorico.lead_id == lead.id)
-    #             .order_by(MensagemHistorico.criado_em.asc())
-    #         )
-    #         mensagens = result_msgs.scalars().all()
-    #
-    #         output = []
-    #         for m in mensagens:
-    #             try:
-    #                 output.append({
-    #                     "id": str(m.id),
-    #                     "texto": str(m.texto or ""),
-    #                     "from_me": bool(m.from_me),
-    #                     "tipo_mensagem": str(m.tipo_mensagem or "text"),
-    #                     "media_url": str(m.media_url) if m.media_url else None,
-    #                     "criado_em": m.criado_em.isoformat() if m.criado_em else None,
-    #                 })
-    #             except Exception as e:
-    #                 print(f"FALHA NO ITEM: {m.id}")
-    #                 print(f"ERRO: {e}")
-    #         return output
-    # except Exception as e:
-    #     print(f"ERRO NA SERIALIZAÇÃO: {e}")
-    #     raise HTTPException(status_code=500, detail=str(e))
-    return [
-        {
-            "id": "teste-123",
-            "texto": "Conexão OK - O Backend está vivo!",
-            "from_me": True,
-            "tipo_mensagem": "text",
-            "criado_em": "2026-03-18T10:00:00",
-        }
-    ]
+    if _telefone_eh_simulador(telefone):
+        return []
+
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        return []
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.empresa_id == empresa_uuid,
+                    CRMLead.telefone_contato == telefone
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                return []
+
+            result_msgs = await session.execute(
+                select(MensagemHistorico)
+                .where(MensagemHistorico.lead_id == lead.id)
+                .order_by(MensagemHistorico.criado_em.asc())
+            )
+            mensagens = result_msgs.scalars().all()
+            if not mensagens:
+                return []
+
+            print(f"DEBUG: Encontradas {len(mensagens)} mensagens para o lead {lead.id}")
+
+            output = []
+            for m in mensagens:
+                try:
+                    criado_em_value = getattr(m, "criado_em", None)
+                    output.append({
+                        "id": str(getattr(m, "id", "erro-id")),
+                        "texto": str(getattr(m, "texto", "[Sem texto]")),
+                        "from_me": bool(getattr(m, "from_me", False)),
+                        "tipo_mensagem": str(getattr(m, "tipo_mensagem", "text")),
+                        "media_url": str(m.media_url) if getattr(m, "media_url", None) else None,
+                        "criado_em": criado_em_value.isoformat() if hasattr(criado_em_value, "isoformat") else str(criado_em_value or ""),
+                    })
+                except Exception as e:
+                    print(f"FALHA NO ITEM: {getattr(m, 'id', 'sem-id')}")
+                    print(f"ERRO: {e}")
+            return output
+    except Exception as e:
+        print(f"ERRO GERAL NA ROTA DE HISTÓRICO: {e}")
+        return []
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
