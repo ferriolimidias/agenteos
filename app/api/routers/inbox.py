@@ -1,7 +1,7 @@
 import base64
 import traceback
 
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
 from typing import Dict, Any, List
 from pydantic import BaseModel
 import uuid
@@ -130,9 +130,14 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 @router.post("/{empresa_id}/inbox/{telefone}/mensagens")
-async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
+async def enviar_mensagem(empresa_id: str, telefone: str, request: Request):
     if _telefone_eh_simulador(telefone):
         return {"status": "success"}
+    body_json = await request.json()
+    print(f"DEBUG BODY BRUTO FRONTEND: {body_json}")
+    texto = (body_json or {}).get("texto", "")
+    tipo = (body_json or {}).get("tipo_mensagem", "text")
+    media_url = (body_json or {}).get("media_url", None)
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
@@ -177,9 +182,9 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
             outbound_payload = StandardOutgoingMessage(
                 identificador_contato=str(telefone or "").strip(),
                 canal="whatsapp",
-                texto=payload.texto,
-                tipo=str(payload.tipo_mensagem or "text"),
-                media_url=payload.media_url,
+                texto=str(texto or ""),
+                tipo=str(tipo or "text"),
+                media_url=media_url,
             )
             await dispatch_outbound_message(
                 empresa_id=empresa_uuid,
