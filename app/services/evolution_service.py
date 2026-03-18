@@ -1,4 +1,5 @@
 import httpx
+import re
 from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,15 @@ def _normalizar_status_evolution(raw_status: str | None) -> str:
     if status in {"connecting", "qrcode", "qr", "pairing"}:
         return "connecting"
     return "disconnected"
+
+
+def _normalizar_numero_destino(telefone: str | None) -> str:
+    valor = str(telefone or "").strip()
+    if not valor:
+        return ""
+    if "@s.whatsapp.net" in valor:
+        valor = valor.replace("@s.whatsapp.net", "")
+    return re.sub(r"\D", "", valor)
 
 
 async def enviar_mensagem_whatsapp_por_credenciais(
@@ -50,16 +60,24 @@ async def enviar_mensagem_whatsapp_por_credenciais(
             "Content-Type": "application/json"
         }
 
+        numero_normalizado = _normalizar_numero_destino(telefone)
         payload = {
-            "number": telefone,
+            "number": numero_normalizado or str(telefone or "").strip(),
             "text": texto
         }
 
+        json_payload = payload
+        url = endpoint
+        print(f"DEBUG ENVIO: URL -> {url}")
+        print(f"DEBUG ENVIO: Payload -> {json_payload}")
+
         async with httpx.AsyncClient() as client:
             response = await client.post(endpoint, headers=headers, json=payload, timeout=10.0)
+            print(f"DEBUG ENVIO: Status Code -> {response.status_code}")
+            print(f"DEBUG ENVIO: Response -> {response.text}")
 
             if response.status_code in (200, 201):
-                print(f"[Evolution Service] Mensagem enviada com sucesso para {telefone}")
+                print(f"[Evolution Service] Mensagem enviada com sucesso para {numero_normalizado or telefone}")
                 return True
 
             print(f"[Evolution Service] Erro ao enviar. Status: {response.status_code}.")

@@ -124,6 +124,7 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
         return []
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
+@router.post("/{empresa_id}/inbox/{telefone}/mensagens")
 async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePayload):
     if _telefone_eh_simulador(telefone):
         return {"status": "success"}
@@ -164,10 +165,19 @@ async def enviar_mensagem(empresa_id: str, telefone: str, payload: SendMessagePa
             await session.commit()
             
             from app.services.evolution_service import enviar_mensagem_whatsapp
-            await enviar_mensagem_whatsapp(empresa_uuid, telefone, payload.texto, session)
+            enviado = await enviar_mensagem_whatsapp(empresa_uuid, telefone, payload.texto, session)
+            if not enviado:
+                print(
+                    f"[Inbox] Falha no envio Evolution | empresa_id={empresa_id} | "
+                    f"telefone={telefone}"
+                )
+                raise HTTPException(status_code=502, detail="Falha no envio da mensagem para Evolution API")
             
             return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"[Inbox] Erro ao enviar mensagem manualmente: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
