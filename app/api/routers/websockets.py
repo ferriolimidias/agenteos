@@ -3,7 +3,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services.websocket_manager import manager
 
 
-router = APIRouter(prefix="/api/empresas", tags=["WebSockets"])
+router = APIRouter(tags=["WebSockets"])
 
 
 @router.websocket("/{empresa_id}/ws")
