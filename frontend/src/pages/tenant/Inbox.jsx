@@ -229,17 +229,41 @@ export default function Inbox() {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedLead) return;
+    const texto = newMessage.trim();
+    if (!texto || !selectedLead) return;
+
+    const telefone = selectedLead.telefone_contato;
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticMessage = {
+      id: tempId,
+      texto,
+      from_me: true,
+      tipo_mensagem: "text",
+      media_url: null,
+      criado_em: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...(prev || []), optimisticMessage]);
+    setNewMessage("");
     setLoading(true);
     try {
-      await api.post(`/empresas/${empresa_id}/inbox/${selectedLead.telefone_contato}/send`, {
-        texto: newMessage
+      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, {
+        texto,
       });
-      setNewMessage("");
-      fetchMessages(selectedLead.telefone_contato);
-      fetchLeads(); // update `bot_pausado`
+      if (selectedLeadTelefoneRef.current === telefone) {
+        await fetchMessages(telefone);
+      }
+      await fetchLeads(); // update `bot_pausado`
     } catch (e) {
       console.error("Erro ao enviar mensagem", e);
+      if (selectedLeadTelefoneRef.current === telefone) {
+        setMessages((prev) => (prev || []).filter((msg) => msg?.id !== tempId));
+      }
+      setNewMessage(texto);
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Não foi possível enviar a mensagem.",
+      });
     } finally {
       setLoading(false);
     }

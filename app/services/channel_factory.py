@@ -4,6 +4,8 @@ import uuid
 from db.database import AsyncSessionLocal
 from db.models import Conexao, TipoConexao
 from sqlalchemy import select
+from app.services.mensageria.dispatcher import dispatch_outbound_message
+from app.services.mensageria.schemas import StandardOutgoingMessage
 
 
 async def despachar_mensagem(
@@ -68,13 +70,18 @@ async def despachar_mensagem(
                             sucesso_geral = False
                             continue
 
-                        enviado = await enviar_mensagem_whatsapp_por_credenciais(
-                            identificador_origem,
-                            parte,
-                            conexao.credenciais,
+                        outbound_payload = StandardOutgoingMessage(
+                            identificador_contato=str(identificador_origem or "").strip(),
+                            canal="whatsapp",
+                            texto=parte,
+                            tipo="text",
+                            media_url=None,
                         )
-                        if not enviado:
-                            sucesso_geral = False
+                        await dispatch_outbound_message(
+                            empresa_id=conexao.empresa_id,
+                            conexao=conexao,
+                            payload=outbound_payload,
+                        )
                 except Exception as e:
                     print(f"[Channel Factory -> Evolution] Erro ao despachar via conexão {conexao_id}: {e}")
                     sucesso_geral = False
