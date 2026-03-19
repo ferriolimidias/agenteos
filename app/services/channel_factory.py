@@ -1,11 +1,70 @@
 import asyncio
+import traceback
 import uuid
 
 from db.database import AsyncSessionLocal
 from db.models import Conexao, TipoConexao
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, select
 from app.services.mensageria.dispatcher import dispatch_outbound_message
 from app.services.mensageria.schemas import StandardOutgoingMessage
+
+
+async def _resolver_conexao_evolution(
+    *,
+    session,
+    conexao_id: str | None,
+    empresa_id: str | None,
+):
+    if conexao_id:
+        try:
+            result = await session.execute(
+                select(Conexao).where(Conexao.id == uuid.UUID(str(conexao_id)))
+            )
+            conexao = result.scalars().first()
+            if conexao:
+                print(
+                    f"[Channel Factory] Conexão explícita localizada: id={conexao.id} "
+                    f"tipo={conexao.tipo} status={conexao.status} instancia={conexao.nome_instancia}"
+                )
+            if conexao and conexao.tipo == TipoConexao.EVOLUTION:
+                return conexao
+            if conexao:
+                print(
+                    f"[Channel Factory] Conexão explícita ignorada por tipo incompatível: {conexao.tipo}"
+                )
+        except (ValueError, TypeError):
+            print(f"[Channel Factory] conexao_id inválido recebido para fallback: {conexao_id}")
+
+    if not empresa_id:
+        print("[Channel Factory] Fallback por empresa indisponível: empresa_id ausente.")
+        return None
+
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError):
+        print(f"[Channel Factory] Fallback por empresa falhou: empresa_id inválido '{empresa_id}'.")
+        return None
+
+    tipos_aceitos = ["evolution", "EVOLUTION"]
+    status_aceitos = ["ativo", "connected", "conectado", "open"]
+    result = await session.execute(
+        select(Conexao).where(
+            Conexao.empresa_id == empresa_uuid,
+            cast(Conexao.tipo, String).in_(tipos_aceitos),
+            func.lower(Conexao.status).in_(status_aceitos),
+        )
+    )
+    conexao = result.scalars().first()
+    if conexao:
+        print(
+            f"[Channel Factory] Fallback por empresa selecionou conexão: id={conexao.id} "
+            f"status={conexao.status} instancia={conexao.nome_instancia}"
+        )
+    else:
+        print(
+            f"[Channel Factory] Nenhuma conexão Evolution ativa encontrada para empresa={empresa_id}."
+        )
+    return conexao
 
 
 async def despachar_mensagem(
@@ -13,6 +72,7 @@ async def despachar_mensagem(
     identificador_origem: str,
     texto: str,
     conexao_id: str | None = None,
+    empresa_id: str | None = None,
 ):
     """
     Função responsável por aplicar o delay 'humano' e enviar a mensagem para o canal final.
@@ -44,29 +104,24 @@ async def despachar_mensagem(
                 #     await client.post("mock_url_meta", json={"to": identificador_origem, "text": {"body": parte}})
                 
             case "evolution":
-                print(f"[Channel Factory] Despachando via Conexão ID: {conexao_id} para o canal: {canal}")
-
-                if not conexao_id:
-                    print(f"[Channel Factory -> Evolution] Fallback seguro: conexao_id ausente para {identificador_origem}.")
-                    sucesso_geral = False
-                    continue
-
+                print(
+                    f"[Channel Factory] Despachando mensagem Evolution: "
+                    f"canal={canal} empresa_id={empresa_id} conexao_id={conexao_id} "
+                    f"identificador_raw='{identificador_origem}'"
+                )
                 try:
-                    from app.services.evolution_service import enviar_mensagem_whatsapp_por_credenciais
-
                     async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            select(Conexao).where(Conexao.id == uuid.UUID(conexao_id))
+                        conexao = await _resolver_conexao_evolution(
+                            session=session,
+                            conexao_id=conexao_id,
+                            empresa_id=empresa_id,
                         )
-                        conexao = result.scalars().first()
 
                         if not conexao:
-                            print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não encontrada.")
-                            sucesso_geral = False
-                            continue
-
-                        if conexao.tipo != TipoConexao.EVOLUTION:
-                            print(f"[Channel Factory -> Evolution] Conexão {conexao_id} não pertence ao canal evolution.")
+                            print(
+                                f"[Channel Factory -> Evolution] Nenhuma conexão Evolution válida encontrada "
+                                f"para empresa={empresa_id} conexao_id={conexao_id}."
+                            )
                             sucesso_geral = False
                             continue
 
@@ -84,6 +139,7 @@ async def despachar_mensagem(
                         )
                 except Exception as e:
                     print(f"[Channel Factory -> Evolution] Erro ao despachar via conexão {conexao_id}: {e}")
+                    traceback.print_exc()
                     sucesso_geral = False
                 
             case "chatwoot":

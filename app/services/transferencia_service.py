@@ -243,6 +243,7 @@ async def executar_transferencia_atendimento(
                 identificador_origem=contato,
                 texto=mensagem_destino,
                 conexao_id=conexao_id_envio,
+                empresa_id=str(empresa.id),
             )
             if not enviado:
                 falhas.append(contato)
@@ -342,6 +343,7 @@ async def testar_destino_transferencia(
                 identificador_origem=contato,
                 texto=mensagem_teste,
                 conexao_id=conexao_id_envio,
+                empresa_id=str(empresa.id),
             )
             if enviado:
                 sucessos.append(contato)

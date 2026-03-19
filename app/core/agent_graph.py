@@ -56,7 +56,7 @@ async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -
         return ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
 
 from db.database import AsyncSessionLocal
-from db.models import Conhecimento, Especialista, Empresa, CRMLead, CRMFunil, CRMEtapa, FerramentaAPI
+from db.models import Conhecimento, Especialista, Empresa, CRMLead, CRMFunil, CRMEtapa, FerramentaAPI, MensagemHistorico
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_from_json_schema
@@ -66,6 +66,7 @@ from app.services.transferencia_service import (
 )
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
 from app.core.tools import tool_atualizar_tags_lead
+from app.services.websocket_manager import manager
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
@@ -334,6 +335,7 @@ async def node_crm(state: AgentState):
     
     origem = state.get("identificador_origem", "")
     empresa_id = state.get("empresa_id")
+    mensagens_pendentes = [str(msg or "").strip() for msg in (state.get("mensagens") or []) if str(msg or "").strip()]
     
     # 1. Verifica se já existe um Lead para este telefone nesta empresa
     async with AsyncSessionLocal() as session:
@@ -388,6 +390,13 @@ async def node_crm(state: AgentState):
                 
                 # Criar Lead
                 if possivel_nome:
+                    import uuid
+
+                    try:
+                        conexao_uuid = uuid.UUID(str(state.get("conexao_id"))) if state.get("conexao_id") else None
+                    except (ValueError, TypeError):
+                        conexao_uuid = None
+
                     novo_lead = CRMLead(
                         empresa_id=empresa_id,
                         telefone_contato=origem,
@@ -396,12 +405,44 @@ async def node_crm(state: AgentState):
                         historico_resumo="Lead capturado automaticamente via integração."
                     )
                     session.add(novo_lead)
+                    await session.flush()
+
+                    primeira_msg_inbound = None
+                    for texto_inbound in mensagens_pendentes:
+                        nova_msg = MensagemHistorico(
+                            lead_id=novo_lead.id,
+                            conexao_id=conexao_uuid,
+                            texto=texto_inbound,
+                            from_me=False,
+                        )
+                        session.add(nova_msg)
+                        if primeira_msg_inbound is None:
+                            primeira_msg_inbound = nova_msg
+
                     await session.commit()
                     await session.refresh(novo_lead)
                     
                     state["nome_contato"] = novo_lead.nome_contato
                     state["lead_id"] = str(novo_lead.id)
                     print(f"[NODE CRM] Novo Lead criado com sucesso. ID: {state['lead_id']}")
+
+                    if primeira_msg_inbound:
+                        mensagem_payload = {
+                            "id": str(primeira_msg_inbound.id),
+                            "texto": str(primeira_msg_inbound.texto or ""),
+                            "from_me": bool(primeira_msg_inbound.from_me),
+                            "tipo_mensagem": str(primeira_msg_inbound.tipo_mensagem or "text"),
+                            "media_url": str(primeira_msg_inbound.media_url) if primeira_msg_inbound.media_url else None,
+                            "criado_em": primeira_msg_inbound.criado_em.isoformat() if primeira_msg_inbound.criado_em else None,
+                        }
+                        await manager.broadcast_to_empresa(
+                            str(empresa_id),
+                            {
+                                "tipo_evento": "nova_mensagem_inbound",
+                                "telefone": origem,
+                                "mensagem": mensagem_payload,
+                            },
+                        )
                 else:
                     state["nome_contato"] = None
                     state["lead_id"] = None

@@ -15,8 +15,13 @@ async def dispatch_outbound_message(
     payload: StandardOutgoingMessage,
 ) -> dict[str, Any]:
     try:
+        conexao_id = getattr(conexao, "id", None)
         tipo_raw = getattr(conexao, "tipo", "")
         tipo_conexao = str(getattr(tipo_raw, "value", tipo_raw)).lower()
+        print(
+            f"[Dispatcher Mensageria] empresa_id={empresa_id} conexao_id={conexao_id} "
+            f"tipo={tipo_conexao} destino_raw='{payload.identificador_contato}' tipo_msg='{payload.tipo}'"
+        )
         if "evolution" in tipo_conexao:
             provider = EvolutionProvider()
         else:
@@ -28,6 +33,20 @@ async def dispatch_outbound_message(
         credenciais = dict(conexao.credenciais or {})
         if not credenciais.get("evolution_instance"):
             credenciais["evolution_instance"] = getattr(conexao, "nome_instancia", None)
+        evolution_url = str(credenciais.get("evolution_url") or "").strip()
+        evolution_apikey = str(credenciais.get("evolution_apikey") or "").strip()
+        evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
+        print(
+            "[Dispatcher Mensageria] Credenciais resolvidas:"
+            f" url={'ok' if evolution_url else 'vazio'}"
+            f" apikey={'ok' if evolution_apikey else 'vazio'}"
+            f" instance='{evolution_instance or 'vazio'}'"
+        )
+        if "evolution" in tipo_conexao and not all([evolution_url, evolution_apikey, evolution_instance]):
+            print(
+                f"[Dispatcher Mensageria] AVISO: credenciais incompletas para conexao_id={conexao_id}. "
+                f"credenciais_keys={sorted(list(credenciais.keys()))}"
+            )
 
         tipo = str(payload.tipo or "text").lower()
         if tipo == "text":

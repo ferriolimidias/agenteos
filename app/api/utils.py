@@ -281,12 +281,20 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
             except Exception as e:
                 print(f"[SIMULADOR] Aviso: falha ao salvar histórico simulador: {e}")
         else:
-            await despachar_mensagem(
+            enviado = await despachar_mensagem(
                 canal=mensagens[0].canal,
                 identificador_origem=mensagens[0].identificador_origem,
                 texto=resposta,
                 conexao_id=conexao_id_dispatch,
+                empresa_id=mensagens[0].empresa_id,
             )
+            if not enviado:
+                print(
+                    f"[ENGINE] Falha no envio outbound da IA. "
+                    f"empresa_id={mensagens[0].empresa_id} canal={mensagens[0].canal} "
+                    f"identificador='{mensagens[0].identificador_origem}' conexao_id={conexao_id_dispatch}"
+                )
+                return
 
             try:
                 import uuid
@@ -425,6 +433,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         identificador_origem=id_orig,
                         texto=texto,
                         conexao_id=conexao_id_dispatch,
+                        empresa_id=empresa_id_fu,
                     )
 
                     novo_token = str(_time_mod.time() + 1)
@@ -453,6 +462,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                                 identificador_origem=id_orig,
                                 texto=texto_enc,
                                 conexao_id=conexao_id_dispatch,
+                                empresa_id=empresa_id_fu,
                             )
                         except Exception as e_n2:
                             print(f"[Follow-up Nível 2] Erro: {e_n2}")
@@ -472,6 +482,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         identificador_origem=id_orig,
                         texto=texto_enc,
                         conexao_id=conexao_id_dispatch,
+                        empresa_id=empresa_id_fu,
                     )
                     await redis_client.delete(ativo_key)
                     await redis_client.delete(nivel_key)
