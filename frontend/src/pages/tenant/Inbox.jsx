@@ -24,6 +24,9 @@ export default function Inbox() {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttempts = useRef(0);
+  const failedReconnectTimestampsRef = useRef([]);
+  const reconnectBlockedUntilRef = useRef(0);
+  const socketOpenedRef = useRef(false);
   const selectedLeadTelefoneRef = useRef(null);
 
   const user = getStoredUser();
@@ -113,6 +116,13 @@ export default function Inbox() {
 
     const connect = () => {
       if (!isActive) return;
+      const now = Date.now();
+      if (reconnectBlockedUntilRef.current > now) {
+        const waitMs = reconnectBlockedUntilRef.current - now;
+        reconnectTimeoutRef.current = window.setTimeout(connect, waitMs);
+        return;
+      }
+
       const wsUrl =
         (window.location.protocol === "https:" ? "wss://" : "ws://") +
         window.location.host +
@@ -121,10 +131,14 @@ export default function Inbox() {
         "/ws";
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+      socketOpenedRef.current = false;
 
       ws.onopen = () => {
         if (!isActive) return;
         reconnectAttempts.current = 0;
+        failedReconnectTimestampsRef.current = [];
+        reconnectBlockedUntilRef.current = 0;
+        socketOpenedRef.current = true;
       };
 
       ws.onmessage = (event) => {
@@ -158,11 +172,35 @@ export default function Inbox() {
 
       ws.onclose = () => {
         if (!isActive) return;
-        const timeoutMs = Math.min(1000 * (2 ** reconnectAttempts.current), 30000);
-        reconnectAttempts.current += 1;
+        const openedOnce = socketOpenedRef.current;
+        const now = Date.now();
+
+        if (!openedOnce) {
+          const recentFailures = [...failedReconnectTimestampsRef.current, now].filter(
+            (ts) => now - ts <= 10000
+          );
+          failedReconnectTimestampsRef.current = recentFailures;
+
+          if (recentFailures.length > 5) {
+            reconnectBlockedUntilRef.current = now + 60000;
+            reconnectAttempts.current = 0;
+            const timeout = 60000;
+            console.error("WebSocket fechado. Tentando reconectar em...", timeout);
+            reconnectTimeoutRef.current = window.setTimeout(connect, timeout);
+            return;
+          }
+
+          reconnectAttempts.current += 1;
+        } else {
+          reconnectAttempts.current = 0;
+          failedReconnectTimestampsRef.current = [];
+        }
+
+        const timeout = Math.min(1000 * (2 ** reconnectAttempts.current), 30000);
+        console.error("WebSocket fechado. Tentando reconectar em...", timeout);
         reconnectTimeoutRef.current = window.setTimeout(() => {
           connect();
-        }, timeoutMs);
+        }, timeout);
       };
     };
 
@@ -179,6 +217,7 @@ export default function Inbox() {
       } catch (_) {
         // no-op
       }
+      socketOpenedRef.current = false;
       wsRef.current = null;
     };
   }, [activeEmpresaId]);

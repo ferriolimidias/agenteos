@@ -69,7 +69,13 @@ app.include_router(integracoes.router)
 app.include_router(conexoes.router, prefix="/api")
 app.include_router(conexoes.status_router, prefix="/api")
 app.include_router(dashboard.router)
-app.include_router(websockets.router, prefix="/api/empresas", tags=["websockets"])
+app.include_router(websockets.router, prefix="/empresas", tags=["websockets"])
+
+
+@app.on_event("startup")
+async def debug_routes():
+    for route in app.routes:
+        print(f"DEBUG ROTA: {route.path}")
 
 
 from app.api.schemas import StandardMessage
