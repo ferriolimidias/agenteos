@@ -71,11 +71,10 @@ app.include_router(conexoes.status_router, prefix="/api")
 app.include_router(dashboard.router)
 app.include_router(websockets.router, prefix="/empresas", tags=["websockets"])
 
-
-@app.on_event("startup")
-async def debug_routes():
-    for route in app.routes:
-        print(f"DEBUG ROTA: {route.path}")
+print("--- INICIANDO MAPEAMENTO DE ROTAS ---")
+for route in app.routes:
+    print(f"ROTA ENCONTRADA: {route.path} | Nome: {getattr(route, 'name', 'N/A')}")
+print("--- FIM DO MAPEAMENTO DE ROTAS ---")
 
 
 from app.api.schemas import StandardMessage
