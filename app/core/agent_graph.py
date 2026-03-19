@@ -347,17 +347,21 @@ async def node_crm(state: AgentState):
         lead = result.scalars().first()
         
         if lead:
+            nome_recebido = str(state.get("nome_contato") or "").strip()
+            nome_atual = str(lead.nome_contato or "").strip()
+            if nome_recebido and (not nome_atual or nome_atual == "Usuário (Auto)"):
+                lead.nome_contato = nome_recebido
+                await session.commit()
             state["nome_contato"] = lead.nome_contato
             state["lead_id"] = str(lead.id)
             print(f"[NODE CRM] Lead existente encontrado. ID: {state['lead_id']}")
         else:
             print(f"[NODE CRM] Lead não encontrado. Iniciando criação automática...")
             
-            # Se a mensagem inicial vier com "novo", simularemos falta de nome
-            # Em prod, vem do webhook da Meta/Evolution
-            possivel_nome = "Usuário (Auto)"
+            nome_recebido = str(state.get("nome_contato") or "").strip()
+            possivel_nome = nome_recebido or "Usuário (Auto)"
             if "novo" in origem.lower(): 
-                possivel_nome = None 
+                possivel_nome = nome_recebido or None
 
             try:
                 # Buscar o funil padrao ou criar se não existir

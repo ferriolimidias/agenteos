@@ -1,6 +1,8 @@
 import base64
+import re
 import traceback
 
+import httpx
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Dict, Any, List
 from pydantic import BaseModel
@@ -13,6 +15,7 @@ from sqlalchemy import select, func, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.schemas import ConversaListaResponse
+from app.services.evolution_service import _obter_credenciais_conexao_ou_empresa
 from app.services.mensageria.dispatcher import dispatch_outbound_message
 from app.services.mensageria.schemas import StandardOutgoingMessage
 from app.services.websocket_manager import manager
@@ -37,6 +40,63 @@ def _inferir_tipo_mensagem(content_type: str | None) -> str:
         return "audio"
     return "document"
 
+
+def _normalizar_numero_whatsapp(telefone: str | None) -> str:
+    valor = str(telefone or "").strip()
+    if "@s.whatsapp.net" in valor:
+        valor = valor.replace("@s.whatsapp.net", "")
+    return re.sub(r"\D", "", valor)
+
+
+def _formatar_jid_whatsapp(telefone: str | None) -> str:
+    numero = _normalizar_numero_whatsapp(telefone)
+    return f"{numero}@s.whatsapp.net" if numero else ""
+
+
+def _extrair_foto_url_resposta(payload: dict | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    candidatos = [
+        payload.get("profilePictureUrl"),
+        payload.get("profilePicUrl"),
+        payload.get("pictureUrl"),
+        payload.get("photoUrl"),
+        payload.get("url"),
+    ]
+
+    for chave in ("data", "response", "result"):
+        nested = payload.get(chave)
+        if isinstance(nested, dict):
+            candidatos.extend(
+                [
+                    nested.get("profilePictureUrl"),
+                    nested.get("profilePicUrl"),
+                    nested.get("pictureUrl"),
+                    nested.get("photoUrl"),
+                    nested.get("url"),
+                ]
+            )
+
+    for candidato in candidatos:
+        if isinstance(candidato, str) and candidato.strip():
+            return candidato.strip()
+
+    return None
+
+
+async def _buscar_conexao_evolution_ativa(session: AsyncSession, empresa_uuid: uuid.UUID) -> Conexao | None:
+    tipos_aceitos = ["evolution", "EVOLUTION"]
+    status_aceitos = ["ativo", "connected", "conectado", "open"]
+    result = await session.execute(
+        select(Conexao).where(
+            Conexao.empresa_id == empresa_uuid,
+            cast(Conexao.tipo, String).in_(tipos_aceitos),
+            func.lower(Conexao.status).in_(status_aceitos),
+        )
+    )
+    return result.scalars().first()
+
 @router.get("/{empresa_id}/inbox", response_model=List[ConversaListaResponse])
 async def listar_inbox(empresa_id: str):
     try:
@@ -60,6 +120,7 @@ async def listar_inbox(empresa_id: str):
                 leads_retorno.append({
                     "id": str(l.id),
                     "nome_contato": l.nome_contato,
+                    "foto_url": l.foto_url,
                     "telefone_contato": l.telefone_contato,
                     "ultima_mensagem": l.historico_resumo or None,
                     "bot_pausado": bot_pausado,
@@ -127,6 +188,99 @@ async def listar_historico_lead(empresa_id: str, telefone: str):
     except Exception as e:
         print(f"ERRO GERAL NA ROTA DE HISTÓRICO: {e}")
         return []
+
+
+@router.get("/{empresa_id}/inbox/{telefone}/foto")
+async def obter_foto_lead(empresa_id: str, telefone: str):
+    if _telefone_eh_simulador(telefone):
+        return {"foto_url": None}
+
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        return {"foto_url": None}
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.empresa_id == empresa_uuid,
+                    CRMLead.telefone_contato == telefone
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+            now = datetime.utcnow()
+            if (
+                lead.foto_url
+                and lead.foto_atualizada_em
+                and (now - lead.foto_atualizada_em) < timedelta(hours=24)
+            ):
+                return {"foto_url": lead.foto_url}
+
+            conexao = await _buscar_conexao_evolution_ativa(session, empresa_uuid)
+            if not conexao:
+                return {"foto_url": lead.foto_url or None}
+
+            credenciais = await _obter_credenciais_conexao_ou_empresa(session, conexao)
+            if not credenciais:
+                return {"foto_url": lead.foto_url or None}
+
+            evolution_url = str(credenciais.get("evolution_url") or "").strip().rstrip("/")
+            evolution_apikey = str(credenciais.get("evolution_apikey") or "").strip()
+            instance_name = str(credenciais.get("evolution_instance") or "").strip()
+            numero = _normalizar_numero_whatsapp(telefone)
+            numero_jid = _formatar_jid_whatsapp(telefone)
+
+            if not all([evolution_url, evolution_apikey, instance_name, numero]):
+                return {"foto_url": lead.foto_url or None}
+
+            foto_url = None
+            headers = {"apikey": evolution_apikey, "Content-Type": "application/json"}
+            endpoint_get = f"{evolution_url}/profile/fetchProfile/{instance_name}"
+            endpoint_post = f"{evolution_url}/chat/fetchProfilePictureUrl/{instance_name}"
+
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
+                    response_get = await client.get(
+                        endpoint_get,
+                        headers=headers,
+                        params={"number": numero},
+                    )
+                    if response_get.status_code in (200, 201):
+                        try:
+                            foto_url = _extrair_foto_url_resposta(response_get.json())
+                        except Exception:
+                            foto_url = None
+
+                    if not foto_url:
+                        response_post = await client.post(
+                            endpoint_post,
+                            headers=headers,
+                            json={"number": numero_jid or numero},
+                        )
+                        if response_post.status_code in (200, 201):
+                            try:
+                                foto_url = _extrair_foto_url_resposta(response_post.json())
+                            except Exception:
+                                foto_url = None
+            except Exception as exc:
+                print(f"[Inbox Foto] Falha ao buscar foto na Evolution: {exc}")
+                return {"foto_url": lead.foto_url or None}
+
+            if foto_url:
+                lead.foto_url = foto_url
+                lead.foto_atualizada_em = now
+                await session.commit()
+
+            return {"foto_url": lead.foto_url or None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Inbox Foto] Erro ao obter foto do lead: {e}")
+        return {"foto_url": None}
 
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 @router.post("/{empresa_id}/inbox/{telefone}/mensagens")
@@ -360,5 +514,33 @@ async def reativar_bot(empresa_id: str, telefone: str):
             
             await session.commit()
             return {"status": "success", "message": "Bot reativado"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{empresa_id}/inbox/{telefone}/pausar_bot")
+async def pausar_bot(empresa_id: str, telefone: str):
+    if _telefone_eh_simulador(telefone):
+        return {"status": "success", "message": "Bot pausado"}
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.empresa_id == empresa_uuid,
+                    CRMLead.telefone_contato == telefone
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+            await session.commit()
+            return {
+                "status": "success",
+                "message": "Bot pausado",
+                "bot_pausado_ate": lead.bot_pausado_ate.isoformat() if lead.bot_pausado_ate else None,
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

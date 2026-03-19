@@ -212,7 +212,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "conexao_id": mensagens[0].conexao_id,
         "mensagens": textos,
         "historico_bd": historico_bd_formatado,
-        "nome_contato": None,
+        "nome_contato": getattr(mensagens[0], "nome_contato", None),
         "intencao": None,
         "respostas_especialistas": [],
         "handoff_requested": False,

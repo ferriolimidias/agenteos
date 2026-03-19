@@ -12,6 +12,8 @@ MIGRATIONS = [
     # Novas colunas
     "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS coletar_nome BOOLEAN DEFAULT TRUE;",
     "ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS dados_adicionais JSONB DEFAULT '{}';",
+    "ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS foto_url VARCHAR NULL;",
+    "ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS foto_atualizada_em TIMESTAMP NULL;",
     "ALTER TABLE crm_etapas ADD COLUMN IF NOT EXISTS tipo VARCHAR NULL;",
 ]
 

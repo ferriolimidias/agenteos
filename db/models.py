@@ -344,6 +344,8 @@ class CRMLead(Base):
     historico_resumo = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=False, default=list)
     dados_adicionais = Column(JSONB, default={})  # campos extras captados pela IA
+    foto_url = Column(String, nullable=True)
+    foto_atualizada_em = Column(DateTime, nullable=True)
     bot_pausado_ate = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 

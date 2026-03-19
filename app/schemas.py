@@ -134,6 +134,7 @@ class MensagemHistoricoResponse(BaseModel):
 class ConversaListaResponse(BaseModel):
     id: str | None = None
     nome_contato: str | None = None
+    foto_url: str | None = None
     telefone_contato: str | None = None
     ultima_mensagem: str | None = None
     bot_pausado: bool = False

@@ -17,6 +17,7 @@ export default function Inbox() {
   const [showTagsPanel, setShowTagsPanel] = useState(false);
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
+  const [botToggleLoading, setBotToggleLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [mediaCaption, setMediaCaption] = useState("");
@@ -392,6 +393,45 @@ export default function Inbox() {
     }
   };
 
+  const handleToggleBot = async () => {
+    if (!selectedLead || botToggleLoading) return;
+
+    const leadId = selectedLead.id;
+    const telefone = selectedLead.telefone_contato;
+    const wasPaused = Boolean(selectedLead.bot_pausado);
+    const optimisticPausedUntil = wasPaused ? null : new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString();
+    const optimisticUpdates = {
+      bot_pausado: !wasPaused,
+      bot_pausado_ate: optimisticPausedUntil,
+    };
+    const previousState = {
+      bot_pausado: Boolean(selectedLead.bot_pausado),
+      bot_pausado_ate: selectedLead.bot_pausado_ate || null,
+    };
+
+    updateLeadInState(leadId, optimisticUpdates);
+    setBotToggleLoading(true);
+
+    try {
+      const endpoint = wasPaused ? "reativar_bot" : "pausar_bot";
+      const res = await api.post(`/empresas/${empresa_id}/inbox/${telefone}/${endpoint}`);
+      updateLeadInState(leadId, {
+        bot_pausado: !wasPaused,
+        bot_pausado_ate: wasPaused ? null : (res.data?.bot_pausado_ate || optimisticPausedUntil),
+      });
+      await fetchLeads();
+    } catch (e) {
+      console.error("Erro ao alternar estado do bot", e);
+      updateLeadInState(leadId, previousState);
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Não foi possível atualizar o estado da IA.",
+      });
+    } finally {
+      setBotToggleLoading(false);
+    }
+  };
+
   const handleExcluirLead = async () => {
     if (!selectedLead) return;
     if (!window.confirm("Certeza que deseja excluir permanentemente este lead e todo o seu histórico de mensagens?")) return;
@@ -454,6 +494,10 @@ export default function Inbox() {
   }
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
+  const selectedLeadPaused = Boolean(selectedLead?.bot_pausado);
+  const selectedLeadPausedAtLabel = selectedLead?.bot_pausado_ate
+    ? new Date(selectedLead.bot_pausado_ate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "";
 
   return (
     <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -541,7 +585,7 @@ export default function Inbox() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowTagsPanel((prev) => !prev)}
@@ -549,14 +593,41 @@ export default function Inbox() {
                   >
                     Tags
                   </button>
-                  {selectedLead.bot_pausado ? (
-                    <button
-                      onClick={handleReativarBot}
-                      className="rounded-lg px-2.5 py-2 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
+                  <button
+                    type="button"
+                    onClick={handleToggleBot}
+                    disabled={botToggleLoading}
+                    className={`flex items-center gap-2 rounded-full border px-2.5 py-1.5 transition-colors ${
+                      selectedLeadPaused
+                        ? "border-orange-200 bg-orange-50 hover:bg-orange-100"
+                        : "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
+                    } disabled:cursor-not-allowed disabled:opacity-70`}
+                    title={selectedLeadPaused ? "Ativar respostas da IA" : "Assumir atendimento humano"}
+                  >
+                    <span className="flex flex-col items-start text-left leading-tight">
+                      <span className={`text-[11px] font-semibold ${selectedLeadPaused ? "text-orange-700" : "text-emerald-700"}`}>
+                        {selectedLeadPaused ? "Modo Humano" : "IA Respondendo"}
+                      </span>
+                      {selectedLeadPaused && selectedLeadPausedAtLabel ? (
+                        <span className="text-[10px] text-orange-600">Retorna às {selectedLeadPausedAtLabel}</span>
+                      ) : (
+                        <span className="text-[10px] text-gray-500">
+                          {selectedLeadPaused ? "Pausada manualmente" : "Resposta automática ativa"}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        selectedLeadPaused ? "bg-orange-400" : "bg-emerald-500"
+                      }`}
                     >
-                      Reativar IA
-                    </button>
-                  ) : null}
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+                          selectedLeadPaused ? "translate-x-1" : "translate-x-5"
+                        }`}
+                      />
+                    </span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowTransferPanel((prev) => !prev)}

@@ -96,6 +96,7 @@ async def save_history_and_check_pause(
     texto: str,
     from_me: bool,
     conexao_id: str | None = None,
+    nome_contato: str | None = None,
     tipo_mensagem: str = "text",
     media_url: str | None = None,
 ) -> bool:
@@ -112,6 +113,15 @@ async def save_history_and_check_pause(
         lead = result.scalars().first()
         
         if lead:
+            nome_contato_limpo = str(nome_contato or "").strip()
+            nome_atual = str(lead.nome_contato or "").strip()
+            if (
+                not from_me
+                and nome_contato_limpo
+                and (not nome_atual or nome_atual == "Usuário (Auto)")
+            ):
+                lead.nome_contato = nome_contato_limpo
+
             # Salvar no histórico
             nova_msg = MensagemHistorico(
                 lead_id=lead.id,
@@ -190,6 +200,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         data = payload.get("data", {}) or {}
         key = data.get("key", {}) or {}
         message = data.get("message", {}) or {}
+        push_name = str(data.get("pushName") or payload.get("pushName") or "").strip() or None
         instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
         print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
 
@@ -239,13 +250,21 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                  except Exception as e:
                      print(f"[WEBHOOK EVOLUTION] Erro ao transcrever áudio: {e}")
                      texto_transcrito = "[Áudio recebido, mas falha na transcrição]"
-                     should_proc = await save_history_and_check_pause(empresa_id, telefone, texto_transcrito, fromMe, conexao_id)
+                     should_proc = await save_history_and_check_pause(
+                        empresa_id,
+                        telefone,
+                        texto_transcrito,
+                        fromMe,
+                        conexao_id,
+                        nome_contato=push_name,
+                     )
                      if should_proc:
                          msg = StandardMessage(
                              empresa_id=empresa_id,
                              canal="evolution",
                              identificador_origem=telefone,
                              conexao_id=conexao_id,
+                             nome_contato=push_name,
                              texto_mensagem=texto_transcrito,
                              is_human_agent=False,
                          )
@@ -260,6 +279,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         "[Áudio não pôde ser baixado]",
                         fromMe,
                         conexao_id,
+                        nome_contato=push_name,
                         tipo_mensagem="audio",
                         media_url=None,
                      )
@@ -271,6 +291,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         "[Áudio]",
                         fromMe,
                         conexao_id,
+                        nome_contato=push_name,
                         tipo_mensagem="audio",
                         media_url=base64_data,
                      )
@@ -297,13 +318,21 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                          print(f"[WEBHOOK EVOLUTION] Erro no Whisper: {e}")
                          texto_transcrito = "[Erro na Transcrição Whisper]"
 
-                 should_proc = await save_history_and_check_pause(empresa_id, telefone, texto_transcrito, fromMe, conexao_id)
+                 should_proc = await save_history_and_check_pause(
+                    empresa_id,
+                    telefone,
+                    texto_transcrito,
+                    fromMe,
+                    conexao_id,
+                    nome_contato=push_name,
+                 )
                  if should_proc:
                      msg = StandardMessage(
                          empresa_id=empresa_id,
                          canal="evolution",
                          identificador_origem=telefone,
                          conexao_id=conexao_id,
+                         nome_contato=push_name,
                          texto_mensagem=texto_transcrito,
                          is_human_agent=False,
                      )
@@ -328,6 +357,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             texto or "[Mensagem não suportada]",
             fromMe,
             conexao_id,
+            nome_contato=push_name,
             tipo_mensagem=tipo_mensagem,
             media_url=media_base64,
         )
@@ -338,6 +368,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 canal="evolution",
                 identificador_origem=telefone,
                 conexao_id=conexao_id,
+                nome_contato=push_name,
                 texto_mensagem=texto or "[Mensagem não suportada]",
                 is_human_agent=False
             )
