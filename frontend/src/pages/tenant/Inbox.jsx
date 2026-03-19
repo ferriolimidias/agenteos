@@ -424,7 +424,11 @@ export default function Inbox() {
   const hasPayload = Boolean(selectedFile || newMessage.trim());
 
   return (
-    <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+    <>
+      <div style={{ backgroundColor: 'red', color: 'white', padding: '15px', textAlign: 'center', fontWeight: 'bold', fontSize: '20px', width: '100%' }}>
+         🚨 TESTE DE SINCRONIA: O CURSOR E O GITHUB ESTÃO CONECTADOS! 🚨
+      </div>
+      <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
       {toast ? (
         <div className="fixed right-6 top-6 z-[80]">
           <div
@@ -695,6 +699,7 @@ export default function Inbox() {
           </div>
         )}
       </section>
-    </div>
+      </div>
+    </>
   );
 }
