@@ -3,6 +3,7 @@ import { ArrowRightLeft, FileAudio, FileImage, FileText, MessageSquare, Papercli
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
+import MessageList from "../../components/MessageList";
 
 export default function Inbox() {
   const [leads, setLeads] = useState([]);
@@ -278,6 +279,13 @@ export default function Inbox() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleComposerKeyDown = (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    if (selectedFile || loading || !newMessage.trim()) return;
+    handleSendMessage(event);
   };
 
   const baixarDocumento = (base64Data, nome = "documento") => {
@@ -588,43 +596,11 @@ export default function Inbox() {
             </header>
 
             <div className="flex-1 overflow-y-auto px-4 py-5">
-              <div
-                className="mx-auto flex max-w-4xl flex-col"
-                style={{
-                  backgroundImage:
-                    "radial-gradient(rgba(0,0,0,0.03) 1px, transparent 1px)",
-                  backgroundSize: "14px 14px",
-                }}
-              >
-                {messages?.map((msg, idx) => {
-                  const isMine = msg.from_me;
-                  const anterior = idx > 0 ? messages[idx - 1] : null;
-                  const mesmoAutorSequencia = Boolean(anterior) && Boolean(anterior?.from_me) === Boolean(msg?.from_me);
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex ${isMine ? "justify-end" : "justify-start"} ${mesmoAutorSequencia ? "mt-1" : "mt-3"}`}
-                    >
-                      <div
-                        className={`relative max-w-[80%] px-3 py-2 pb-5 shadow-sm ${
-                          isMine
-                            ? "ml-auto rounded-lg rounded-tr-none bg-[#d9fdd3] text-gray-900"
-                            : "mr-auto rounded-lg rounded-tl-none bg-white text-gray-800"
-                        }`}
-                      >
-                        {renderMensagemConteudo(msg)}
-                        <div className="absolute bottom-1 right-2 text-xs text-gray-500/80">
-                          {msg?.criado_em ? new Date(msg.criado_em).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div ref={messagesEndRef} />
-                {(!messages || messages.length === 0) ? (
-                  <div className="py-12 text-center text-sm text-gray-500">Nenhuma mensagem neste histórico.</div>
-                ) : null}
-              </div>
+              <MessageList
+                messages={messages || []}
+                renderMessageContent={renderMensagemConteudo}
+                messagesEndRef={messagesEndRef}
+              />
             </div>
 
             <footer className="border-t border-gray-200 bg-gray-100 p-3">
@@ -649,7 +625,7 @@ export default function Inbox() {
                   </div>
                 ) : null}
 
-                <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                <form onSubmit={handleSendMessage} className="flex items-end gap-2">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -665,12 +641,13 @@ export default function Inbox() {
                   >
                     <Paperclip size={18} />
                   </button>
-                  <input
-                    type="text"
+                  <textarea
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={handleComposerKeyDown}
                     placeholder="Digite uma mensagem"
-                    className="flex-1 rounded-full border-none bg-white px-4 py-2.5 text-sm outline-none shadow-sm focus:ring-0"
+                    rows={1}
+                    className="max-h-32 min-h-[44px] flex-1 resize-none rounded-3xl border-none bg-white px-4 py-3 text-sm outline-none shadow-sm focus:ring-0"
                     disabled={loading}
                   />
                   <button

@@ -142,10 +142,11 @@ async def save_history_and_check_pause(
                 "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
                 "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
             }
+            tipo_evento = "nova_mensagem_outbound" if from_me else "nova_mensagem_inbound"
             await manager.broadcast_to_empresa(
                 empresa_id,
                 {
-                    "tipo_evento": "nova_mensagem_inbound",
+                    "tipo_evento": tipo_evento,
                     "telefone": telefone,
                     "mensagem": mensagem_payload,
                 },

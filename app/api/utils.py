@@ -2,6 +2,7 @@ import asyncio
 import os
 from typing import List
 from app.api.schemas import StandardMessage
+from app.services.websocket_manager import manager
 
 LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()
 
@@ -303,6 +304,10 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                 async with AsyncSessionLocal() as session:
                     empresa_uuid = uuid.UUID(mensagens[0].empresa_id)
                     telefone = str(mensagens[0].identificador_origem)
+                    try:
+                        conexao_uuid = uuid.UUID(mensagens[0].conexao_id) if mensagens[0].conexao_id else None
+                    except (ValueError, TypeError):
+                        conexao_uuid = None
                     
                     result = await session.execute(
                         select(CRMLead).where(
@@ -314,12 +319,28 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                     if lead:
                         nova_msg = MensagemHistorico(
                             lead_id=lead.id,
-                            conexao_id=uuid.UUID(mensagens[0].conexao_id) if mensagens[0].conexao_id else None,
+                            conexao_id=conexao_uuid,
                             texto=resposta,
                             from_me=True
                         )
                         session.add(nova_msg)
                         await session.commit()
+                        mensagem_payload = {
+                            "id": str(nova_msg.id),
+                            "texto": str(nova_msg.texto or ""),
+                            "from_me": bool(nova_msg.from_me),
+                            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+                            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+                            "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+                        }
+                        await manager.broadcast_to_empresa(
+                            mensagens[0].empresa_id,
+                            {
+                                "tipo_evento": "nova_mensagem_outbound",
+                                "telefone": telefone,
+                                "mensagem": mensagem_payload,
+                            },
+                        )
             except Exception as e:
                 print(f"Erro ao salvar histórico do Grafo (Webhook): {e}")
             
