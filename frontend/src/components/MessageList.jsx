@@ -4,6 +4,8 @@ export default function MessageList({
   messages = [],
   renderMessageContent,
   messagesEndRef,
+  contactName,
+  contactPhotoUrl,
 }) {
   return (
     <div
@@ -25,6 +27,8 @@ export default function MessageList({
             message={message}
             isGrouped={isGrouped}
             renderContent={renderMessageContent}
+            contactName={contactName}
+            contactPhotoUrl={contactPhotoUrl}
           />
         );
       })}

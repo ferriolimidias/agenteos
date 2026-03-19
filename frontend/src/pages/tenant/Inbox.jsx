@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import { ArrowRightLeft, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, UserCircle, X } from "lucide-react";
+import { ArrowRightLeft, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import MessageList from "../../components/MessageList";
+import ContactAvatar from "../../components/ContactAvatar";
 
 export default function Inbox() {
   const [leads, setLeads] = useState([]);
@@ -62,6 +63,20 @@ export default function Inbox() {
     }
   };
 
+  const fetchLeadPhoto = async (lead) => {
+    const leadId = lead?.id;
+    const telefone = lead?.telefone_contato;
+    if (!empresa_id || !leadId || !telefone) return;
+
+    try {
+      const res = await api.get(`/empresas/${empresa_id}/inbox/${telefone}/foto`);
+      const fotoUrl = res.data?.foto_url || null;
+      updateLeadInState(leadId, { foto_url: fotoUrl });
+    } catch (e) {
+      console.error("Erro ao buscar foto do lead no Inbox:", e);
+    }
+  };
+
   const fetchDestinos = async () => {
     if (!empresa_id) return;
     try {
@@ -105,6 +120,9 @@ export default function Inbox() {
   useEffect(() => {
     if (selectedLead) {
       fetchMessages(selectedLead.telefone_contato);
+      if (!selectedLead.foto_url) {
+        fetchLeadPhoto(selectedLead);
+      }
     }
   }, [selectedLead, empresa_id]);
 
@@ -451,6 +469,10 @@ export default function Inbox() {
     setSelectedLead((prev) => (prev?.id === leadId ? { ...prev, ...updates } : prev));
   };
 
+  const handleSelectLead = (lead) => {
+    setSelectedLead(lead);
+  };
+
   const handleLeadTagsChange = async (leadId, nextTags) => {
     await api.put(`/empresas/${empresa_id}/crm/leads/${leadId}`, { tags: nextTags });
     updateLeadInState(leadId, { tags: nextTags });
@@ -534,15 +556,18 @@ export default function Inbox() {
           {leads?.map((lead) => (
             <div
               key={lead.id}
-              onClick={() => setSelectedLead(lead)}
+              onClick={() => handleSelectLead(lead)}
               className={`cursor-pointer border-b border-gray-100 px-4 py-3 transition-colors duration-200 ${
                 selectedLead?.id === lead.id ? "bg-blue-50" : "hover:bg-gray-50"
               }`}
             >
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-600">
-                  <UserCircle size={20} />
-                </div>
+                <ContactAvatar
+                  name={lead.nome_contato}
+                  photoUrl={lead.foto_url}
+                  size="md"
+                  className="flex-shrink-0"
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="truncate text-sm font-semibold text-gray-900">{lead.nome_contato}</p>
@@ -576,9 +601,12 @@ export default function Inbox() {
             <header className="z-20 border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-600">
-                    <UserCircle size={22} />
-                  </div>
+                  <ContactAvatar
+                    name={selectedLead.nome_contato}
+                    photoUrl={selectedLead.foto_url}
+                    size="lg"
+                    className="flex-shrink-0"
+                  />
                   <div className="min-w-0">
                     <h3 className="truncate text-sm font-semibold text-gray-900">{selectedLead.nome_contato}</h3>
                     <p className="truncate text-xs text-gray-500">{selectedLead.telefone_contato}</p>
@@ -695,6 +723,8 @@ export default function Inbox() {
                 messages={messages || []}
                 renderMessageContent={renderMensagemConteudo}
                 messagesEndRef={messagesEndRef}
+                contactName={selectedLead?.nome_contato}
+                contactPhotoUrl={selectedLead?.foto_url}
               />
             </div>
 
