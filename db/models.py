@@ -212,8 +212,10 @@ class VetorConhecimento(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     documento_id = Column(UUID(as_uuid=True), ForeignKey("documentos_base.id", ondelete="CASCADE"), nullable=False)
     conteudo_texto = Column(Text, nullable=False)
+    source_name = Column(String, nullable=True)
+    source_type = Column(String, nullable=True)
     # Required: CREATE EXTENSION IF NOT EXISTS vector in your db
-    # 1536 is the common dimension for OpenAI's text-embedding-ada-002
+    # 1536 is the dimension used by text-embedding-3-small
     embedding = Column(Vector(1536))
 
     documento = relationship("DocumentoBase", back_populates="vetores")
@@ -225,6 +227,8 @@ class Conhecimento(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
     conteudo = Column(Text, nullable=False)
+    source_name = Column(String, nullable=True)
+    source_type = Column(String, nullable=True)
     embedding = Column(Vector(1536))
     
     empresa = relationship("Empresa")

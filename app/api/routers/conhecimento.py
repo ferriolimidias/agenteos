@@ -12,7 +12,7 @@ router = APIRouter(
 )
 
 # Inicializando o modelo de embeddings
-embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_conhecimento(upload: ConhecimentoUpload, db: AsyncSession = Depends(get_db)):
@@ -26,6 +26,8 @@ async def upload_conhecimento(upload: ConhecimentoUpload, db: AsyncSession = Dep
         # Salvar no banco de dados
         novo_conhecimento = Conhecimento(
             conteudo=upload.conteudo,
+            source_name=upload.source_name or "Texto Manual",
+            source_type=upload.source_type or "texto",
             embedding=vetor
         )
         

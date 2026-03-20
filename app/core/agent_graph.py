@@ -25,7 +25,7 @@ def _conversation_debug_log(message: str, flush: bool = False) -> None:
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 # Removido LLM global: será instanciado via get_llm
-embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -> Any:
     api_key = None
@@ -322,24 +322,34 @@ from langgraph.prebuilt import create_react_agent
 
 async def buscar_conhecimento(pergunta: str, empresa_uuid):
     print(f"[RAG] Buscando conhecimento para a pergunta: '{pergunta}' na empresa {empresa_uuid}")
-    pergunta_embedding = await embeddings_model.aembed_query(pergunta)
-    
-    async with AsyncSessionLocal() as session:
-        # Busca vetorial filtrada por empresa e ordenada pela distância de cosseno
-        query = select(Conhecimento).where(
-            Conhecimento.empresa_id == empresa_uuid
-        ).order_by(
-            Conhecimento.embedding.cosine_distance(pergunta_embedding)
-        ).limit(3)
-        
-        resultado = await session.execute(query)
-        trechos = resultado.scalars().all()
-        
-        if not trechos:
-            return "Nenhum contexto adicional encontrado na base de conhecimento."
-            
-        contexto = "\n\n".join([f"Contexto {i+1}:\n{t.conteudo}" for i, t in enumerate(trechos)])
-        return contexto
+    try:
+        pergunta_embedding = await embeddings_model.aembed_query(pergunta)
+
+        async with AsyncSessionLocal() as session:
+            # Busca vetorial filtrada por empresa e ordenada pela distância de cosseno
+            query = select(Conhecimento).where(
+                Conhecimento.empresa_id == empresa_uuid
+            ).order_by(
+                Conhecimento.embedding.cosine_distance(pergunta_embedding)
+            ).limit(3)
+
+            resultado = await session.execute(query)
+            trechos = resultado.scalars().all()
+
+            if not trechos:
+                return {"dados": "", "fontes": [], "erros": []}
+
+            dados = "\n\n".join([f"Contexto {i+1}:\n{t.conteudo}" for i, t in enumerate(trechos)])
+            fontes = sorted(
+                {
+                    str(t.source_name).strip()
+                    for t in trechos
+                    if getattr(t, "source_name", None) and str(t.source_name).strip()
+                }
+            )
+            return {"dados": dados, "fontes": fontes, "erros": []}
+    except Exception as e:
+        return {"dados": "", "fontes": [], "erros": [f"Erro ao buscar conhecimento: {str(e)}"]}
 
 # 1. Definir o Estado
 class AgentState(TypedDict):
@@ -799,12 +809,22 @@ async def node_especialista_dinamico(state: AgentState):
         dados_crus_partes: list[str] = []
         fontes_usadas: list[str] = []
         erros_extracao: list[str] = []
+        rag_contexto_aplicado = False
         
         if intencao == "duvida" and empresa_uuid:
-            contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-            contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{contexto_rag}"
-            dados_crus_partes.append(f"[RAG]: {contexto_rag}")
-            fontes_usadas.append("RAG")
+            resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
+            dados_rag = str(resultado_rag.get("dados", "") or "").strip()
+            fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
+            erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
+
+            if dados_rag:
+                contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
+                dados_crus_partes.append(f"[RAG]: {dados_rag}")
+            if fontes_rag:
+                fontes_usadas.extend(fontes_rag)
+            if erros_rag:
+                erros_extracao.extend(erros_rag)
+            rag_contexto_aplicado = True
             
         prompt_base = (
             "Você é um extrator de dados.\n"
@@ -836,11 +856,20 @@ async def node_especialista_dinamico(state: AgentState):
                 
                 if especialista_db:
                     # RAG Check
-                    if getattr(especialista_db, 'usar_rag', False) or intencao == "duvida":
-                        contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-                        contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{contexto_rag}"
-                        dados_crus_partes.append(f"[RAG]: {contexto_rag}")
-                        fontes_usadas.append("RAG")
+                    if (getattr(especialista_db, 'usar_rag', False) or intencao == "duvida") and not rag_contexto_aplicado:
+                        resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
+                        dados_rag = str(resultado_rag.get("dados", "") or "").strip()
+                        fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
+                        erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
+
+                        if dados_rag:
+                            contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
+                            dados_crus_partes.append(f"[RAG]: {dados_rag}")
+                        if fontes_rag:
+                            fontes_usadas.extend(fontes_rag)
+                        if erros_rag:
+                            erros_extracao.extend(erros_rag)
+                        rag_contexto_aplicado = True
 
                     prompt_base = (
                         "Você é um extrator de dados.\n"

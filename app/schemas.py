@@ -60,6 +60,8 @@ class AgenteResponse(AgenteBase):
 # --- Schemas para Conhecimento ---
 class ConhecimentoUpload(BaseModel):
     conteudo: str
+    source_name: str | None = None
+    source_type: str | None = "texto"
 
 # --- Schemas para Especialista ---
 class EspecialistaBase(BaseModel):

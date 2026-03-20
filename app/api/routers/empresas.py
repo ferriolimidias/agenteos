@@ -780,10 +780,12 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
 
     texto_para_processar = ""
     label_fonte = ""
+    source_name = ""
 
     if data.tipo == "texto":
         texto_para_processar = data.conteudo
         label_fonte = "[Texto Manual]"
+        source_name = "Texto Manual"
     elif data.tipo == "url":
         try:
             import requests
@@ -800,6 +802,7 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
                 
             texto_para_processar = soup.get_text(separator=' ', strip=True)
             label_fonte = f"[{data.conteudo}]"
+            source_name = data.conteudo
             
             if not texto_para_processar:
                  raise ValueError("Nenhum texto principal encontrado na URL.")
@@ -821,7 +824,7 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
         
         from langchain_openai import OpenAIEmbeddings
         from db.models import Conhecimento
-        embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+        embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
         chunks_embeddings = await embeddings_model.aembed_documents(chunks)
         
         primeiro_id = None
@@ -841,6 +844,8 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
             novo_vetor = Conhecimento(
                 empresa_id=empresa_id,
                 conteudo=chunk,
+                source_name=source_name,
+                source_type=data.tipo,
                 embedding=emb
             )
             db.add(novo_vetor)
@@ -889,7 +894,7 @@ async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = Fil
         
         from langchain_openai import OpenAIEmbeddings
         from db.models import Conhecimento
-        embeddings_model = OpenAIEmbeddings(model="text-embedding-ada-002")
+        embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
         chunks_embeddings = await embeddings_model.aembed_documents(chunks)
         
         for chunk, emb in zip(chunks, chunks_embeddings):
@@ -906,6 +911,8 @@ async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = Fil
             novo_vetor = Conhecimento(
                 empresa_id=empresa_id,
                 conteudo=chunk,
+                source_name=file.filename or "arquivo.pdf",
+                source_type="pdf",
                 embedding=emb
             )
             db.add(novo_vetor)
