@@ -7,7 +7,7 @@ from datetime import datetime
 import PyPDF2
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import delete, update
+from sqlalchemy import delete, update, func, or_
 from typing import List
 from fastapi.responses import Response
 
@@ -17,6 +17,7 @@ from db.models import (
     CampanhaDisparo,
     CampanhaDisparoStatus,
     Empresa,
+    Conhecimento,
     Usuario,
     ConhecimentoRAG,
     CRMFunil,
@@ -573,6 +574,10 @@ class RAGCreateRequest(BaseModel):
     conteudo: str
 
 
+class RAGDeleteRequest(BaseModel):
+    source_name: str
+
+
 class CRMLeadResponse(BaseModel):
     id: str
     nome_contato: str
@@ -758,12 +763,34 @@ class CampanhaPreviewResponse(BaseModel):
 @router.get("/{empresa_id}/rag")
 async def listar_conhecimento_rag(empresa_id: str, db: AsyncSession = Depends(get_db)):
     """
-    Retorna a lista de conhecimentos RAG da empresa.
+    Retorna a lista de documentos lógicos da base vetorial da empresa.
     """
     try:
-        result = await db.execute(select(ConhecimentoRAG).where(ConhecimentoRAG.empresa_id == empresa_id))
-        conhecimentos = result.scalars().all()
-        return [{"id": str(c.id), "tipo": c.tipo, "conteudo": c.conteudo, "status": c.status} for c in conhecimentos]
+        result = await db.execute(
+            select(
+                Conhecimento.source_name.label("source_name"),
+                Conhecimento.source_type.label("source_type"),
+                func.count(Conhecimento.id).label("total_chunks"),
+                func.min(Conhecimento.criado_em).label("criado_em"),
+            )
+            .where(
+                Conhecimento.empresa_id == empresa_id,
+                Conhecimento.source_name.isnot(None),
+                func.length(func.trim(Conhecimento.source_name)) > 0,
+            )
+            .group_by(Conhecimento.source_name, Conhecimento.source_type)
+            .order_by(func.min(Conhecimento.criado_em).desc())
+        )
+        documentos = result.all()
+        return [
+            {
+                "source_name": row.source_name,
+                "source_type": row.source_type,
+                "total_chunks": int(row.total_chunks or 0),
+                "criado_em": row.criado_em.isoformat() if row.criado_em else None,
+            }
+            for row in documentos
+        ]
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -823,7 +850,6 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
         chunks = text_splitter.split_text(texto_para_processar)
         
         from langchain_openai import OpenAIEmbeddings
-        from db.models import Conhecimento
         embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
         chunks_embeddings = await embeddings_model.aembed_documents(chunks)
         
@@ -833,6 +859,8 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
                 empresa_id=empresa_id,
                 tipo=data.tipo,
                 conteudo=f"{label_fonte} " + chunk,
+                source_name=source_name,
+                source_type=data.tipo,
                 status="Ativo"
             )
             db.add(novo_chunk_rag)
@@ -893,7 +921,6 @@ async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = Fil
         chunks = text_splitter.split_text(text_content)
         
         from langchain_openai import OpenAIEmbeddings
-        from db.models import Conhecimento
         embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
         chunks_embeddings = await embeddings_model.aembed_documents(chunks)
         
@@ -903,6 +930,8 @@ async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = Fil
                 empresa_id=empresa_id,
                 tipo="pdf",
                 conteudo=f"[{file.filename}] " + chunk,
+                source_name=file.filename or "arquivo.pdf",
+                source_type="pdf",
                 status="Ativo"
             )
             db.add(novo_chunk_rag)
@@ -923,6 +952,55 @@ async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = Fil
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{empresa_id}/rag")
+async def deletar_conhecimento_rag_por_source_name(
+    empresa_id: str,
+    payload: RAGDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Exclui um documento lógico da base RAG pelo source_name da empresa.
+    Remove chunks vetoriais (conhecimento) e chunks de visualização (conhecimento_rag).
+    """
+    source_name = str(payload.source_name or "").strip()
+    if not source_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="source_name é obrigatório.",
+        )
+
+    try:
+        resultado_conhecimento = await db.execute(
+            delete(Conhecimento).where(
+                Conhecimento.empresa_id == empresa_id,
+                Conhecimento.source_name == source_name,
+            )
+        )
+        resultado_rag = await db.execute(
+            delete(ConhecimentoRAG).where(
+                ConhecimentoRAG.empresa_id == empresa_id,
+                or_(
+                    ConhecimentoRAG.source_name == source_name,
+                    ConhecimentoRAG.conteudo.like(f"[{source_name}] %"),
+                ),
+            )
+        )
+        await db.commit()
+
+        return {
+            "mensagem": "Documento RAG removido com sucesso.",
+            "source_name": source_name,
+            "registros_conhecimento_removidos": int(resultado_conhecimento.rowcount or 0),
+            "registros_conhecimento_rag_removidos": int(resultado_rag.rowcount or 0),
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao excluir conhecimento RAG: {str(e)}",
+        )
 
 
 @router.get("/{empresa_id}/crm", response_model=CRMFunilResponse)

@@ -10,7 +10,6 @@ import redis.asyncio as redis
 
 from app.api.routers import empresas
 from app.api.routers import agentes
-from app.api.routers import conhecimento
 from app.api.routers import especialistas
 from app.api.routers import api_connections
 from app.api.routers import auth
@@ -55,7 +54,6 @@ app.add_middleware(
 
 app.include_router(empresas.router, prefix="/api")
 app.include_router(agentes.router, prefix="/api")
-app.include_router(conhecimento.router, prefix="/api")
 app.include_router(especialistas.router, prefix="/api")
 app.include_router(api_connections.router, prefix="/api")
 app.include_router(orquestrador.router, prefix="/api/admin")

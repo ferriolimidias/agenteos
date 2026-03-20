@@ -87,7 +87,6 @@ class Empresa(Base):
     agentes = relationship("Agente", back_populates="empresa", cascade="all, delete-orphan")
     ferramentas = relationship("FerramentaAPI", back_populates="empresa", cascade="all, delete-orphan")
     parametros_cadencia = relationship("ParametrosCadencia", uselist=False, back_populates="empresa", cascade="all, delete-orphan")
-    documentos = relationship("DocumentoBase", back_populates="empresa", cascade="all, delete-orphan")
     especialistas = relationship("Especialista", back_populates="empresa", cascade="all, delete-orphan")
     api_connections = relationship("APIConnection", back_populates="empresa", cascade="all, delete-orphan")
     usuarios = relationship("Usuario", back_populates="empresa", cascade="all, delete-orphan")
@@ -194,33 +193,6 @@ class ParametrosCadencia(Base):
     empresa = relationship("Empresa", back_populates="parametros_cadencia")
 
 
-class DocumentoBase(Base):
-    __tablename__ = "documentos_base"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
-    nome_arquivo = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="PROCESSING")
-
-    empresa = relationship("Empresa", back_populates="documentos")
-    vetores = relationship("VetorConhecimento", back_populates="documento", cascade="all, delete-orphan")
-
-
-class VetorConhecimento(Base):
-    __tablename__ = "vetores_conhecimento"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    documento_id = Column(UUID(as_uuid=True), ForeignKey("documentos_base.id", ondelete="CASCADE"), nullable=False)
-    conteudo_texto = Column(Text, nullable=False)
-    source_name = Column(String, nullable=True)
-    source_type = Column(String, nullable=True)
-    # Required: CREATE EXTENSION IF NOT EXISTS vector in your db
-    # 1536 is the dimension used by text-embedding-3-small
-    embedding = Column(Vector(1536))
-
-    documento = relationship("DocumentoBase", back_populates="vetores")
-
-
 class Conhecimento(Base):
     __tablename__ = "conhecimento"
 
@@ -229,6 +201,7 @@ class Conhecimento(Base):
     conteudo = Column(Text, nullable=False)
     source_name = Column(String, nullable=True)
     source_type = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
     embedding = Column(Vector(1536))
     
     empresa = relationship("Empresa")
@@ -309,6 +282,9 @@ class ConhecimentoRAG(Base):
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
     tipo = Column(String, nullable=False)  # 'texto', 'url', 'pdf'
     conteudo = Column(Text, nullable=False)
+    source_name = Column(String, nullable=True)
+    source_type = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
     status = Column(String, nullable=False, default="PROCESSING")
 
     empresa = relationship("Empresa", back_populates="conhecimentos_rag")
