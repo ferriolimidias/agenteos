@@ -560,10 +560,12 @@ export default function Inbox() {
 
   const filteredLeads = useMemo(() => {
     const termo = String(searchTerm || "").trim().toLowerCase();
+    console.log("Leads carregados:", leads);
 
     return (leads || []).filter((lead) => {
-      const statusLead = String(lead?.status_atendimento || "aberto").toLowerCase();
-      if (statusLead !== filtroStatus) return false;
+      const statusLead = (lead?.status_atendimento || "aberto").toLowerCase();
+      const statusSelecionado = filtroStatus.toLowerCase();
+      if (statusLead !== statusSelecionado) return false;
 
       if (termo) {
         const nome = String(lead?.nome_contato || "").toLowerCase();
@@ -574,17 +576,22 @@ export default function Inbox() {
       if (abaAtiva === "Todos") return true;
 
       const tagsLead = lead?.tags || [];
+      if (abaAtiva === "Sem Grupo" && tagsLead.length === 0) return true;
+
       const tagsOficiaisLead = tagsLead
         .map((tag) => tagsOficiaisPorNome.get(String(tag || "").trim().toLowerCase()))
         .filter(Boolean);
 
       if (abaAtiva === "Sem Grupo") {
-        return tagsOficiaisLead.some((tag) => !tag?.grupo_id);
+        return tagsOficiaisLead.length === 0 || tagsOficiaisLead.every((tag) => {
+          const grupoId = String(tag?.grupo_id || "");
+          return !grupoId || !grupos.some((grupo) => String(grupo?.id || "") === grupoId);
+        });
       }
 
       return tagsOficiaisLead.some((tag) => String(tag?.grupo_id || "") === abaAtiva);
     });
-  }, [abaAtiva, filtroStatus, leads, searchTerm, tagsOficiaisPorNome]);
+  }, [abaAtiva, filtroStatus, grupos, leads, searchTerm, tagsOficiaisPorNome]);
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
   const selectedLeadPaused = Boolean(selectedLead?.bot_pausado);
@@ -595,7 +602,7 @@ export default function Inbox() {
   const statusConcluir = selectedLeadStatus === "concluido";
 
   return (
-    <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+    <div className="relative flex h-[calc(100vh-4rem)] w-full overflow-hidden bg-white">
       {toast ? (
         <div className="fixed right-6 top-6 z-[80]">
           <div
@@ -621,7 +628,7 @@ export default function Inbox() {
         </div>
       ) : null}
 
-      <aside className="w-80 flex-shrink-0 border-r border-gray-200 bg-white">
+      <aside className="flex h-full w-full shrink-0 flex-col border-r border-gray-200 bg-white md:w-[320px] lg:w-[360px]">
         <div className="border-b border-gray-200 px-4 py-4">
           <h2 className="text-lg font-semibold text-gray-800">Conversas</h2>
         </div>
@@ -656,49 +663,21 @@ export default function Inbox() {
             />
           </div>
 
-          <div className="mt-3 overflow-x-auto scrollbar-none">
-            <div className="flex min-w-max gap-2 pb-1">
-              <button
-                type="button"
-                onClick={() => setAbaAtiva("Todos")}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                  abaAtiva === "Todos"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                Todos
-              </button>
-              {grupos.map((grupo) => (
-                <button
-                  key={grupo.id}
-                  type="button"
-                  onClick={() => setAbaAtiva(grupo.id)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                    abaAtiva === grupo.id
-                      ? "text-white"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  }`}
-                  style={abaAtiva === grupo.id ? { backgroundColor: grupo.cor || "#2563eb" } : undefined}
-                >
-                  {grupo.nome}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setAbaAtiva("Sem Grupo")}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                  abaAtiva === "Sem Grupo"
-                    ? "bg-slate-600 text-white"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                Sem Grupo
-              </button>
-            </div>
-          </div>
+          <select
+            value={abaAtiva}
+            onChange={(e) => setAbaAtiva(e.target.value)}
+            className="mb-3 mt-3 w-full rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="Todos">Todos os Departamentos</option>
+            {grupos.map((grupo) => (
+              <option key={grupo.id} value={grupo.id}>
+                {grupo.nome}
+              </option>
+            ))}
+            <option value="Sem Grupo">Sem Departamento</option>
+          </select>
         </div>
-        <div className="h-[calc(100%-182px)] overflow-y-auto">
+        <div className="flex-1 overflow-y-auto">
           {filteredLeads?.map((lead) => (
             <div
               key={lead.id}
@@ -745,7 +724,7 @@ export default function Inbox() {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#efeae2]">
+      <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[#f0f2f5]">
         {selectedLead ? (
           <>
             <header className="z-20 border-b border-gray-200 bg-white px-4 py-3 shadow-sm">

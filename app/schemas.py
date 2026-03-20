@@ -137,7 +137,7 @@ class ConversaListaResponse(BaseModel):
     foto_url: str | None = None
     telefone_contato: str | None = None
     ultima_mensagem: str | None = None
-    status_atendimento: str = "aberto"
+    status_atendimento: str | None = "aberto"
     bot_pausado: bool = False
     bot_pausado_ate: str | None = None
     etapa_crm: str | None = None
