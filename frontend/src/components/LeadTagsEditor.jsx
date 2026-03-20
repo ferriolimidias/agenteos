@@ -61,7 +61,7 @@ export default function LeadTagsEditor({
   onChange,
   compact = false,
   className = "",
-  placeholder = "Digite uma tag e pressione Enter",
+  placeholder = "Buscar tags oficiais...",
   tagDefinitions = [],
 }) {
   const [inputValue, setInputValue] = useState("");
@@ -74,13 +74,19 @@ export default function LeadTagsEditor({
 
   const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
   const tagDefinitionsMap = useMemo(() => getTagDefinitionMap(tagDefinitions), [tagDefinitions]);
+  const filteredTagDefinitions = useMemo(() => {
+    const query = String(inputValue || "").trim().toLowerCase();
+    return (tagDefinitions || []).filter((definition) => {
+      const nome = String(definition?.nome || "").trim();
+      if (!nome) return false;
+      if (normalizedTags.some((tag) => tag.toLowerCase() === nome.toLowerCase())) return false;
+      if (!query) return true;
+      return nome.toLowerCase().includes(query);
+    });
+  }, [inputValue, normalizedTags, tagDefinitions]);
   const suggestedTags = useMemo(
-    () =>
-      (tagDefinitions || []).filter((definition) => {
-        const nome = String(definition?.nome || "").trim();
-        return nome && !normalizedTags.some((tag) => tag.toLowerCase() === nome.toLowerCase());
-      }),
-    [tagDefinitions, normalizedTags]
+    () => filteredTagDefinitions,
+    [filteredTagDefinitions]
   );
 
   const submitTags = async (nextTags) => {
@@ -101,11 +107,23 @@ export default function LeadTagsEditor({
   const handleAddTag = async () => {
     const nextTag = inputValue.trim();
     if (!nextTag) return;
-    if (normalizedTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())) {
-      setInputValue("");
+    if (tagDefinitions.length === 0) {
+      setError("Cadastre tags oficiais na Gestão de Tags para poder selecionar.");
       return;
     }
-    await submitTags([...normalizedTags, nextTag]);
+    if (normalizedTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())) {
+      setInputValue("");
+      setError("");
+      return;
+    }
+    const officialMatch = tagDefinitions.find(
+      (definition) => String(definition?.nome || "").trim().toLowerCase() === nextTag.toLowerCase()
+    );
+    if (!officialMatch) {
+      setError("Tag não encontrada no catálogo oficial.");
+      return;
+    }
+    await submitTags([...normalizedTags, officialMatch.nome]);
   };
 
   const handleRemoveTag = async (tagToRemove) => {
@@ -165,6 +183,12 @@ export default function LeadTagsEditor({
         </div>
       ) : null}
 
+      {tagDefinitions.length === 0 ? (
+        <p className="text-xs text-amber-600">
+          Nenhuma tag oficial cadastrada. Peça ao administrador para criar tags na Gestão de Tags.
+        </p>
+      ) : null}
+
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Plus
@@ -178,7 +202,10 @@ export default function LeadTagsEditor({
             value={inputValue}
             disabled={saving}
             onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              if (error) setError("");
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -208,10 +235,10 @@ export default function LeadTagsEditor({
               e.stopPropagation();
               handleAddTag();
             }}
-            disabled={saving || !inputValue.trim()}
+            disabled={saving || !inputValue.trim() || tagDefinitions.length === 0}
             className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving ? "Salvando..." : "Adicionar"}
+            {saving ? "Salvando..." : "Selecionar"}
           </button>
         )}
       </div>

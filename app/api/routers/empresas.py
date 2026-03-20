@@ -28,6 +28,7 @@ from db.models import (
     Conexao,
     DestinosTransferencia,
     HistoricoTransferencia,
+    TagGroup,
     TagCRM,
     TemplateMensagem,
     is_root_admin_email,
@@ -607,6 +608,7 @@ class CRMLeadUpdateRequest(BaseModel):
     telefone_contato: str | None = None
     historico_resumo: str | None = None
     etapa_id: str | None = None
+    status_atendimento: str | None = None
     tags: List[str] | None = None
     dados_adicionais: Dict[str, Any] | None = None
 
@@ -647,10 +649,31 @@ class TransferenciaManualRequest(BaseModel):
     destino_id: str
 
 
+class TagGroupBase(BaseModel):
+    nome: str
+    cor: str | None = None
+    ordem: int = 0
+
+
+class TagGroupCreate(TagGroupBase):
+    pass
+
+
+class TagGroupUpdate(BaseModel):
+    nome: str | None = None
+    cor: str | None = None
+    ordem: int | None = None
+
+
+class TagGroupResponse(TagGroupBase):
+    id: str
+
+
 class TagCRMBase(BaseModel):
     nome: str
     cor: str = "#2563eb"
     instrucao_ia: str | None = None
+    grupo_id: str | None = None
 
 
 class TagCRMCreate(TagCRMBase):
@@ -661,6 +684,7 @@ class TagCRMUpdate(BaseModel):
     nome: str | None = None
     cor: str | None = None
     instrucao_ia: str | None = None
+    grupo_id: str | None = None
 
 
 class TagCRMResponse(TagCRMBase):
@@ -1160,6 +1184,160 @@ async def listar_historico_transferencia(empresa_id: str, db: AsyncSession = Dep
     ]
 
 
+@router.get("/{empresa_id}/crm/tags/grupos", response_model=List[TagGroupResponse])
+async def listar_tags_grupos(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(TagGroup)
+        .where(TagGroup.empresa_id == emp_uuid)
+        .order_by(TagGroup.ordem.asc(), TagGroup.nome.asc())
+    )
+    grupos = result.scalars().all()
+    return [
+        {
+            "id": str(grupo.id),
+            "nome": grupo.nome,
+            "cor": grupo.cor,
+            "ordem": grupo.ordem,
+        }
+        for grupo in grupos
+    ]
+
+
+@router.post("/{empresa_id}/crm/tags/grupos", response_model=TagGroupResponse, status_code=status.HTTP_201_CREATED)
+async def criar_tag_grupo(empresa_id: str, data: TagGroupCreate, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    nome_limpo = str(data.nome or "").strip()
+    if not nome_limpo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome do grupo é obrigatório")
+
+    result = await db.execute(
+        select(TagGroup).where(
+            TagGroup.empresa_id == emp_uuid,
+            TagGroup.nome.ilike(nome_limpo),
+        )
+    )
+    existente = result.scalars().first()
+    if existente:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Já existe um grupo com esse nome")
+
+    grupo = TagGroup(
+        empresa_id=emp_uuid,
+        nome=nome_limpo,
+        cor=_normalizar_cor_tag(data.cor) if data.cor else None,
+        ordem=data.ordem or 0,
+    )
+    db.add(grupo)
+
+    try:
+        await db.commit()
+        await db.refresh(grupo)
+        return {
+            "id": str(grupo.id),
+            "nome": grupo.nome,
+            "cor": grupo.cor,
+            "ordem": grupo.ordem,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao criar grupo de tags: {str(e)}")
+
+
+@router.put("/{empresa_id}/crm/tags/grupos/{grupo_id}", response_model=TagGroupResponse)
+async def atualizar_tag_grupo(
+    empresa_id: str,
+    grupo_id: str,
+    data: TagGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        grupo_uuid = uuid.UUID(grupo_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TagGroup).where(
+            TagGroup.id == grupo_uuid,
+            TagGroup.empresa_id == emp_uuid,
+        )
+    )
+    grupo = result.scalars().first()
+    if not grupo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo não encontrado")
+
+    if data.nome is not None:
+        nome_limpo = str(data.nome).strip()
+        if not nome_limpo:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome do grupo é obrigatório")
+        result_dup = await db.execute(
+            select(TagGroup).where(
+                TagGroup.empresa_id == emp_uuid,
+                TagGroup.nome.ilike(nome_limpo),
+                TagGroup.id != grupo.id,
+            )
+        )
+        if result_dup.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Já existe um grupo com esse nome")
+        grupo.nome = nome_limpo
+    if data.cor is not None:
+        grupo.cor = _normalizar_cor_tag(data.cor) if data.cor else None
+    if data.ordem is not None:
+        grupo.ordem = data.ordem
+
+    try:
+        await db.commit()
+        await db.refresh(grupo)
+        return {
+            "id": str(grupo.id),
+            "nome": grupo.nome,
+            "cor": grupo.cor,
+            "ordem": grupo.ordem,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar grupo de tags: {str(e)}")
+
+
+@router.delete("/{empresa_id}/crm/tags/grupos/{grupo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def excluir_tag_grupo(empresa_id: str, grupo_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        grupo_uuid = uuid.UUID(grupo_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(TagGroup).where(
+            TagGroup.id == grupo_uuid,
+            TagGroup.empresa_id == emp_uuid,
+        )
+    )
+    grupo = result.scalars().first()
+    if not grupo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo não encontrado")
+
+    try:
+        await db.execute(
+            update(TagCRM)
+            .where(TagCRM.grupo_id == grupo.id, TagCRM.empresa_id == emp_uuid)
+            .values(grupo_id=None)
+        )
+        await db.delete(grupo)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao excluir grupo de tags: {str(e)}")
+
+
 @router.get("/{empresa_id}/crm/tags/oficiais", response_model=List[TagCRMResponse])
 async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(get_db)):
     try:
@@ -1179,6 +1357,7 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "nome": tag.nome,
             "cor": tag.cor or "#2563eb",
             "instrucao_ia": tag.instrucao_ia,
+            "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
         for tag in tags
@@ -1206,8 +1385,24 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
     if existente:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Já existe uma tag oficial com esse nome")
 
+    grupo_uuid = None
+    if data.grupo_id:
+        try:
+            grupo_uuid = uuid.UUID(str(data.grupo_id))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="grupo_id inválido")
+        result_grupo = await db.execute(
+            select(TagGroup).where(
+                TagGroup.id == grupo_uuid,
+                TagGroup.empresa_id == emp_uuid,
+            )
+        )
+        if not result_grupo.scalars().first():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo de tags não encontrado")
+
     tag = TagCRM(
         empresa_id=emp_uuid,
+        grupo_id=grupo_uuid,
         nome=nome_limpo,
         cor=_normalizar_cor_tag(data.cor),
         instrucao_ia=(data.instrucao_ia or "").strip() or None,
@@ -1222,6 +1417,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "nome": tag.nome,
             "cor": tag.cor,
             "instrucao_ia": tag.instrucao_ia,
+            "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -1270,6 +1466,24 @@ async def atualizar_tag_crm_oficial(
         tag.cor = _normalizar_cor_tag(data.cor)
     if data.instrucao_ia is not None:
         tag.instrucao_ia = str(data.instrucao_ia).strip() or None
+    if data.grupo_id is not None:
+        if data.grupo_id == "":
+            tag.grupo_id = None
+        else:
+            try:
+                grupo_uuid = uuid.UUID(str(data.grupo_id))
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="grupo_id inválido")
+            result_grupo = await db.execute(
+                select(TagGroup).where(
+                    TagGroup.id == grupo_uuid,
+                    TagGroup.empresa_id == emp_uuid,
+                )
+            )
+            grupo = result_grupo.scalars().first()
+            if not grupo:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo de tags não encontrado")
+            tag.grupo_id = grupo.id
 
     try:
         await db.commit()
@@ -1279,6 +1493,7 @@ async def atualizar_tag_crm_oficial(
             "nome": tag.nome,
             "cor": tag.cor,
             "instrucao_ia": tag.instrucao_ia,
+            "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -1743,6 +1958,7 @@ async def atualizar_lead_crm(
             "telefone_contato": data.telefone_contato or SIMULADOR_LEAD_ID,
             "historico_resumo": data.historico_resumo or "",
             "etapa_id": data.etapa_id or None,
+            "status_atendimento": data.status_atendimento or "aberto",
             "tags": data.tags or [],
             "dados_adicionais": data.dados_adicionais or {},
         }
@@ -1783,6 +1999,11 @@ async def atualizar_lead_crm(
         lead.telefone_contato = data.telefone_contato
     if data.historico_resumo is not None:
         lead.historico_resumo = data.historico_resumo
+    if data.status_atendimento is not None:
+        status_limpo = str(data.status_atendimento or "").strip().lower()
+        if status_limpo not in {"aberto", "concluido"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status_atendimento inválido")
+        lead.status_atendimento = status_limpo
     if data.tags is not None:
         lead.tags = [str(tag).strip() for tag in data.tags if str(tag).strip()]
     if data.dados_adicionais is not None:
@@ -1797,6 +2018,7 @@ async def atualizar_lead_crm(
             "telefone_contato": lead.telefone_contato,
             "historico_resumo": lead.historico_resumo,
             "etapa_id": str(lead.etapa_id) if lead.etapa_id else None,
+            "status_atendimento": lead.status_atendimento,
             "tags": lead.tags or [],
             "dados_adicionais": lead.dados_adicionais or {}
         }

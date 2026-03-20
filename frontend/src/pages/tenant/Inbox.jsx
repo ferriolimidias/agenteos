@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { ArrowRightLeft, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -13,12 +13,17 @@ export default function Inbox() {
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [destinos, setDestinos] = useState([]);
-  const [availableTags, setAvailableTags] = useState([]);
+  const [grupos, setGrupos] = useState([]);
+  const [tagsOficiais, setTagsOficiais] = useState([]);
   const [showTransferPanel, setShowTransferPanel] = useState(false);
   const [showTagsPanel, setShowTagsPanel] = useState(false);
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
   const [botToggleLoading, setBotToggleLoading] = useState(false);
+  const [statusToggleLoading, setStatusToggleLoading] = useState(false);
+  const [filtroStatus, setFiltroStatus] = useState("aberto");
+  const [abaAtiva, setAbaAtiva] = useState("Todos");
+  const [searchTerm, setSearchTerm] = useState("");
   const [toast, setToast] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [mediaCaption, setMediaCaption] = useState("");
@@ -88,22 +93,34 @@ export default function Inbox() {
     }
   };
 
-  const fetchOfficialTags = async () => {
+  const fetchGruposETags = async () => {
     if (!empresa_id) return;
     try {
-      const res = await api.get(`/empresas/${empresa_id}/crm/tags/oficiais`);
-      setAvailableTags(res.data || []);
+      const [gruposRes, tagsRes] = await Promise.all([
+        api.get(`/empresas/${empresa_id}/crm/tags/grupos`),
+        api.get(`/empresas/${empresa_id}/crm/tags/oficiais`),
+      ]);
+      setGrupos(gruposRes.data || []);
+      setTagsOficiais(tagsRes.data || []);
     } catch (e) {
-      console.error("Erro ao buscar tags oficiais:", e);
-      setAvailableTags([]);
+      console.error("Erro ao buscar grupos e tags oficiais:", e);
+      setGrupos([]);
+      setTagsOficiais([]);
     }
   };
 
   useEffect(() => {
     fetchLeads();
     fetchDestinos();
-    fetchOfficialTags();
+    fetchGruposETags();
   }, [empresa_id]);
+
+  useEffect(() => {
+    if (abaAtiva === "Todos" || abaAtiva === "Sem Grupo") return;
+    if (!grupos.some((grupo) => grupo.id === abaAtiva)) {
+      setAbaAtiva("Todos");
+    }
+  }, [abaAtiva, grupos]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -399,18 +416,6 @@ export default function Inbox() {
     return <p className="text-sm whitespace-pre-wrap">{msg?.texto}</p>;
   };
 
-  const handleReativarBot = async () => {
-    if (!selectedLead) return;
-    try {
-      await api.post(`/empresas/${empresa_id}/inbox/${selectedLead.telefone_contato}/reativar_bot`);
-      fetchLeads();
-      // Update selectedLead locally
-      setSelectedLead({...selectedLead, bot_pausado: false});
-    } catch (e) {
-      console.error("Erro ao reativar bot", e);
-    }
-  };
-
   const handleToggleBot = async () => {
     if (!selectedLead || botToggleLoading) return;
 
@@ -447,6 +452,34 @@ export default function Inbox() {
       });
     } finally {
       setBotToggleLoading(false);
+    }
+  };
+
+  const handleToggleStatus = async () => {
+    if (!selectedLead || statusToggleLoading) return;
+
+    const leadId = selectedLead.id;
+    const currentStatus = String(selectedLead.status_atendimento || "aberto").toLowerCase();
+    const nextStatus = currentStatus === "concluido" ? "aberto" : "concluido";
+    const previousState = { status_atendimento: currentStatus };
+
+    updateLeadInState(leadId, { status_atendimento: nextStatus });
+    setStatusToggleLoading(true);
+
+    try {
+      await api.put(`/empresas/${empresa_id}/crm/leads/${leadId}`, {
+        status_atendimento: nextStatus,
+      });
+      await fetchLeads();
+    } catch (e) {
+      console.error("Erro ao atualizar status do atendimento", e);
+      updateLeadInState(leadId, previousState);
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Não foi possível atualizar o status do atendimento.",
+      });
+    } finally {
+      setStatusToggleLoading(false);
     }
   };
 
@@ -515,11 +548,51 @@ export default function Inbox() {
     );
   }
 
+  const tagsOficiaisPorNome = useMemo(() => {
+    const map = new Map();
+    (tagsOficiais || []).forEach((tag) => {
+      const nome = String(tag?.nome || "").trim().toLowerCase();
+      if (!nome) return;
+      map.set(nome, tag);
+    });
+    return map;
+  }, [tagsOficiais]);
+
+  const filteredLeads = useMemo(() => {
+    const termo = String(searchTerm || "").trim().toLowerCase();
+
+    return (leads || []).filter((lead) => {
+      const statusLead = String(lead?.status_atendimento || "aberto").toLowerCase();
+      if (statusLead !== filtroStatus) return false;
+
+      if (termo) {
+        const nome = String(lead?.nome_contato || "").toLowerCase();
+        const telefone = String(lead?.telefone_contato || "").toLowerCase();
+        if (!nome.includes(termo) && !telefone.includes(termo)) return false;
+      }
+
+      if (abaAtiva === "Todos") return true;
+
+      const tagsLead = lead?.tags || [];
+      const tagsOficiaisLead = tagsLead
+        .map((tag) => tagsOficiaisPorNome.get(String(tag || "").trim().toLowerCase()))
+        .filter(Boolean);
+
+      if (abaAtiva === "Sem Grupo") {
+        return tagsOficiaisLead.some((tag) => !tag?.grupo_id);
+      }
+
+      return tagsOficiaisLead.some((tag) => String(tag?.grupo_id || "") === abaAtiva);
+    });
+  }, [abaAtiva, filtroStatus, leads, searchTerm, tagsOficiaisPorNome]);
+
   const hasPayload = Boolean(selectedFile || newMessage.trim());
   const selectedLeadPaused = Boolean(selectedLead?.bot_pausado);
   const selectedLeadPausedAtLabel = selectedLead?.bot_pausado_ate
     ? new Date(selectedLead.bot_pausado_ate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
+  const selectedLeadStatus = String(selectedLead?.status_atendimento || "aberto").toLowerCase();
+  const statusConcluir = selectedLeadStatus === "concluido";
 
   return (
     <div className="relative flex h-[calc(100vh-12rem)] min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -552,8 +625,81 @@ export default function Inbox() {
         <div className="border-b border-gray-200 px-4 py-4">
           <h2 className="text-lg font-semibold text-gray-800">Conversas</h2>
         </div>
-        <div className="h-[calc(100%-64px)] overflow-y-auto">
-          {leads?.map((lead) => (
+        <div className="border-b border-gray-100 px-4 py-3">
+          <div className="inline-flex rounded-xl bg-gray-100 p-1">
+            {[
+              { id: "aberto", label: "Abertos" },
+              { id: "concluido", label: "Concluídos" },
+            ].map((status) => (
+              <button
+                key={status.id}
+                type="button"
+                onClick={() => setFiltroStatus(status.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  filtroStatus === status.id
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {status.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative mt-3">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar por nome ou telefone"
+              className="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-700 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="mt-3 overflow-x-auto scrollbar-none">
+            <div className="flex min-w-max gap-2 pb-1">
+              <button
+                type="button"
+                onClick={() => setAbaAtiva("Todos")}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  abaAtiva === "Todos"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                }`}
+              >
+                Todos
+              </button>
+              {grupos.map((grupo) => (
+                <button
+                  key={grupo.id}
+                  type="button"
+                  onClick={() => setAbaAtiva(grupo.id)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                    abaAtiva === grupo.id
+                      ? "text-white"
+                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                  style={abaAtiva === grupo.id ? { backgroundColor: grupo.cor || "#2563eb" } : undefined}
+                >
+                  {grupo.nome}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setAbaAtiva("Sem Grupo")}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  abaAtiva === "Sem Grupo"
+                    ? "bg-slate-600 text-white"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                }`}
+              >
+                Sem Grupo
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="h-[calc(100%-182px)] overflow-y-auto">
+          {filteredLeads?.map((lead) => (
             <div
               key={lead.id}
               onClick={() => handleSelectLead(lead)}
@@ -571,9 +717,13 @@ export default function Inbox() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="truncate text-sm font-semibold text-gray-900">{lead.nome_contato}</p>
-                    {lead.bot_pausado ? (
+                    {String(lead?.status_atendimento || "aberto").toLowerCase() === "concluido" ? (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        Concluído
+                      </span>
+                    ) : lead.bot_pausado ? (
                       <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
-                        Pausado
+                        Humano
                       </span>
                     ) : null}
                   </div>
@@ -587,9 +737,9 @@ export default function Inbox() {
               </div>
             </div>
           ))}
-          {(!leads || leads.length === 0) && (
+          {(!filteredLeads || filteredLeads.length === 0) && (
             <div className="p-6 text-center text-sm text-gray-400">
-              Nenhuma conversa encontrada.
+              Nenhuma conversa encontrada para os filtros atuais.
             </div>
           )}
         </div>
@@ -614,6 +764,20 @@ export default function Inbox() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleToggleStatus}
+                    disabled={statusToggleLoading}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium transition-colors ${
+                      statusConcluir
+                        ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                        : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                    } disabled:cursor-not-allowed disabled:opacity-70`}
+                    title={statusConcluir ? "Reabrir atendimento" : "Concluir atendimento"}
+                  >
+                    <Check size={14} />
+                    {statusConcluir ? "Reabrir" : "Concluir"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowTagsPanel((prev) => !prev)}
@@ -681,9 +845,9 @@ export default function Inbox() {
                       <LeadTagsEditor
                         tags={selectedLead.tags || []}
                         compact
-                        placeholder="Nova tag + Enter"
+                        placeholder="Buscar tags oficiais..."
                         onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}
-                        tagDefinitions={availableTags}
+                        tagDefinitions={tagsOficiais}
                       />
                     </div>
                   ) : null}

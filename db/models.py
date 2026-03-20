@@ -100,6 +100,7 @@ class Empresa(Base):
     webhooks_saida = relationship("WebhookSaida", back_populates="empresa", cascade="all, delete-orphan")
     conexoes = relationship("Conexao", back_populates="empresa", cascade="all, delete-orphan", foreign_keys="Conexao.empresa_id")
     conexao_disparo = relationship("Conexao", back_populates="empresas_como_canal_disparo", foreign_keys=[conexao_disparo_id], post_update=True)
+    tags_grupos = relationship("TagGroup", back_populates="empresa", cascade="all, delete-orphan")
     tags_crm = relationship("TagCRM", back_populates="empresa", cascade="all, delete-orphan")
     templates_mensagem = relationship("TemplateMensagem", back_populates="empresa", cascade="all, delete-orphan")
     campanhas_disparo = relationship("CampanhaDisparo", back_populates="empresa", cascade="all, delete-orphan")
@@ -344,6 +345,7 @@ class CRMLead(Base):
     historico_resumo = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=False, default=list)
     dados_adicionais = Column(JSONB, default={})  # campos extras captados pela IA
+    status_atendimento = Column(String, nullable=False, default="aberto")
     foto_url = Column(String, nullable=True)
     foto_atualizada_em = Column(DateTime, nullable=True)
     bot_pausado_ate = Column(DateTime, nullable=True)
@@ -356,17 +358,32 @@ class CRMLead(Base):
     historicos_transferencia = relationship("HistoricoTransferencia", back_populates="lead", cascade="all, delete-orphan")
 
 
+class TagGroup(Base):
+    __tablename__ = "tags_grupos"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String, nullable=False)
+    cor = Column(String, nullable=True)
+    ordem = Column(Integer, nullable=False, default=0)
+
+    empresa = relationship("Empresa", back_populates="tags_grupos")
+    tags = relationship("TagCRM", back_populates="grupo")
+
+
 class TagCRM(Base):
     __tablename__ = "tags_crm"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    grupo_id = Column(UUID(as_uuid=True), ForeignKey("tags_grupos.id", ondelete="SET NULL"), nullable=True)
     nome = Column(String, nullable=False)
     cor = Column(String, nullable=False, default="#2563eb")
     instrucao_ia = Column(Text, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="tags_crm")
+    grupo = relationship("TagGroup", back_populates="tags")
 
 
 class MensagemHistorico(Base):

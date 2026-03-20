@@ -137,12 +137,56 @@ class ConversaListaResponse(BaseModel):
     foto_url: str | None = None
     telefone_contato: str | None = None
     ultima_mensagem: str | None = None
+    status_atendimento: str = "aberto"
     bot_pausado: bool = False
     bot_pausado_ate: str | None = None
     etapa_crm: str | None = None
     tags: list[str] = Field(default_factory=list)
     historico_resumo: str | None = None
     dados_adicionais: dict[str, Any] = Field(default_factory=dict)
+
+
+class TagGroupBase(BaseModel):
+    nome: str
+    cor: str | None = None
+    ordem: int = 0
+
+
+class TagGroupCreate(TagGroupBase):
+    pass
+
+
+class TagGroupUpdate(BaseModel):
+    nome: str | None = None
+    cor: str | None = None
+    ordem: int | None = None
+
+
+class TagGroupResponse(TagGroupBase):
+    id: str
+
+
+class TagOfficialBase(BaseModel):
+    nome: str
+    cor: str = "#2563eb"
+    instrucao_ia: str | None = None
+    grupo_id: str | None = None
+
+
+class TagOfficialCreate(TagOfficialBase):
+    pass
+
+
+class TagOfficialUpdate(BaseModel):
+    nome: str | None = None
+    cor: str | None = None
+    instrucao_ia: str | None = None
+    grupo_id: str | None = None
+
+
+class TagOfficialResponse(TagOfficialBase):
+    id: str
+    criado_em: str | None = None
 
 # --- Schema para Vínculo Ferramenta Especialista ---
 class EspecialistaToolLink(BaseModel):

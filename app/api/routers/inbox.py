@@ -123,6 +123,7 @@ async def listar_inbox(empresa_id: str):
                     "foto_url": l.foto_url,
                     "telefone_contato": l.telefone_contato,
                     "ultima_mensagem": l.historico_resumo or None,
+                    "status_atendimento": str(l.status_atendimento or "aberto"),
                     "bot_pausado": bot_pausado,
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
                     "etapa_crm": l.etapa.nome if l.etapa else None,
