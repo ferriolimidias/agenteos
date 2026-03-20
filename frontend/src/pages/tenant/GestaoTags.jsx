@@ -436,9 +436,9 @@ export default function GestaoTags() {
       </div>
 
       {showGroupModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">
                   {editingGroup ? "Editar grupo" : "Novo grupo"}
@@ -452,42 +452,43 @@ export default function GestaoTags() {
               </button>
             </div>
 
-            <form onSubmit={handleGroupSubmit} className="space-y-5 p-6">
-              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_140px]">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Nome do grupo</label>
-                  <input
-                    required
-                    value={groupFormData.nome}
-                    onChange={(e) => setGroupFormData((prev) => ({ ...prev, nome: e.target.value }))}
-                    className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder="Ex: Vendas, Suporte"
-                  />
-                </div>
+            <form onSubmit={handleGroupSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_140px]">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do grupo</label>
+                    <input
+                      required
+                      value={groupFormData.nome}
+                      onChange={(e) => setGroupFormData((prev) => ({ ...prev, nome: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: Vendas, Suporte"
+                    />
+                  </div>
 
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
-                  <input
-                    type="color"
-                    value={groupFormData.cor}
-                    onChange={(e) => setGroupFormData((prev) => ({ ...prev, cor: e.target.value }))}
-                    className="h-[46px] w-full rounded-xl border border-gray-200 bg-white px-2 py-1"
-                  />
-                </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
+                    <input
+                      type="color"
+                      value={groupFormData.cor}
+                      onChange={(e) => setGroupFormData((prev) => ({ ...prev, cor: e.target.value }))}
+                      className="h-[46px] w-full rounded-xl border border-gray-200 bg-white px-2 py-1"
+                    />
+                  </div>
 
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Ordem</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={groupFormData.ordem}
-                    onChange={(e) => setGroupFormData((prev) => ({ ...prev, ordem: e.target.value }))}
-                    className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  />
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Ordem</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={groupFormData.ordem}
+                      onChange={(e) => setGroupFormData((prev) => ({ ...prev, ordem: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
                 </div>
               </div>
-
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={closeGroupModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>
@@ -505,9 +506,9 @@ export default function GestaoTags() {
       ) : null}
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">
                   {editingTag ? "Editar tag oficial" : "Nova tag oficial"}
@@ -521,58 +522,61 @@ export default function GestaoTags() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5 p-6">
-              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Nome da tag</label>
-                  <input
-                    required
-                    value={formData.nome}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, nome: e.target.value }))}
-                    className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                    placeholder="Ex: VIP, Reengajar, Urgente"
-                  />
+            <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
+                    <div>
+                      <label className="mb-1 block text-sm font-medium text-gray-700">Nome da tag</label>
+                      <input
+                        required
+                        value={formData.nome}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, nome: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                        placeholder="Ex: VIP, Reengajar, Urgente"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
+                      <input
+                        type="color"
+                        value={formData.cor}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, cor: e.target.value }))}
+                        className="h-[46px] w-full rounded-xl border border-gray-200 bg-white px-2 py-1"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Grupo</label>
+                    <select
+                      value={formData.grupo_id}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, grupo_id: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Sem grupo</option>
+                      {grupos.map((grupo) => (
+                        <option key={grupo.id} value={grupo.id}>
+                          {grupo.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Instrução para a IA</label>
+                    <textarea
+                      rows={6}
+                      value={formData.instrucao_ia}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, instrucao_ia: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder="Explique em quais cenários a IA deve aplicar esta tag ao lead."
+                    />
+                  </div>
                 </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
-                  <input
-                    type="color"
-                    value={formData.cor}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, cor: e.target.value }))}
-                    className="h-[46px] w-full rounded-xl border border-gray-200 bg-white px-2 py-1"
-                  />
-                </div>
               </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Grupo</label>
-                <select
-                  value={formData.grupo_id}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, grupo_id: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">Sem grupo</option>
-                  {grupos.map((grupo) => (
-                    <option key={grupo.id} value={grupo.id}>
-                      {grupo.nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Instrução para a IA</label>
-                <textarea
-                  rows={6}
-                  value={formData.instrucao_ia}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, instrucao_ia: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder="Explique em quais cenários a IA deve aplicar esta tag ao lead."
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={closeModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>

@@ -134,6 +134,14 @@ async def save_history_and_check_pause(
             session.add(nova_msg)
             
             now = datetime.utcnow()
+            status_atendimento = str(lead.status_atendimento or "").strip().lower()
+
+            # Trava de segurança: lead concluido nao deve receber resposta automatica
+            # na primeira mensagem apos reabertura.
+            if status_atendimento == "concluido":
+                should_process = False
+                if not from_me:
+                    lead.status_atendimento = "aberto"
             
             if from_me:
                 # Humano respondeu, pausar bot por +1h

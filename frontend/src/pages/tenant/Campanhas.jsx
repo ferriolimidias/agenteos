@@ -696,9 +696,9 @@ export default function Campanhas() {
       </div>
 
       {selectedLista ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Lista: {selectedLista.tag}</h2>
                 <p className="text-sm text-gray-500">
@@ -717,7 +717,7 @@ export default function Campanhas() {
               </button>
             </div>
 
-            <div className="p-6">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
               {loadingListaLeads ? (
                 <div className="flex items-center justify-center py-14 text-gray-500">
                   <RefreshCw size={18} className="mr-2 animate-spin" />
@@ -788,9 +788,9 @@ export default function Campanhas() {
       />
 
       {showTemplateModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">
                   {editingTemplate ? "Editar template" : "Novo template"}
@@ -802,50 +802,53 @@ export default function Campanhas() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveTemplate} className="space-y-5 p-6">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Nome do template</label>
-                <input
-                  required
-                  value={templateForm.nome}
-                  onChange={(e) => setTemplateForm((prev) => ({ ...prev, nome: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ex: Reativação, Oferta VIP, Cobrança"
-                />
-              </div>
+            <form onSubmit={handleSaveTemplate} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do template</label>
+                    <input
+                      required
+                      value={templateForm.nome}
+                      onChange={(e) => setTemplateForm((prev) => ({ ...prev, nome: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: Reativação, Oferta VIP, Cobrança"
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Texto do template</label>
-                <textarea
-                  ref={templateTextareaRef}
-                  required
-                  rows={8}
-                  value={templateForm.texto_template}
-                  onChange={(e) => setTemplateForm((prev) => ({ ...prev, texto_template: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder={"Olá {{nome}}, tudo bem?\nTemos uma condição especial para você hoje."}
-                />
-              </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Texto do template</label>
+                    <textarea
+                      ref={templateTextareaRef}
+                      required
+                      rows={8}
+                      value={templateForm.texto_template}
+                      onChange={(e) => setTemplateForm((prev) => ({ ...prev, texto_template: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder={"Olá {{nome}}, tudo bem?\nTemos uma condição especial para você hoje."}
+                    />
+                  </div>
 
-              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                <p className="mb-3">
-                  Dica: além de {`{{nome}}`} e {`{{telefone}}`}, você pode usar campos existentes em `dados_adicionais` do lead.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {suggestedTemplateVariables.map((variableName) => (
-                    <button
-                      key={variableName}
-                      type="button"
-                      onClick={() => handleInsertTemplateVariable(variableName)}
-                      className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100"
-                    >
-                      {`{{${variableName}}}`}
-                    </button>
-                  ))}
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                    <p className="mb-3">
+                      Dica: além de {`{{nome}}`} e {`{{telefone}}`}, você pode usar campos existentes em `dados_adicionais` do lead.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {suggestedTemplateVariables.map((variableName) => (
+                        <button
+                          key={variableName}
+                          type="button"
+                          onClick={() => handleInsertTemplateVariable(variableName)}
+                          className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          {`{{${variableName}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={closeTemplateModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>
@@ -863,9 +866,9 @@ export default function Campanhas() {
       ) : null}
 
       {showCampanhaModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Novo Disparo</h2>
                 <p className="text-sm text-gray-500">Selecione o template e a tag para iniciar a campanha.</p>
@@ -883,116 +886,119 @@ export default function Campanhas() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateCampanha} className="space-y-5 p-6">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Nome da campanha</label>
-                <input
-                  required
-                  value={campanhaForm.nome}
-                  onChange={(e) => setCampanhaForm((prev) => ({ ...prev, nome: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ex: Reativação de leads frios"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Template</label>
-                <select
-                  required
-                  value={campanhaForm.template_id}
-                  onChange={(e) => setCampanhaForm((prev) => ({ ...prev, template_id: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">Selecione um template</option>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Tag alvo</label>
-                <select
-                  required
-                  value={campanhaForm.tag}
-                  onChange={(e) => setCampanhaForm((prev) => ({ ...prev, tag: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">Selecionar tag</option>
-                  {tagsDisponiveis.map((tag) => (
-                    <option key={tag} value={tag}>
-                      {tag}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-gray-500">
-                  O disparo será enviado para leads que possuam essa tag no CRM.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
+            <form onSubmit={handleCreateCampanha} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
                   <div>
-                    <p className="text-sm font-semibold text-emerald-900">Pré-visualização</p>
-                    <p className="text-xs text-emerald-700">
-                      Assim a mensagem deve chegar ao lead antes do disparo real.
-                    </p>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome da campanha</label>
+                    <input
+                      required
+                      value={campanhaForm.nome}
+                      onChange={(e) => setCampanhaForm((prev) => ({ ...prev, nome: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: Reativação de leads frios"
+                    />
                   </div>
-                  {loadingPreview ? (
-                    <div className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700">
-                      <RefreshCw size={14} className="animate-spin" />
-                      Gerando preview...
-                    </div>
-                  ) : null}
-                </div>
 
-                {!campanhaForm.template_id || !campanhaForm.tag ? (
-                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/80 px-4 py-5 text-sm text-emerald-800">
-                    Selecione um template e uma tag para visualizar a mensagem renderizada.
-                  </div>
-                ) : previewError ? (
-                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
-                    {previewError}
-                  </div>
-                ) : previewData ? (
-                  <div className="space-y-3">
-                    <div className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#DCF8C6] px-4 py-3 text-sm leading-6 text-gray-800 shadow-sm">
-                        {previewData.preview_texto || "O template não gerou conteúdo para este lead."}
-                      </div>
-                    </div>
-                    <div
-                      className={`rounded-xl border px-4 py-3 text-sm ${
-                        totalLeadsPreview > 0
-                          ? "border-blue-200 bg-blue-50 text-blue-800"
-                          : "border-amber-200 bg-amber-50 text-amber-800"
-                      }`}
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Template</label>
+                    <select
+                      required
+                      value={campanhaForm.template_id}
+                      onChange={(e) => setCampanhaForm((prev) => ({ ...prev, template_id: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                     >
-                      {totalLeadsPreview > 0
-                        ? `👥 Este disparo será enviado para ${totalLeadsPreview} contatos.`
-                        : "Nenhum contato com essa tag foi encontrado. O envio foi bloqueado por segurança."}
-                    </div>
-                    {totalLeadsPreview > 0 ? (
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        {`⏳ Estimativa de envio: ${estimativaEnvio}.`}
-                      </div>
-                    ) : null}
-                    <p className="text-xs text-emerald-800">
-                      {previewData.usou_mock
-                        ? "A visualização está usando dados mockados porque ainda não há leads com essa tag."
-                        : "A visualização foi gerada a partir de um lead real com a tag selecionada."}
+                      <option value="">Selecione um template</option>
+                      {templates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Tag alvo</label>
+                    <select
+                      required
+                      value={campanhaForm.tag}
+                      onChange={(e) => setCampanhaForm((prev) => ({ ...prev, tag: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Selecionar tag</option>
+                      {tagsDisponiveis.map((tag) => (
+                        <option key={tag} value={tag}>
+                          {tag}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      O disparo será enviado para leads que possuam essa tag no CRM.
                     </p>
                   </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/80 px-4 py-5 text-sm text-emerald-800">
-                    Aguardando dados para gerar a pré-visualização.
+
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-900">Pré-visualização</p>
+                        <p className="text-xs text-emerald-700">
+                          Assim a mensagem deve chegar ao lead antes do disparo real.
+                        </p>
+                      </div>
+                      {loadingPreview ? (
+                        <div className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700">
+                          <RefreshCw size={14} className="animate-spin" />
+                          Gerando preview...
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {!campanhaForm.template_id || !campanhaForm.tag ? (
+                      <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/80 px-4 py-5 text-sm text-emerald-800">
+                        Selecione um template e uma tag para visualizar a mensagem renderizada.
+                      </div>
+                    ) : previewError ? (
+                      <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+                        {previewError}
+                      </div>
+                    ) : previewData ? (
+                      <div className="space-y-3">
+                        <div className="flex justify-end">
+                          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#DCF8C6] px-4 py-3 text-sm leading-6 text-gray-800 shadow-sm">
+                            {previewData.preview_texto || "O template não gerou conteúdo para este lead."}
+                          </div>
+                        </div>
+                        <div
+                          className={`rounded-xl border px-4 py-3 text-sm ${
+                            totalLeadsPreview > 0
+                              ? "border-blue-200 bg-blue-50 text-blue-800"
+                              : "border-amber-200 bg-amber-50 text-amber-800"
+                          }`}
+                        >
+                          {totalLeadsPreview > 0
+                            ? `👥 Este disparo será enviado para ${totalLeadsPreview} contatos.`
+                            : "Nenhum contato com essa tag foi encontrado. O envio foi bloqueado por segurança."}
+                        </div>
+                        {totalLeadsPreview > 0 ? (
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            {`⏳ Estimativa de envio: ${estimativaEnvio}.`}
+                          </div>
+                        ) : null}
+                        <p className="text-xs text-emerald-800">
+                          {previewData.usou_mock
+                            ? "A visualização está usando dados mockados porque ainda não há leads com essa tag."
+                            : "A visualização foi gerada a partir de um lead real com a tag selecionada."}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/80 px-4 py-5 text-sm text-emerald-800">
+                        Aguardando dados para gerar a pré-visualização.
+                      </div>
+                    )}
                   </div>
-                )}
               </div>
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button
                   type="button"
                   onClick={() => {

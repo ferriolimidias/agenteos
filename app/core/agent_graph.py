@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import json
 from typing import TypedDict, List, Optional, Literal, Any
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
@@ -210,33 +211,70 @@ async def node_especialista_tags(state: AgentState):
         coroutine=_tool,
     )
 
-    prompt = f"""Sua função é classificar o usuário com a tool 'tool_atualizar_tags_lead', seguindo estas regras:
+    prompt = f"""Você é um extrator técnico de dados de classificação.
+Use a tool 'tool_atualizar_tags_lead' seguindo estritamente estas regras:
 {tags_crm_prompt}
 
 Lead atual: {lead_id}
 
 Classifique o lead apenas com tags oficiais coerentes com a conversa.
-Após classificar, encerre com uma resposta interna curta confirmando a classificação."""
+Retorne APENAS dados crus da operação (resultado da tool, tags aplicadas, erros).
+NÃO redija mensagem para o cliente final."""
 
     llm_with_tools = llm.bind_tools([tool_tags])
     tool_node = ToolNode([tool_tags])
+    llm_extracao = llm.with_structured_output(ExtracaoEspecialista)
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
     mensagens = [SystemMessage(content=prompt), HumanMessage(content=ultima_mensagem)]
-    resposta_parcial = "Classificação de tags concluída."
+    dados_crus_tags: list[str] = []
+    fontes_tags: list[str] = []
+    erros_tags: list[str] = []
 
     for _ in range(4):
         resposta = await llm_with_tools.ainvoke(mensagens)
         mensagens.append(resposta)
         if hasattr(resposta, "tool_calls") and resposta.tool_calls:
+            for t in resposta.tool_calls:
+                nome_tool = str(t.get("name", "")).strip()
+                if nome_tool:
+                    fontes_tags.append(nome_tool)
             resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
             mensagens.extend(resultado_toolnode["messages"])
+            for tool_msg in resultado_toolnode.get("messages", []):
+                conteudo = str(getattr(tool_msg, "content", "") or "").strip()
+                if conteudo:
+                    dados_crus_tags.append(conteudo)
+                    if "erro" in conteudo.lower() or "falha" in conteudo.lower():
+                        erros_tags.append(conteudo)
         else:
-            resposta_parcial = resposta.content or resposta_parcial
+            conteudo_final = str(getattr(resposta, "content", "") or "").strip()
+            if conteudo_final:
+                dados_crus_tags.append(conteudo_final)
+                if "erro" in conteudo_final.lower() or "falha" in conteudo_final.lower():
+                    erros_tags.append(conteudo_final)
             break
 
-    state["respostas_especialistas"].append(f"[TAGS_CRM]: {resposta_parcial}")
+    dados_crus = "\n".join(dados_crus_tags).strip() or "Sem dados crus retornados na classificação."
+    fontes_unicas = sorted(list({f for f in fontes_tags if str(f).strip()}))
+    erros_unicos = sorted(list({e for e in erros_tags if str(e).strip()}))
+    extracao = await llm_extracao.ainvoke(
+        [
+            (
+                "system",
+                "Converta o material bruto em um objeto ExtracaoEspecialista. "
+                "Preserve os dados tecnicos, mantenha apenas fatos, sem linguagem ao cliente."
+            ),
+            (
+                "user",
+                f"dados_brutos:\n{dados_crus}\n\nfontes_detectadas:\n{fontes_unicas}\n\nerros_detectados:\n{erros_unicos}",
+            ),
+        ]
+    )
+    state["respostas_especialistas"].append(
+        f"[ESPECIALISTA: tags_crm] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
+    )
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "tags_crm"]
     return state
 
@@ -328,6 +366,12 @@ class DecisaoAtendente(BaseModel):
 class AnaliseRoteador(BaseModel):
     intencao: List[str] = Field(description="Lista OBRIGATÓRIA com a(s) intenção(ões) principal(is) do usuário. Deve conter o nome exato dos especialistas relevantes. Ex: ['Comercial', 'Suporte'].")
     handoff_requested: bool = Field(description="True se o usuário pediu explicitamente para falar com humano ou atendente.")
+
+
+class ExtracaoEspecialista(BaseModel):
+    dados: str | dict = Field(description="Dados crus extraidos pelo especialista.")
+    fontes: List[str] = Field(default_factory=list, description="Ferramentas, APIs ou documentos usados na extracao.")
+    erros: List[str] = Field(default_factory=list, description="Falhas tecnicas encontradas durante a extracao.")
 
 # 2. Nós
 async def node_crm(state: AgentState):
@@ -516,8 +560,12 @@ async def node_atendente(state: AgentState):
 {bloco_xml_sintese}
 
 <instrucao_final>
-Com base nas <respostas_especialistas> e no <historico_conversa>, consolide as informações em uma ÚNICA resposta fluida e coesa.
-Assuma as informações como suas. NUNCA mencione que consultou especialistas ou sistemas internos.
+Você recebeu os seguintes DADOS CRUS dos especialistas do sistema em <respostas_especialistas>, no formato JSON com os campos: "dados", "fontes" e "erros".
+Sua tarefa é ler esses dados e formular uma resposta natural, educada e coesa para o cliente, assumindo a persona da empresa.
+Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou roteamento.
+Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
+Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
+Responda em uma única mensagem clara e objetiva.
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -735,9 +783,9 @@ async def node_especialista_dinamico(state: AgentState):
         empresa_uuid = None
 
     nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
-    contexto_empresa = f"Você atende pela empresa {nome_empresa}"
+    contexto_empresa = f"Empresa: {nome_empresa}"
     if area_atuacao:
-        contexto_empresa += f", cuja área de atuação é: {area_atuacao}.\n"
+        contexto_empresa += f" | Área de atuação: {area_atuacao}.\n"
     else:
         contexto_empresa += ".\n"
 
@@ -748,12 +796,23 @@ async def node_especialista_dinamico(state: AgentState):
     
     for intencao in intencoes:
         contexto_adicional = ""
+        dados_crus_partes: list[str] = []
+        fontes_usadas: list[str] = []
+        erros_extracao: list[str] = []
         
         if intencao == "duvida" and empresa_uuid:
             contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-            contexto_adicional = f"\n\nContexto da Base de Conhecimento para apoiar sua resposta:\n{contexto_rag}"
+            contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{contexto_rag}"
+            dados_crus_partes.append(f"[RAG]: {contexto_rag}")
+            fontes_usadas.append("RAG")
             
-        prompt_base = f"Você é um especialista prestativo e amigável.{contexto_adicional}"
+        prompt_base = (
+            "Você é um extrator de dados.\n"
+            "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
+            "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
+            "NÃO redija mensagens para o cliente final.\n"
+            f"{contexto_adicional}"
+        )
         tools_disponiveis = []
         descricoes_tools = []
         nomes_tools_registradas = set()
@@ -779,9 +838,18 @@ async def node_especialista_dinamico(state: AgentState):
                     # RAG Check
                     if getattr(especialista_db, 'usar_rag', False) or intencao == "duvida":
                         contexto_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-                        contexto_adicional = f"\n\nContexto da Base de Conhecimento para apoiar sua resposta:\n{contexto_rag}"
+                        contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{contexto_rag}"
+                        dados_crus_partes.append(f"[RAG]: {contexto_rag}")
+                        fontes_usadas.append("RAG")
 
-                    prompt_base = especialista_db.prompt_sistema + contexto_adicional
+                    prompt_base = (
+                        "Você é um extrator de dados.\n"
+                        "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
+                        "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
+                        "NÃO redija mensagens para o cliente final.\n"
+                        f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{especialista_db.prompt_sistema}\n"
+                        f"{contexto_adicional}"
+                    )
                     
                     # Carrega ferramentas associadas a este especialista (API Connections)
                     for conexao in especialista_db.api_connections:
@@ -938,6 +1006,7 @@ async def node_especialista_dinamico(state: AgentState):
 
                     except Exception as e:
                         print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
+                        erros_extracao.append(f"Falha ao instanciar ferramenta nativa {f_db.nome_ferramenta}: {e}")
 
         if lead_id and empresa_id and destinos_transferencia_prompt and "action_transferir_atendimento" not in nomes_tools_registradas:
             tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
@@ -950,31 +1019,32 @@ async def node_especialista_dinamico(state: AgentState):
                 "- action_transferir_atendimento: transfere o atendimento para um destino humano configurado, registra auditoria e dispara o aviso interno."
             )
 
-        system_message_adicional = f"\n{contexto_empresa}O nome do usuário é: {state['nome_contato']}."
+        system_message_adicional = f"\n{contexto_empresa}"
         
         if descricoes_tools:
             system_message_adicional += "\n\nVocê tem acesso às seguintes ferramentas:\n"
             system_message_adicional += "\n".join(descricoes_tools)
-            system_message_adicional += "\nUse-as se a requisição do usuário exigir."
+            system_message_adicional += "\nUse-as quando necessário para obter os dados brutos."
 
         if destinos_transferencia_prompt:
             system_message_adicional += (
                 "\n\nVocê tem os seguintes destinos de transferência disponíveis:\n"
                 f"{destinos_transferencia_prompt}\n"
                 "Quando o cenário bater com as instruções de ativação acima, use a ferramenta 'action_transferir_atendimento'. "
-                "Após usar a ferramenta, encerre sua resposta ao cliente de forma cordial avisando que um humano continuará o atendimento em instantes."
+                "Retorne apenas o resultado cru da execução da ferramenta."
             )
 
         if state.get("handoff_requested", False):
             system_message_adicional += (
                 "\n\nInformação importante: O usuário pediu atendimento humano. "
-                "Se houver um destino compatível, priorize usar 'action_transferir_atendimento' antes de responder ao cliente."
+                "Se houver um destino compatível, priorize usar 'action_transferir_atendimento' e retorne só o resultado bruto."
             )
             
         prompt_completo = prompt_base + system_message_adicional
 
         modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, 'modelo_ia') else None
         llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
+        llm_extracao = llm.with_structured_output(ExtracaoEspecialista)
         print(f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista '{intencao}' com modelo '{modelo_esp or 'default'}'...")
         if tools_disponiveis:
             print(f"  Fazendo bind dinâmico via llm.bind_tools para {len(tools_disponiveis)} ferramenta(s)")
@@ -991,25 +1061,64 @@ async def node_especialista_dinamico(state: AgentState):
                 if hasattr(resposta, "tool_calls") and len(resposta.tool_calls) > 0:
                     nomes = [t['name'] for t in resposta.tool_calls]
                     print(f"  Ferramentas acionadas pelo fluxo: {nomes}")
+                    fontes_usadas.extend([str(n).strip() for n in nomes if str(n).strip()])
                     try:
                         # Executa o ToolNode Langgraph Customizado em loop local
                         resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
                         mensagens.extend(resultado_toolnode["messages"])
+                        for tool_msg in resultado_toolnode.get("messages", []):
+                            conteudo_tool = str(getattr(tool_msg, "content", "") or "").strip()
+                            if conteudo_tool:
+                                dados_crus_partes.append(conteudo_tool)
+                                if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
+                                    erros_extracao.append(conteudo_tool)
                     except Exception as e:
                         print(f"  Erro no nó de execução ToolNode: {e}")
                         resposta_parcial = f"Erro no sistema de execução: {e}"
+                        erros_extracao.append(str(resposta_parcial))
                         break
                 else:
                     resposta_parcial = resposta.content
+                    if "erro" in str(resposta_parcial or "").lower() or "falha" in str(resposta_parcial or "").lower():
+                        erros_extracao.append(str(resposta_parcial))
                     break
             else:
                 resposta_parcial = "Tentei utilizar as ferramentas várias vezes mas não consegui concluir. Houve limite de tentativas."
+                erros_extracao.append(resposta_parcial)
         else:
             print("  Resposta direta via LLM (sem ferramentas)")
             resposta = await llm.ainvoke([("system", prompt_completo), ("user", ultima_mensagem)])
             resposta_parcial = resposta.content
-            
-        state["respostas_especialistas"].append(f"[{intencao.upper()}]: {resposta_parcial}")
+            fontes_usadas.append("LLM_SEM_TOOL")
+            if "erro" in str(resposta_parcial or "").lower() or "falha" in str(resposta_parcial or "").lower():
+                erros_extracao.append(str(resposta_parcial))
+
+        conteudo_final = str(resposta_parcial or "").strip()
+        if conteudo_final:
+            dados_crus_partes.append(conteudo_final)
+        dados_crus = "\n".join([p for p in dados_crus_partes if str(p).strip()]).strip()
+        if not dados_crus:
+            dados_crus = "Sem dados crus retornados."
+
+        fontes_unicas = sorted(list({f for f in fontes_usadas if str(f).strip()}))
+        erros_unicos = sorted(list({e for e in erros_extracao if str(e).strip()}))
+        extracao = await llm_extracao.ainvoke(
+            [
+                (
+                    "system",
+                    "Estruture o material recebido no schema ExtracaoEspecialista. "
+                    "Nao crie conversa com cliente. Mantenha dados tecnicos e objetivos."
+                ),
+                (
+                    "user",
+                    f"dados_brutos:\n{dados_crus}\n\nfontes_detectadas:\n{fontes_unicas}\n\nerros_detectados:\n{erros_unicos}",
+                ),
+            ]
+        )
+
+        state["respostas_especialistas"].append(
+            f"[ESPECIALISTA: {intencao}] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
+        )
         
     return state
 
@@ -1163,7 +1272,8 @@ async def gerar_followup_contextual(canal: str, identificador_origem: str, empre
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
 
-    prompt = f"""Você é um assistente da {nome_empresa}. Sua única tarefa é enviar UMA frase curta e educada de acompanhamento, baseada apenas no fim da conversa. Seja sutil e não tente vender nada.
+    nome_empresa_prompt = (nome_empresa or "").strip() or "sua empresa"
+    prompt = f"""Você é um assistente da {nome_empresa_prompt}. Sua única tarefa é enviar UMA frase curta e educada de acompanhamento, baseada apenas no fim da conversa. Seja sutil e não tente vender nada.
 
 Fim da conversa:
 {fim_conversa}
@@ -1206,14 +1316,15 @@ async def gerar_followup_encerramento(canal: str, identificador_origem: str, emp
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
 
-    prompt = f"""Você é um assistente da {nome_empresa}. O cliente não respondeu ao acompanhamento anterior.
+    nome_empresa_prompt = (nome_empresa or "").strip() or "sua empresa"
+    prompt = f"""Você é um assistente da {nome_empresa_prompt}. O cliente não respondeu ao acompanhamento anterior.
 
 Fim da conversa:
 {fim_conversa}
 
 Escreva UMA mensagem curta informando que:
 1. A conversa será arquivada.
-2. O consultor Jose Paulo foi notificado e pode dar continuidade se necessário.
+2. O consultor responsável foi notificado e pode dar continuidade se necessário.
 3. O cliente é sempre bem-vindo a retomar quando quiser.
 
 Seja gentil e breve. Máximo 2 frases. Responda APENAS com o texto da mensagem."""

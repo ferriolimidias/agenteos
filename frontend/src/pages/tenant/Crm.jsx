@@ -277,9 +277,9 @@ export default function Crm() {
       />
 
       {showImportModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Importar Leads</h2>
                 <p className="text-sm text-gray-500">Envie um CSV ou Excel com colunas de Nome e Telefone.</p>
@@ -289,62 +289,65 @@ export default function Crm() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmitImport} className="space-y-5 p-6">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Arquivo</label>
-                <input
-                  type="file"
-                  accept=".csv,.xlsx"
-                  onChange={handleImportFileChange}
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800"
-                />
-              </div>
-
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Preview das colunas</p>
-                {importPreviewColumns.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {importPreviewColumns.map((column) => (
-                      <span key={column} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-                        {column}
-                      </span>
-                    ))}
+            <form onSubmit={handleSubmitImport} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Arquivo</label>
+                    <input
+                      type="file"
+                      accept=".csv,.xlsx"
+                      onChange={handleImportFileChange}
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800"
+                    />
                   </div>
-                ) : (
-                  <p className="text-sm text-gray-500">
-                    {importInfo || "Selecione um arquivo para visualizar ou detectar as colunas."}
-                  </p>
-                )}
-              </div>
 
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags iniciais da lista</p>
-                <div className="flex flex-wrap gap-2">
-                  {availableTags.map((tag) => {
-                    const selected = importSelectedTags.includes(tag.nome);
-                    return (
-                      <button
-                        key={tag.id}
-                        type="button"
-                        onClick={() =>
-                          setImportSelectedTags((prev) =>
-                            selected ? prev.filter((item) => item !== tag.nome) : [...prev, tag.nome]
-                          )
-                        }
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                          selected
-                            ? "border-blue-300 bg-blue-600 text-white"
-                            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
-                        }`}
-                      >
-                        {tag.nome}
-                      </button>
-                    );
-                  })}
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Preview das colunas</p>
+                    {importPreviewColumns.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {importPreviewColumns.map((column) => (
+                          <span key={column} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                            {column}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">
+                        {importInfo || "Selecione um arquivo para visualizar ou detectar as colunas."}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags iniciais da lista</p>
+                    <div className="flex flex-wrap gap-2">
+                      {availableTags.map((tag) => {
+                        const selected = importSelectedTags.includes(tag.nome);
+                        return (
+                          <button
+                            key={tag.id}
+                            type="button"
+                            onClick={() =>
+                              setImportSelectedTags((prev) =>
+                                selected ? prev.filter((item) => item !== tag.nome) : [...prev, tag.nome]
+                              )
+                            }
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                              selected
+                                ? "border-blue-300 bg-blue-600 text-white"
+                                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
+                            }`}
+                          >
+                            {tag.nome}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={resetImportModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>

@@ -55,9 +55,9 @@ export default function LeadDetailsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-white shadow-xl">
+        <div className="flex shrink-0 items-start justify-between border-b border-gray-100 p-4 md:p-6">
           <div>
             <h2 className="text-xl font-bold text-gray-900">{lead.nome_contato}</h2>
             <p className="mt-1 text-sm text-gray-500">Edite os dados do lead e gerencie suas tags oficiais.</p>
@@ -71,63 +71,66 @@ export default function LeadDetailsModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6 p-6">
-          {error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
+        <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <div className="space-y-6">
+              {error ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Nome</label>
+                  <input
+                    value={formData.nome_contato}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, nome_contato: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Telefone</label>
+                  <input
+                    value={formData.telefone_contato}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, telefone_contato: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags do lead</p>
+                <LeadTagsEditor
+                  tags={lead.tags || []}
+                  placeholder="Adicionar tag e pressionar Enter"
+                  onChange={(nextTags) => onSaveTags?.(lead.id, nextTags)}
+                  tagDefinitions={availableTags}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Resumo do histórico</label>
+                <textarea
+                  rows={4}
+                  value={formData.historico_resumo}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, historico_resumo: e.target.value }))}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Dados adicionais (JSON)</label>
+                <textarea
+                  rows={8}
+                  value={formData.dados_adicionais_texto}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, dados_adicionais_texto: e.target.value }))}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 font-mono text-sm text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
             </div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Nome</label>
-              <input
-                value={formData.nome_contato}
-                onChange={(e) => setFormData((prev) => ({ ...prev, nome_contato: e.target.value }))}
-                className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Telefone</label>
-              <input
-                value={formData.telefone_contato}
-                onChange={(e) => setFormData((prev) => ({ ...prev, telefone_contato: e.target.value }))}
-                className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
           </div>
-
-          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags do lead</p>
-            <LeadTagsEditor
-              tags={lead.tags || []}
-              placeholder="Adicionar tag e pressionar Enter"
-              onChange={(nextTags) => onSaveTags?.(lead.id, nextTags)}
-              tagDefinitions={availableTags}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Resumo do histórico</label>
-            <textarea
-              rows={4}
-              value={formData.historico_resumo}
-              onChange={(e) => setFormData((prev) => ({ ...prev, historico_resumo: e.target.value }))}
-              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Dados adicionais (JSON)</label>
-            <textarea
-              rows={8}
-              value={formData.dados_adicionais_texto}
-              onChange={(e) => setFormData((prev) => ({ ...prev, dados_adicionais_texto: e.target.value }))}
-              className="w-full rounded-xl border border-gray-200 px-4 py-3 font-mono text-sm text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
             <button
               type="button"
               onClick={onClose}

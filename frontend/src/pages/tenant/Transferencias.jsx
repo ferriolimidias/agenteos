@@ -420,9 +420,9 @@ export default function Transferencias() {
       </div>
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">
                   {editingDestino ? "Editar destino" : "Novo destino de transferência"}
@@ -440,49 +440,52 @@ export default function Transferencias() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5 p-6">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Nome do destino</label>
-                <input
-                  required
-                  value={formData.nome_destino}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, nome_destino: e.target.value }))}
-                  placeholder="Ex: SDR Comercial, Plantão Suporte, Recepção"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do destino</label>
+                    <input
+                      required
+                      value={formData.nome_destino}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, nome_destino: e.target.value }))}
+                      placeholder="Ex: SDR Comercial, Plantão Suporte, Recepção"
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">
-                  Números de WhatsApp de destino
-                </label>
-                <textarea
-                  required
-                  rows={4}
-                  value={formData.contatos_destino}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, contatos_destino: e.target.value }))}
-                  placeholder={"Um número por linha ou separados por vírgula\n5511999999999\n5511888888888"}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  A IA usará esta lista como possíveis contatos de transbordo.
-                </p>
-              </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Números de WhatsApp de destino
+                    </label>
+                    <textarea
+                      required
+                      rows={4}
+                      value={formData.contatos_destino}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, contatos_destino: e.target.value }))}
+                      placeholder={"Um número por linha ou separados por vírgula\n5511999999999\n5511888888888"}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      A IA usará esta lista como possíveis contatos de transbordo.
+                    </p>
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">
-                  Instruções de ativação
-                </label>
-                <textarea
-                  rows={6}
-                  value={formData.instrucoes_ativacao}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, instrucoes_ativacao: e.target.value }))}
-                  placeholder="Explique quando a IA deve usar este destino, o contexto ideal e qualquer observação operacional importante."
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                />
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Instruções de ativação
+                    </label>
+                    <textarea
+                      rows={6}
+                      value={formData.instrucoes_ativacao}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, instrucoes_ativacao: e.target.value }))}
+                      placeholder="Explique quando a IA deve usar este destino, o contexto ideal e qualquer observação operacional importante."
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
               </div>
-
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button
                   type="button"
                   onClick={closeModal}
