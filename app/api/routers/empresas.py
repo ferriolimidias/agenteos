@@ -41,7 +41,11 @@ from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
-from app.services.tag_crm_service import listar_tags_oficiais_ou_existentes, normalizar_tags
+from app.services.tag_crm_service import (
+    listar_tags_oficiais_ou_existentes,
+    normalizar_tags,
+    processar_disparo_conversao_ads_para_tags,
+)
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
 class EvolutionCredentials(BaseModel):
@@ -679,6 +683,7 @@ class TagCRMBase(BaseModel):
     cor: str = "#2563eb"
     instrucao_ia: str | None = None
     grupo_id: str | None = None
+    disparar_conversao_ads: bool = False
 
 
 class TagCRMCreate(TagCRMBase):
@@ -690,6 +695,7 @@ class TagCRMUpdate(BaseModel):
     cor: str | None = None
     instrucao_ia: str | None = None
     grupo_id: str | None = None
+    disparar_conversao_ads: bool | None = None
 
 
 class TagCRMResponse(TagCRMBase):
@@ -1443,6 +1449,7 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "cor": tag.cor or "#2563eb",
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
+            "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
         for tag in tags
@@ -1491,6 +1498,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
         nome=nome_limpo,
         cor=_normalizar_cor_tag(data.cor),
         instrucao_ia=(data.instrucao_ia or "").strip() or None,
+        disparar_conversao_ads=bool(data.disparar_conversao_ads),
     )
     db.add(tag)
 
@@ -1503,6 +1511,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "cor": tag.cor,
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
+            "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -1551,6 +1560,8 @@ async def atualizar_tag_crm_oficial(
         tag.cor = _normalizar_cor_tag(data.cor)
     if data.instrucao_ia is not None:
         tag.instrucao_ia = str(data.instrucao_ia).strip() or None
+    if data.disparar_conversao_ads is not None:
+        tag.disparar_conversao_ads = bool(data.disparar_conversao_ads)
     if data.grupo_id is not None:
         if data.grupo_id == "":
             tag.grupo_id = None
@@ -1579,6 +1590,7 @@ async def atualizar_tag_crm_oficial(
             "cor": tag.cor,
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
+            "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -2089,8 +2101,17 @@ async def atualizar_lead_crm(
         if status_limpo not in {"aberto", "concluido"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status_atendimento inválido")
         lead.status_atendimento = status_limpo
+    tags_novas_aplicadas: list[str] = []
     if data.tags is not None:
-        lead.tags = [str(tag).strip() for tag in data.tags if str(tag).strip()]
+        tags_atuais_norm = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
+        tags_limpas = [str(tag).strip() for tag in data.tags if str(tag).strip()]
+        lead.tags = tags_limpas
+        tags_novas_aplicadas = [tag for tag in tags_limpas if tag.lower() not in tags_atuais_norm]
+        await processar_disparo_conversao_ads_para_tags(
+            session=db,
+            lead=lead,
+            tags_aplicadas=tags_novas_aplicadas,
+        )
     if data.dados_adicionais is not None:
         lead.dados_adicionais = data.dados_adicionais
 
@@ -2183,7 +2204,14 @@ async def importar_leads(
             if lead:
                 if nome:
                     lead.nome_contato = nome
+                tags_antes = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
                 lead.tags = normalizar_tags((lead.tags or []) + tags_iniciais_lista)
+                tags_novas = [tag for tag in (lead.tags or []) if str(tag).strip().lower() not in tags_antes]
+                await processar_disparo_conversao_ads_para_tags(
+                    session=db,
+                    lead=lead,
+                    tags_aplicadas=tags_novas,
+                )
                 atualizados += 1
             else:
                 novo_lead = CRMLead(
@@ -2194,6 +2222,12 @@ async def importar_leads(
                     tags=tags_iniciais_lista,
                 )
                 db.add(novo_lead)
+                await db.flush()
+                await processar_disparo_conversao_ads_para_tags(
+                    session=db,
+                    lead=novo_lead,
+                    tags_aplicadas=tags_iniciais_lista,
+                )
                 inseridos += 1
 
         await db.commit()

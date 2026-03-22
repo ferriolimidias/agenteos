@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, TagCRM
@@ -77,3 +78,45 @@ async def listar_tags_oficiais_ou_existentes(empresa_id: str | uuid.UUID) -> lis
                     tags_unicas.add(limpa)
 
         return sorted(tags_unicas, key=lambda item: item.lower())
+
+
+async def disparar_evento_ads(lead: CRMLead, tag: TagCRM) -> None:
+    """
+    Placeholder para envio de conversão Ads (Google/Facebook).
+    Nesta fase, apenas loga dados para validação operacional.
+    """
+    print(
+        "[ADS CONVERSAO][PLACEHOLDER] "
+        f"lead_id={lead.id} empresa_id={lead.empresa_id} "
+        f"tag={tag.nome} disparar_conversao_ads={tag.disparar_conversao_ads} "
+        f"gclid={lead.gclid or ''} fbclid={lead.fbclid or ''}"
+    )
+
+
+async def processar_disparo_conversao_ads_para_tags(
+    session: AsyncSession,
+    lead: CRMLead,
+    tags_aplicadas: list[str],
+) -> None:
+    if not tags_aplicadas:
+        return
+
+    if not (str(getattr(lead, "gclid", "") or "").strip() or str(getattr(lead, "fbclid", "") or "").strip()):
+        return
+
+    tags_norm = {str(tag).strip().lower() for tag in tags_aplicadas if str(tag).strip()}
+    if not tags_norm:
+        return
+
+    result = await session.execute(
+        select(TagCRM).where(
+            TagCRM.empresa_id == lead.empresa_id,
+            TagCRM.disparar_conversao_ads == True,
+        )
+    )
+    tags_disparo = result.scalars().all()
+
+    for tag in tags_disparo:
+        nome_tag = str(tag.nome or "").strip().lower()
+        if nome_tag in tags_norm:
+            await disparar_evento_ads(lead, tag)

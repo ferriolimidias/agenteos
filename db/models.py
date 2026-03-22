@@ -328,6 +328,8 @@ class CRMLead(Base):
     status_atendimento = Column(String, nullable=False, default="aberto")
     foto_url = Column(String, nullable=True)
     foto_atualizada_em = Column(DateTime, nullable=True)
+    gclid = Column(String, nullable=True)
+    fbclid = Column(String, nullable=True)
     bot_pausado_ate = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
@@ -360,6 +362,7 @@ class TagCRM(Base):
     nome = Column(String, nullable=False)
     cor = Column(String, nullable=False, default="#2563eb")
     instrucao_ia = Column(Text, nullable=True)
+    disparar_conversao_ads = Column(Boolean, nullable=False, default=False)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="tags_crm")

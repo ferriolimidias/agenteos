@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, TagCRM
+from app.services.tag_crm_service import processar_disparo_conversao_ads_para_tags
 
 
 def _normalizar_tags(tags: list[str] | None) -> list[str]:
@@ -61,6 +62,11 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
                 mapa_finais[tag.lower()] = tag
 
             lead.tags = list(mapa_finais.values())
+            await processar_disparo_conversao_ads_para_tags(
+                session=session,
+                lead=lead,
+                tags_aplicadas=tags_aplicadas,
+            )
             await session.commit()
             return f"Sucesso: tags oficiais aplicadas ao lead: {lead.tags}"
     except Exception as e:

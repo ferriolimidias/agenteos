@@ -173,6 +173,7 @@ class TagOfficialBase(BaseModel):
     cor: str = "#2563eb"
     instrucao_ia: str | None = None
     grupo_id: str | None = None
+    disparar_conversao_ads: bool = False
 
 
 class TagOfficialCreate(TagOfficialBase):
@@ -184,6 +185,7 @@ class TagOfficialUpdate(BaseModel):
     cor: str | None = None
     instrucao_ia: str | None = None
     grupo_id: str | None = None
+    disparar_conversao_ads: bool | None = None
 
 
 class TagOfficialResponse(TagOfficialBase):

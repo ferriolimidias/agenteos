@@ -9,6 +9,7 @@ const initialTagForm = {
   cor: "#2563eb",
   instrucao_ia: "",
   grupo_id: "",
+  disparar_conversao_ads: false,
 };
 
 const initialGroupForm = {
@@ -108,6 +109,7 @@ export default function GestaoTags() {
       cor: tag.cor || "#2563eb",
       instrucao_ia: tag.instrucao_ia || "",
       grupo_id: tag.grupo_id || "",
+      disparar_conversao_ads: Boolean(tag.disparar_conversao_ads),
     });
     setShowModal(true);
   };
@@ -573,6 +575,37 @@ export default function GestaoTags() {
                       className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                       placeholder="Explique em quais cenários a IA deve aplicar esta tag ao lead."
                     />
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">Disparar Conversão de Ads</p>
+                        <p className="text-xs text-gray-500">
+                          Quando essa tag for aplicada, tentará disparar conversão se houver gclid/fbclid no lead.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.disparar_conversao_ads}
+                        onClick={() =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            disparar_conversao_ads: !prev.disparar_conversao_ads,
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          formData.disparar_conversao_ads ? "bg-blue-600" : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                            formData.disparar_conversao_ads ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

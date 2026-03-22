@@ -29,6 +29,21 @@ def _normalizar_telefone_remote_jid(remote_jid: str | None) -> str:
     return re.sub(r"\D", "", sem_sufixo)
 
 
+def _extrair_rastreio_ads_e_limpar_texto(texto: str | None) -> tuple[str, str | None, str | None]:
+    texto_original = str(texto or "")
+    gclid_match = re.search(r"\|gclid:([^|]+)\|", texto_original, flags=re.IGNORECASE)
+    fbclid_match = re.search(r"\|fbclid:([^|]+)\|", texto_original, flags=re.IGNORECASE)
+
+    gclid = str(gclid_match.group(1)).strip() if gclid_match else None
+    fbclid = str(fbclid_match.group(1)).strip() if fbclid_match else None
+
+    texto_limpo = re.sub(r"\|gclid:[^|]+\|", " ", texto_original, flags=re.IGNORECASE)
+    texto_limpo = re.sub(r"\|fbclid:[^|]+\|", " ", texto_limpo, flags=re.IGNORECASE)
+    texto_limpo = re.sub(r"\s{2,}", " ", texto_limpo).strip()
+
+    return texto_limpo, gclid, fbclid
+
+
 def extrair_conteudo_mensagem(data_json: dict) -> str:
     message = (data_json or {}).get("message", {}) or {}
     texto = (
@@ -99,6 +114,8 @@ async def save_history_and_check_pause(
     nome_contato: str | None = None,
     tipo_mensagem: str = "text",
     media_url: str | None = None,
+    gclid: str | None = None,
+    fbclid: str | None = None,
 ) -> bool:
     should_process = True
     async with AsyncSessionLocal() as session:
@@ -113,6 +130,12 @@ async def save_history_and_check_pause(
         lead = result.scalars().first()
         
         if lead:
+            if not from_me:
+                if gclid:
+                    lead.gclid = gclid
+                if fbclid:
+                    lead.fbclid = fbclid
+
             nome_contato_limpo = str(nome_contato or "").strip()
             nome_atual = str(lead.nome_contato or "").strip()
             if (
@@ -170,7 +193,47 @@ async def save_history_and_check_pause(
                 },
             )
         else:
-            # Caso o lead ainda não exista, processar normalmente
+            # Caso o lead ainda não exista, cria lead mínimo para não perder rastreio/Histórico.
+            if not from_me:
+                nome_contato_limpo = str(nome_contato or "").strip() or "Usuário (Auto)"
+                novo_lead = CRMLead(
+                    empresa_id=empresa_uuid,
+                    nome_contato=nome_contato_limpo,
+                    telefone_contato=telefone,
+                    gclid=gclid,
+                    fbclid=fbclid,
+                )
+                session.add(novo_lead)
+                await session.flush()
+                nova_msg = MensagemHistorico(
+                    lead_id=novo_lead.id,
+                    conexao_id=conexao_uuid,
+                    texto=texto,
+                    tipo_mensagem=tipo_mensagem,
+                    media_url=media_url,
+                    from_me=from_me,
+                )
+                session.add(nova_msg)
+                await session.commit()
+
+                mensagem_payload = {
+                    "id": str(nova_msg.id),
+                    "texto": str(nova_msg.texto or ""),
+                    "from_me": bool(nova_msg.from_me),
+                    "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+                    "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+                    "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+                }
+                await manager.broadcast_to_empresa(
+                    empresa_id,
+                    {
+                        "tipo_evento": "nova_mensagem_inbound",
+                        "telefone": telefone,
+                        "mensagem": mensagem_payload,
+                    },
+                )
+
+            # Caso o lead ainda não exista e mensagem seja outbound, não processar bot.
             if from_me:
                 should_process = False
                 
@@ -180,9 +243,12 @@ async def save_history_and_check_pause(
 @router.post("/{empresa_id}/meta")
 async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
     identificador = payload.get("from", "5511999999999")
-    texto = payload.get("text", {}).get("body", "Mensagem de teste (Meta)")
+    texto_bruto = payload.get("text", {}).get("body", "Mensagem de teste (Meta)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(empresa_id, identificador, texto, False)
+    should_process = await save_history_and_check_pause(
+        empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
+    )
     
     if should_process:
         msg = StandardMessage(
@@ -236,6 +302,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 print(f"[WEBHOOK EVOLUTION] Nenhuma conexão ativa encontrada para instance='{instance_name}' na empresa {empresa_id}")
 
         texto = extrair_conteudo_mensagem(data)
+        texto_limpo, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto)
         tipo_mensagem = _extrair_tipo_mensagem(data)
         if texto == "[Mensagem não suportada]":
             print("DEBUG: Formato de mensagem desconhecido")
@@ -362,12 +429,14 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         should_process = await save_history_and_check_pause(
             empresa_id,
             telefone,
-            texto or "[Mensagem não suportada]",
+            texto_limpo or "[Mensagem não suportada]",
             fromMe,
             conexao_id,
             nome_contato=push_name,
             tipo_mensagem=tipo_mensagem,
             media_url=media_base64,
+            gclid=gclid,
+            fbclid=fbclid,
         )
         
         if should_process:
@@ -377,7 +446,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 identificador_origem=telefone,
                 conexao_id=conexao_id,
                 nome_contato=push_name,
-                texto_mensagem=texto or "[Mensagem não suportada]",
+                texto_mensagem=texto_limpo or "[Mensagem não suportada]",
                 is_human_agent=False
             )
             background_tasks.add_task(handle_debouncer, msg)
@@ -392,9 +461,12 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
 @router.post("/{empresa_id}/telegram")
 async def webhook_telegram(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
     identificador = str(payload.get("message", {}).get("chat", {}).get("id", "123456789"))
-    texto = payload.get("message", {}).get("text", "Mensagem de teste (Telegram)")
+    texto_bruto = payload.get("message", {}).get("text", "Mensagem de teste (Telegram)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(empresa_id, identificador, texto, False)
+    should_process = await save_history_and_check_pause(
+        empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
+    )
     
     if should_process:
         msg = StandardMessage(empresa_id=empresa_id, canal="telegram", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=False)
@@ -407,9 +479,12 @@ async def webhook_chatwoot(empresa_id: str, payload: Dict[Any, Any], background_
     sender_type = payload.get("sender", {}).get("type", "contact")
     fromMe = (sender_type != "contact")
     identificador = str(payload.get("conversation", {}).get("contact_inbox", {}).get("source_id", "cw-abc-123"))
-    texto = payload.get("content", "Mensagem de teste (Chatwoot)")
+    texto_bruto = payload.get("content", "Mensagem de teste (Chatwoot)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(empresa_id, identificador, texto, fromMe)
+    should_process = await save_history_and_check_pause(
+        empresa_id, identificador, texto, fromMe, gclid=gclid, fbclid=fbclid
+    )
     
     if should_process:
         msg = StandardMessage(empresa_id=empresa_id, canal="chatwoot", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=(sender_type == "user"))
