@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, MessageSquare, Upload, X } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
@@ -8,6 +8,13 @@ import LeadDetailsModal from "../../components/LeadDetailsModal";
 function formatDate(value) {
   if (!value) return "Hoje";
   return new Date(value).toLocaleDateString("pt-BR");
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value || 0);
 }
 
 export default function Crm() {
@@ -24,6 +31,19 @@ export default function Crm() {
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
+
+  const { totalFaturamentoFunil, totalLeadsConvertidosFunil } = useMemo(() => {
+    let faturamento = 0;
+    let convertidos = 0;
+    for (const etapa of funil?.etapas || []) {
+      for (const lead of etapa.leads || []) {
+        const v = Number(lead.valor_conversao || 0);
+        faturamento += v;
+        if (v > 0) convertidos += 1;
+      }
+    }
+    return { totalFaturamentoFunil: faturamento, totalLeadsConvertidosFunil: convertidos };
+  }, [funil]);
 
   const fetchCrmData = async () => {
     try {
@@ -81,6 +101,7 @@ export default function Crm() {
       ...updates,
       tags: res.data?.tags || updates.tags,
       dados_adicionais: res.data?.dados_adicionais || updates.dados_adicionais,
+      valor_conversao: res.data?.valor_conversao ?? updates.valor_conversao,
     });
   };
 
@@ -148,15 +169,29 @@ export default function Crm() {
 
   return (
     <div className="flex h-full flex-col space-y-6">
-      <div className="flex flex-shrink-0 items-center justify-between">
-        <div>
-          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
-            <Users className="text-blue-600" size={32} />
-            CRM Dinâmico
-          </h1>
-          <p className="mt-1 text-gray-500">
-            {funil ? `Funil ativo: ${funil.funil_nome}` : "Gerencie seus leads capturados pela IA."}
-          </p>
+      <div className="flex flex-shrink-0 items-start justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
+              <Users className="text-blue-600" size={32} />
+              CRM Dinâmico
+            </h1>
+            <p className="mt-1 text-gray-500">
+              {funil ? `Funil ativo: ${funil.funil_nome}` : "Gerencie seus leads capturados pela IA."}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+              Faturamento Total do Funil
+            </p>
+            <p className="mt-1 text-lg font-bold text-emerald-800">{formatCurrency(totalFaturamentoFunil)}</p>
+            {totalLeadsConvertidosFunil > 0 ? (
+              <p className="mt-1 text-sm font-medium text-emerald-700">
+                {totalLeadsConvertidosFunil}{" "}
+                {totalLeadsConvertidosFunil === 1 ? "venda" : "vendas"} no funil
+              </p>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -191,71 +226,109 @@ export default function Crm() {
       ) : (
         <div className="custom-scrollbar flex-1 overflow-x-auto pb-4">
           <div className="flex h-full min-w-max space-x-6">
-            {funil.etapas.map((etapa) => (
-              <div
-                key={etapa.id}
-                className="flex w-80 flex-col overflow-hidden rounded-2xl border border-gray-200/60 bg-gray-50/80 shadow-sm"
-              >
-                <div className="flex cursor-move items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
-                  <h3 className="truncate font-semibold text-gray-800">{etapa.nome}</h3>
-                  <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-bold text-gray-600 shadow-sm">
-                    {etapa.leads?.length || 0}
-                  </span>
-                </div>
+            {funil.etapas.map((etapa) => {
+              const totalVendasEtapa = (etapa.leads || []).reduce(
+                (subtotal, lead) => subtotal + Number(lead.valor_conversao || 0),
+                0
+              );
+              const totalLeadsConvertidosEtapa = (etapa.leads || []).filter(
+                (lead) => Number(lead.valor_conversao || 0) > 0
+              ).length;
+              const resumoFaturamentoEtapa =
+                totalLeadsConvertidosEtapa > 0
+                  ? `${totalLeadsConvertidosEtapa} vendas • ${formatCurrency(totalVendasEtapa)}`
+                  : formatCurrency(totalVendasEtapa);
 
-                <div className="custom-scrollbar flex-1 space-y-3 overflow-y-auto p-3 min-h-[150px]">
-                  {!etapa.leads || etapa.leads.length === 0 ? (
-                    <div className="flex h-full items-center justify-center rounded-xl border-2 border-dashed border-gray-200 p-4 text-center text-sm font-medium text-gray-400/70">
-                      Nenhum lead nesta etapa
-                    </div>
-                  ) : (
-                    etapa.leads.map((lead) => (
-                      <div
-                        key={lead.id}
-                        onClick={() => setSelectedLead(lead)}
-                        className="group cursor-pointer rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md"
+              return (
+                <div
+                  key={etapa.id}
+                  className="flex w-80 flex-col overflow-hidden rounded-2xl border border-gray-200/60 bg-gray-50/80 shadow-sm"
+                >
+                  <div className="flex cursor-move items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold text-gray-800">{etapa.nome}</h3>
+                      <p
+                        className={`mt-1 text-xs font-medium ${
+                          totalLeadsConvertidosEtapa > 0 ? "text-emerald-700" : "text-gray-400"
+                        }`}
                       >
-                        <div className="mb-2 flex justify-between gap-3">
-                          <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
-                          <button className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100">
-                            <MessageSquare size={14} />
-                          </button>
-                        </div>
+                        {resumoFaturamentoEtapa}
+                      </p>
+                    </div>
+                    <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-bold text-gray-600 shadow-sm">
+                      {etapa.leads?.length || 0}
+                    </span>
+                  </div>
 
-                        {lead.telefone ? (
-                          <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
-                            <Phone size={14} className="text-green-600" />
-                            <span className="font-medium text-gray-700">{lead.telefone}</span>
-                          </div>
-                        ) : null}
-
-                        {lead.historico_resumo ? (
-                          <p className="mb-3 line-clamp-2 rounded-lg border border-gray-100 bg-gray-50 p-2 text-xs text-gray-500">
-                            {lead.historico_resumo}
-                          </p>
-                        ) : null}
-
-                        <LeadTagsEditor
-                          tags={lead.tags || []}
-                          compact
-                          placeholder="Nova tag + Enter"
-                          onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
-                          tagDefinitions={availableTags}
-                        />
-
-                        <div className="mt-3 flex items-center justify-between border-t border-gray-50 pt-3">
-                          <div className="flex items-center gap-1 text-[11px] font-medium text-gray-400 opacity-80">
-                            <Clock size={12} />
-                            {formatDate(lead.criado_em)}
-                          </div>
-                          <span className="text-[11px] font-medium text-blue-600">Detalhes</span>
-                        </div>
+                  <div className="custom-scrollbar min-h-[150px] flex-1 space-y-3 overflow-y-auto p-3">
+                    {!etapa.leads || etapa.leads.length === 0 ? (
+                      <div className="flex h-full items-center justify-center rounded-xl border-2 border-dashed border-gray-200 p-4 text-center text-sm font-medium text-gray-400/70">
+                        Nenhum lead nesta etapa
                       </div>
-                    ))
-                  )}
+                    ) : (
+                      etapa.leads.map((lead) => (
+                        <div
+                          key={lead.id}
+                          onClick={() => setSelectedLead(lead)}
+                          className="group cursor-pointer rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md"
+                        >
+                          <div className="mb-2 flex justify-between gap-3">
+                            <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
+                            <button className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100">
+                              <MessageSquare size={14} />
+                            </button>
+                          </div>
+
+                          {lead.telefone ? (
+                            <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
+                              <Phone size={14} className="text-green-600" />
+                              <span className="font-medium text-gray-700">{lead.telefone}</span>
+                            </div>
+                          ) : null}
+
+                          {lead.historico_resumo ? (
+                            <p className="mb-3 line-clamp-2 rounded-lg border border-gray-100 bg-gray-50 p-2 text-xs text-gray-500">
+                              {lead.historico_resumo}
+                            </p>
+                          ) : null}
+
+                          <LeadTagsEditor
+                            tags={lead.tags || []}
+                            compact
+                            placeholder="Nova tag + Enter"
+                            onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
+                            tagDefinitions={availableTags}
+                          />
+
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                              Valor Venda
+                            </span>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                Number(lead.valor_conversao || 0) > 0
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-gray-100 text-gray-600"
+                              }`}
+                            >
+                              {formatCurrency(lead.valor_conversao || 0)}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between border-t border-gray-50 pt-3">
+                            <div className="flex items-center gap-1 text-[11px] font-medium text-gray-400 opacity-80">
+                              <Clock size={12} />
+                              {formatDate(lead.criado_em)}
+                            </div>
+                            <span className="text-[11px] font-medium text-blue-600">Detalhes</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             <div className="flex min-h-[500px] w-80 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 opacity-50 transition-all hover:border-blue-300 hover:bg-gray-50 hover:opacity-100">
               <div className="flex items-center gap-2 pb-20 font-medium text-gray-500">

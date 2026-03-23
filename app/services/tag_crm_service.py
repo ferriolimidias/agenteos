@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from sqlalchemy import select
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, TagCRM
+from app.services.ads_integration_service import notificar_conversao_ads
 
 
 def normalizar_tags(tags: list[str] | None) -> list[str]:
@@ -80,19 +82,6 @@ async def listar_tags_oficiais_ou_existentes(empresa_id: str | uuid.UUID) -> lis
         return sorted(tags_unicas, key=lambda item: item.lower())
 
 
-async def disparar_evento_ads(lead: CRMLead, tag: TagCRM) -> None:
-    """
-    Placeholder para envio de conversão Ads (Google/Facebook).
-    Nesta fase, apenas loga dados para validação operacional.
-    """
-    print(
-        "[ADS CONVERSAO][PLACEHOLDER] "
-        f"lead_id={lead.id} empresa_id={lead.empresa_id} "
-        f"tag={tag.nome} disparar_conversao_ads={tag.disparar_conversao_ads} "
-        f"gclid={lead.gclid or ''} fbclid={lead.fbclid or ''}"
-    )
-
-
 async def processar_disparo_conversao_ads_para_tags(
     session: AsyncSession,
     lead: CRMLead,
@@ -119,4 +108,12 @@ async def processar_disparo_conversao_ads_para_tags(
     for tag in tags_disparo:
         nome_tag = str(tag.nome or "").strip().lower()
         if nome_tag in tags_norm:
-            await disparar_evento_ads(lead, tag)
+            await notificar_conversao_ads(str(lead.id), str(tag.nome), session)
+
+
+def disparar_conversao_ads_background(lead_id: str, tag_nome: str) -> None:
+    async def _runner() -> None:
+        async with AsyncSessionLocal() as session:
+            await notificar_conversao_ads(lead_id, tag_nome, session)
+
+    asyncio.create_task(_runner())

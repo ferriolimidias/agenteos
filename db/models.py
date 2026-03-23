@@ -6,6 +6,7 @@ from sqlalchemy import (
     String,
     Boolean,
     Integer,
+    Float,
     ForeignKey,
     Text,
     Table,
@@ -330,6 +331,7 @@ class CRMLead(Base):
     foto_atualizada_em = Column(DateTime, nullable=True)
     gclid = Column(String, nullable=True)
     fbclid = Column(String, nullable=True)
+    valor_conversao = Column(Float, nullable=True)
     bot_pausado_ate = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 

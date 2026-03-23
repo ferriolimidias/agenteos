@@ -41,10 +41,10 @@ from typing import Dict, Any, Optional
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
+from app.services.ads_integration_service import notificar_conversao_ads
 from app.services.tag_crm_service import (
     listar_tags_oficiais_ou_existentes,
     normalizar_tags,
-    processar_disparo_conversao_ads_para_tags,
 )
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
@@ -589,6 +589,7 @@ class CRMLeadResponse(BaseModel):
     historico_resumo: str | None = None
     tags: List[str] = Field(default_factory=list)
     dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
+    valor_conversao: float | None = None
     criado_em: str | None = None
 
 
@@ -620,6 +621,7 @@ class CRMLeadUpdateRequest(BaseModel):
     status_atendimento: str | None = None
     tags: List[str] | None = None
     dados_adicionais: Dict[str, Any] | None = None
+    valor_conversao: float | None = None
 
 
 class DestinoTransferenciaBase(BaseModel):
@@ -1073,6 +1075,7 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
                         "historico_resumo": lead.historico_resumo,
                         "tags": lead.tags or [],
                         "dados_adicionais": lead.dados_adicionais or {},
+                        "valor_conversao": lead.valor_conversao,
                         "criado_em": lead.criado_em.isoformat() if lead.criado_em else None
                     } for lead in etapa.leads
                 ]
@@ -2043,6 +2046,7 @@ async def atualizar_lead_crm(
     empresa_id: str,
     lead_id: str,
     data: CRMLeadUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -2058,6 +2062,7 @@ async def atualizar_lead_crm(
             "status_atendimento": data.status_atendimento or "aberto",
             "tags": data.tags or [],
             "dados_adicionais": data.dados_adicionais or {},
+            "valor_conversao": data.valor_conversao or 0,
         }
 
     try:
@@ -2101,22 +2106,34 @@ async def atualizar_lead_crm(
         if status_limpo not in {"aberto", "concluido"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status_atendimento inválido")
         lead.status_atendimento = status_limpo
-    tags_novas_aplicadas: list[str] = []
+    tags_para_notificar: list[TagCRM] = []
     if data.tags is not None:
         tags_atuais_norm = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
         tags_limpas = [str(tag).strip() for tag in data.tags if str(tag).strip()]
         lead.tags = tags_limpas
         tags_novas_aplicadas = [tag for tag in tags_limpas if tag.lower() not in tags_atuais_norm]
-        await processar_disparo_conversao_ads_para_tags(
-            session=db,
-            lead=lead,
-            tags_aplicadas=tags_novas_aplicadas,
-        )
+        tags_novas_norm = {tag.lower() for tag in tags_novas_aplicadas if tag}
+        if tags_novas_norm:
+            result_tags_disparo = await db.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == emp_uuid,
+                    TagCRM.disparar_conversao_ads == True,
+                )
+            )
+            tags_para_notificar = [
+                tag
+                for tag in result_tags_disparo.scalars().all()
+                if str(tag.nome or "").strip().lower() in tags_novas_norm
+            ]
     if data.dados_adicionais is not None:
         lead.dados_adicionais = data.dados_adicionais
+    if data.valor_conversao is not None:
+        lead.valor_conversao = float(data.valor_conversao)
 
     try:
         await db.commit()
+        for tag in tags_para_notificar:
+            background_tasks.add_task(notificar_conversao_ads, str(lead.id), str(tag.nome), db)
         await db.refresh(lead)
         return {
             "id": str(lead.id),
@@ -2126,7 +2143,8 @@ async def atualizar_lead_crm(
             "etapa_id": str(lead.etapa_id) if lead.etapa_id else None,
             "status_atendimento": lead.status_atendimento,
             "tags": lead.tags or [],
-            "dados_adicionais": lead.dados_adicionais or {}
+            "dados_adicionais": lead.dados_adicionais or {},
+            "valor_conversao": lead.valor_conversao,
         }
     except Exception as e:
         await db.rollback()
@@ -2158,6 +2176,7 @@ async def transferir_lead_manual(
 @router.post("/{empresa_id}/leads/importar", status_code=status.HTTP_201_CREATED)
 async def importar_leads(
     empresa_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     tags_iniciais: str = Form("[]"),
     db: AsyncSession = Depends(get_db),
@@ -2184,6 +2203,19 @@ async def importar_leads(
         etapa_inicial_id = await _garantir_etapa_inicial_crm(db, emp_uuid)
         inseridos = 0
         atualizados = 0
+        notificacoes_ads_pendentes: list[tuple[str, str]] = []
+
+        result_tags_disparo = await db.execute(
+            select(TagCRM).where(
+                TagCRM.empresa_id == emp_uuid,
+                TagCRM.disparar_conversao_ads == True,
+            )
+        )
+        tags_disparo_map = {
+            str(tag.nome or "").strip().lower(): tag
+            for tag in result_tags_disparo.scalars().all()
+            if str(tag.nome or "").strip()
+        }
 
         for row in rows:
             nome = str((row or {}).get(nome_col, "")).strip()
@@ -2207,11 +2239,10 @@ async def importar_leads(
                 tags_antes = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
                 lead.tags = normalizar_tags((lead.tags or []) + tags_iniciais_lista)
                 tags_novas = [tag for tag in (lead.tags or []) if str(tag).strip().lower() not in tags_antes]
-                await processar_disparo_conversao_ads_para_tags(
-                    session=db,
-                    lead=lead,
-                    tags_aplicadas=tags_novas,
-                )
+                for tag_nome in tags_novas:
+                    tag_obj = tags_disparo_map.get(str(tag_nome).strip().lower())
+                    if tag_obj:
+                        notificacoes_ads_pendentes.append((str(lead.id), str(tag_obj.nome)))
                 atualizados += 1
             else:
                 novo_lead = CRMLead(
@@ -2223,14 +2254,15 @@ async def importar_leads(
                 )
                 db.add(novo_lead)
                 await db.flush()
-                await processar_disparo_conversao_ads_para_tags(
-                    session=db,
-                    lead=novo_lead,
-                    tags_aplicadas=tags_iniciais_lista,
-                )
+                for tag_nome in tags_iniciais_lista:
+                    tag_obj = tags_disparo_map.get(str(tag_nome).strip().lower())
+                    if tag_obj:
+                        notificacoes_ads_pendentes.append((str(novo_lead.id), str(tag_obj.nome)))
                 inseridos += 1
 
         await db.commit()
+        for lead_id_notificacao, tag_nome_notificacao in notificacoes_ads_pendentes:
+            background_tasks.add_task(notificar_conversao_ads, lead_id_notificacao, tag_nome_notificacao, db)
         return {
             "status": "sucesso",
             "mensagem": "Importação concluída.",

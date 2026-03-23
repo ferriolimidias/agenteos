@@ -17,6 +17,7 @@ export default function LeadDetailsModal({
     historico_resumo: "",
     dados_adicionais_texto: "{}",
   });
+  const [valorConversao, setValorConversao] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -28,6 +29,7 @@ export default function LeadDetailsModal({
       historico_resumo: lead.historico_resumo || "",
       dados_adicionais_texto: JSON.stringify(lead.dados_adicionais || {}, null, 2),
     });
+    setValorConversao(lead.valor_conversao || 0);
     setError("");
   }, [lead]);
 
@@ -44,6 +46,7 @@ export default function LeadDetailsModal({
         telefone_contato: formData.telefone_contato.trim(),
         historico_resumo: formData.historico_resumo.trim(),
         dados_adicionais: dadosAdicionais,
+        valor_conversao: Number(valorConversao || 0),
       });
       onClose?.();
     } catch (err) {
@@ -117,6 +120,23 @@ export default function LeadDetailsModal({
                   onChange={(e) => setFormData((prev) => ({ ...prev, historico_resumo: e.target.value }))}
                   className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                 />
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700">Valor da Venda (R$)</label>
+                <div className="relative mt-1">
+                  <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-sm font-medium text-gray-500">
+                    R$
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="block w-full rounded-md border border-gray-300 py-2 pl-11 pr-3 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                    value={valorConversao}
+                    onChange={(e) => setValorConversao(e.target.value)}
+                    placeholder="R$ 0,00"
+                  />
+                </div>
               </div>
 
               <div>
