@@ -996,6 +996,7 @@ export default function Campanhas() {
                       </div>
                     )}
                   </div>
+                </div>
               </div>
 
               <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
