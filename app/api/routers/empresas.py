@@ -769,7 +769,11 @@ class CampanhaPreviewResponse(BaseModel):
     usou_mock: bool
 
 @router.get("/{empresa_id}/rag")
-async def listar_conhecimento_rag(empresa_id: str, db: AsyncSession = Depends(get_db)):
+async def listar_conhecimento_rag(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
     """
     Retorna a lista de documentos lógicos da base vetorial da empresa.
     """
@@ -806,7 +810,12 @@ async def listar_conhecimento_rag(empresa_id: str, db: AsyncSession = Depends(ge
         )
 
 @router.post("/{empresa_id}/rag", status_code=status.HTTP_201_CREATED)
-async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db: AsyncSession = Depends(get_db)):
+async def adicionar_conhecimento_rag(
+    empresa_id: str,
+    data: RAGCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
     """
     Adiciona um novo conhecimento RAG (texto ou url) processando com Langchain e embeddings, igual ao PDF.
     """
@@ -898,7 +907,12 @@ async def adicionar_conhecimento_rag(empresa_id: str, data: RAGCreateRequest, db
 
 
 @router.post("/{empresa_id}/rag/pdf", status_code=status.HTTP_201_CREATED)
-async def adicionar_conhecimento_rag_pdf(empresa_id: str, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+async def adicionar_conhecimento_rag_pdf(
+    empresa_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
     """
     Cadastra e vetoriza um arquivo PDF na base de conhecimento.
     """
@@ -967,6 +981,7 @@ async def deletar_conhecimento_rag_por_source_name(
     empresa_id: str,
     payload: RAGDeleteRequest,
     db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
 ):
     """
     Exclui um documento lógico da base RAG pelo source_name da empresa.
