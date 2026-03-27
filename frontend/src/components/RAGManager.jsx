@@ -71,6 +71,23 @@ export default function RAGManager({ empresaId }) {
     }
   };
 
+  const handleDelete = async (sourceName) => {
+    if (!window.confirm(`Tem certeza que deseja excluir "${sourceName}" da base de conhecimento?`)) return;
+    
+    try {
+      setLoading(true);
+      await api.delete(`/empresas/${empresaId}/rag`, {
+        data: { source_name: sourceName }
+      });
+      setSuccessMsg("Documento excluído com sucesso!");
+      fetchConhecimentos();
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err) {
+      setErrorMsg("Erro ao excluir o documento.");
+      setLoading(false);
+    }
+  };
+
   if (!empresaId) return <div className="p-8 text-center text-gray-500">ID da empresa não fornecido.</div>;
 
   return (
@@ -218,28 +235,31 @@ export default function RAGManager({ empresaId }) {
               ) : (
                 <ul className="divide-y divide-gray-100">
                   {conhecimentos.map((item) => (
-                    <li key={item.id} className="p-6 hover:bg-gray-50 transition-colors flex items-start gap-4 group">
-                      <div className={`mt-1 p-2 rounded-lg flex-shrink-0 ${item.tipo === 'url' ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
-                        {item.tipo === 'url' ? <LinkIcon size={20} /> : <FileText size={20} />}
+                    <li key={item.source_name} className="p-6 hover:bg-gray-50 transition-colors flex items-start gap-4 group">
+                      <div className={`mt-1 p-2 rounded-lg flex-shrink-0 ${item.source_type === 'url' ? 'bg-indigo-50 text-indigo-600' : item.source_type === 'pdf' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                        {item.source_type === 'url' ? <LinkIcon size={20} /> : <FileText size={20} />}
                       </div>
                       
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-xs font-medium uppercase tracking-wider text-gray-500">
-                            {item.tipo === 'url' ? 'Link Web' : item.tipo === 'pdf' ? 'Arquivo PDF' : 'Texto Puro'}
+                            {item.source_type === 'url' ? 'Link Web' : item.source_type === 'pdf' ? 'Arquivo PDF' : 'Texto Puro'}
                           </span>
-                          <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-                            {item.status}
+                          <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                            {item.total_chunks} fragmentos
                           </span>
                         </div>
                         
-                        <p className={`text-sm text-gray-800 break-words ${item.tipo === 'texto' ? 'line-clamp-3' : 'font-mono text-blue-600 hover:underline cursor-pointer'}`}>
-                          {item.conteudo}
+                        <p className={`text-sm text-gray-800 break-words ${item.source_type === 'url' ? 'font-mono text-blue-600 hover:underline cursor-pointer' : 'font-medium'}`}>
+                          {item.source_name}
                         </p>
                       </div>
                       
-                      <button className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-2">
+                      <button 
+                        onClick={() => handleDelete(item.source_name)}
+                        title="Excluir documento"
+                        className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-2"
+                      >
                         <Trash2 size={18} />
                       </button>
                     </li>

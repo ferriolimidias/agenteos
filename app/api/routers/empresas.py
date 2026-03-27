@@ -5,13 +5,14 @@ import json
 import uuid
 from datetime import datetime
 import PyPDF2
+import traceback
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_
 from typing import List
 from fastapi.responses import Response
 
-from db.database import get_db
+from db.database import get_db, AsyncSessionLocal
 from sqlalchemy.orm import selectinload
 from db.models import (
     ADMIN_EMPRESA_ROLE,
@@ -908,11 +909,64 @@ async def adicionar_conhecimento_rag(
         )
 
 
-@router.post("/{empresa_id}/rag/pdf", status_code=status.HTTP_201_CREATED)
+async def processar_rag_pdf_background(empresa_id: str, content: bytes, filename: str):
+    try:
+        async with AsyncSessionLocal() as db:
+            import PyPDF2
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+            text_content = ""
+            for page in pdf_reader.pages:
+                try:
+                    extr = page.extract_text()
+                    if extr:
+                        text_content += str(extr) + "\n"
+                except Exception:
+                    pass
+
+            if not text_content.strip():
+                print(f"Erro: PDF {filename} vazio ou sem texto extraível.")
+                return
+
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
+            chunks = text_splitter.split_text(text_content)
+
+            from langchain_openai import OpenAIEmbeddings
+            embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+            chunks_embeddings = await embeddings_model.aembed_documents(chunks)
+
+            for chunk, emb in zip(chunks, chunks_embeddings):
+                novo_chunk_rag = ConhecimentoRAG(
+                    empresa_id=empresa_id,
+                    tipo="pdf",
+                    conteudo=f"[{filename}] " + chunk,
+                    source_name=filename or "arquivo.pdf",
+                    source_type="pdf",
+                    status="Ativo"
+                )
+                db.add(novo_chunk_rag)
+
+                novo_vetor = Conhecimento(
+                    empresa_id=empresa_id,
+                    conteudo=chunk,
+                    source_name=filename or "arquivo.pdf",
+                    source_type="pdf",
+                    embedding=emb
+                )
+                db.add(novo_vetor)
+
+            await db.commit()
+            print(f"Sucesso: PDF {filename} processado!")
+    except Exception as e:
+        traceback.print_exc()
+        print(f"Erro no processamento background do PDF {filename}: {str(e)}")
+
+
+@router.post("/{empresa_id}/rag/pdf", status_code=status.HTTP_202_ACCEPTED)
 async def adicionar_conhecimento_rag_pdf(
     empresa_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
     _: Usuario = Depends(require_ia_config_access),
 ):
     """
@@ -921,61 +975,9 @@ async def adicionar_conhecimento_rag_pdf(
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Arquivo deve ser um PDF.")
         
-    try:
-        content = await file.read()
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
-        text_content = ""
-        for page in pdf_reader.pages:
-            try:
-                extr = page.extract_text()
-                if extr:
-                    text_content += str(extr) + "\n"
-            except Exception:
-                pass # Ignore pages failing to decode
-                
-        if not text_content.strip():
-            raise HTTPException(status_code=400, detail="Não foi possível extrair texto do PDF (pode ser um PDF de imagens ou vazio).")
-            
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-        )
-        chunks = text_splitter.split_text(text_content)
-        
-        from langchain_openai import OpenAIEmbeddings
-        embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
-        chunks_embeddings = await embeddings_model.aembed_documents(chunks)
-        
-        for chunk, emb in zip(chunks, chunks_embeddings):
-            # Salva o chunk no histórico/visualização do Tenant (tabela conhecimento_rag) com tipo pdf vinculando à empresa
-            novo_chunk_rag = ConhecimentoRAG(
-                empresa_id=empresa_id,
-                tipo="pdf",
-                conteudo=f"[{file.filename}] " + chunk,
-                source_name=file.filename or "arquivo.pdf",
-                source_type="pdf",
-                status="Ativo"
-            )
-            db.add(novo_chunk_rag)
-            
-            # Salva na tabela vetorial (utilizada pelo Agent no similarity search)
-            novo_vetor = Conhecimento(
-                empresa_id=empresa_id,
-                conteudo=chunk,
-                source_name=file.filename or "arquivo.pdf",
-                source_type="pdf",
-                embedding=emb
-            )
-            db.add(novo_vetor)
-            
-        await db.commit()
-        return {"mensagem": "PDF processado e fragmentado com sucesso!"}
-        
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    content = await file.read()
+    background_tasks.add_task(processar_rag_pdf_background, empresa_id, content, file.filename)
+    return {"mensagem": "Upload concluído. O arquivo está sendo processado em segundo plano e aparecerá na lista em breve."}
 
 
 @router.delete("/{empresa_id}/rag")
