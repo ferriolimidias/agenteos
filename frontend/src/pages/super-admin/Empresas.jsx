@@ -222,7 +222,7 @@ export default function Empresas() {
       });
     } catch (err) {
       console.error(err);
-      alert("Erro ao carregar configurações da IA.");
+      alert("Erro ao carregar configurações do Agente.");
       setShowConfigIAModal(false);
     } finally {
       setLoadingConfigIA(false);
@@ -234,11 +234,11 @@ export default function Empresas() {
     setSavingConfigIA(true);
     try {
       await api.put(`/empresas/${empresaSelecionada.id}/ia-config`, configIAData);
-      alert("Configuração de IA salva com sucesso!");
+      alert("Configuração do Agente salva com sucesso!");
       setShowConfigIAModal(false);
     } catch (err) {
       console.error(err);
-      alert("Erro ao salvar a configuração da IA.");
+      alert("Erro ao salvar a configuração do Agente.");
     } finally {
       setSavingConfigIA(false);
     }
@@ -355,7 +355,7 @@ export default function Empresas() {
                         <button 
                           onClick={() => openConfigIAModal(emp)}
                           className="text-gray-400 hover:text-purple-400 transition-colors p-2 hover:bg-purple-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
-                          title="Configuração de IA"
+                          title="Configuração do Agente"
                         >
                           <Brain size={16} />
                         </button>
@@ -735,7 +735,7 @@ export default function Empresas() {
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Brain className="text-purple-500" size={24} />
-                  Configuração de IA
+                  Configuração do Agente
                 </h2>
                 <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
               </div>

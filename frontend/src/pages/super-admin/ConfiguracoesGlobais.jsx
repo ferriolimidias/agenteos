@@ -1,186 +1,186 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import axios from "axios";
 
 export default function ConfiguracoesGlobais() {
   const [formData, setFormData] = useState({
     nome_sistema: "",
-    cor_primaria: "",
+    cor_primaria: "#6366f1",
     openai_key_global: "",
     favicon_base64: "",
-    logo_base64: ""
+    logo_base64: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   useEffect(() => {
+    const carregarConfiguracoes = async () => {
+      setLoading(true);
+      setErrorMessage("");
+      try {
+        const response = await axios.get("/api/admin/configuracoes");
+        setFormData({
+          nome_sistema: response.data.nome_sistema || "",
+          cor_primaria: response.data.cor_primaria || "#6366f1",
+          openai_key_global: response.data.openai_key_global || "",
+          favicon_base64: response.data.favicon_base64 || "",
+          logo_base64: response.data.logo_base64 || "",
+        });
+      } catch (error) {
+        const backendMessage = error?.response?.data?.detail || error?.message || "Falha ao carregar configurações.";
+        setErrorMessage(`Erro ao carregar configurações: ${backendMessage}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     carregarConfiguracoes();
   }, []);
 
-  const carregarConfiguracoes = async () => {
-    try {
-      const response = await axios.get("/api/admin/configuracoes");
-      setFormData({
-        nome_sistema: response.data.nome_sistema || "",
-        cor_primaria: response.data.cor_primaria || "",
-        openai_key_global: response.data.openai_key_global || "",
-        favicon_base64: response.data.favicon_base64 || "",
-        logo_base64: response.data.logo_base64 || ""
-      });
-    } catch (error) {
-      console.error("Erro ao carregar configurações globais:", error);
-      setMessage({ type: "error", text: "Erro ao carregar as configurações." });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleFaviconUpload = (e) => {
     const file = e.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    const allowedTypes = ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"];
-    if (!allowedTypes.includes(file.type)) {
-      setMessage({ type: "error", text: "Formato inválido. Use PNG, ICO ou SVG." });
-      return;
-    }
+    if (!file) return;
 
     const reader = new FileReader();
     reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
       setFormData((prev) => ({
         ...prev,
-        favicon_base64: result
+        favicon_base64: String(reader.result || ""),
       }));
+      setErrorMessage("");
     };
     reader.onerror = () => {
-      setMessage({ type: "error", text: "Falha ao processar arquivo de favicon." });
+      setErrorMessage("Erro ao converter favicon para base64.");
     };
     reader.readAsDataURL(file);
-  };
-
-  const handleRemoveFavicon = () => {
-    setFormData((prev) => ({
-      ...prev,
-      favicon_base64: ""
-    }));
   };
 
   const handleLogoUpload = (e) => {
     const file = e.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    const allowedTypes = ["image/png", "image/jpeg", "image/svg+xml"];
-    if (!allowedTypes.includes(file.type)) {
-      setMessage({ type: "error", text: "Formato inválido. Use PNG, JPG ou SVG para a logo." });
-      return;
-    }
+    if (!file) return;
 
     const reader = new FileReader();
     reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
       setFormData((prev) => ({
         ...prev,
-        logo_base64: result
+        logo_base64: String(reader.result || ""),
       }));
+      setErrorMessage("");
     };
     reader.onerror = () => {
-      setMessage({ type: "error", text: "Falha ao processar arquivo de logo." });
+      setErrorMessage("Erro ao converter logo para base64.");
     };
     reader.readAsDataURL(file);
-  };
-
-  const handleRemoveLogo = () => {
-    setFormData((prev) => ({
-      ...prev,
-      logo_base64: ""
-    }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
-    setMessage(null);
+    setErrorMessage("");
+    setSuccessMessage("");
     try {
       await axios.put("/api/admin/configuracoes", formData);
-      setMessage({ type: "success", text: "Configurações salvas com sucesso!" });
-      // Evento opcional para notificar o layout se quiser atualizar o DOM em tempo real
+      setSuccessMessage("Configurações salvas com sucesso.");
       window.dispatchEvent(new Event("configuracoesUpdated"));
     } catch (error) {
-      console.error("Erro ao salvar configurações globais:", error);
-      setMessage({ type: "error", text: "Erro ao salvar as configurações." });
+      const backendMessage = error?.response?.data?.detail || error?.message || "Falha ao salvar configurações.";
+      setErrorMessage(`Erro ao salvar configurações: ${backendMessage}`);
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="text-gray-400 p-8 h-full flex justify-center items-center">
-        Carregando...
-      </div>
-    );
-  }
-
   return (
     <div className="bg-[#1e1e2d] w-full min-h-screen text-gray-200 p-8">
       <div className="max-w-3xl border border-gray-700 rounded-xl bg-[#2a2a3c] p-8 shadow-xl">
-        <h1 className="text-3xl tracking-tight font-bold text-white mb-6">
-          Configurações Globais
-        </h1>
-        <p className="text-gray-400 mb-8">
-          Personalize a aparência e defina as chaves globais padrão para o sistema Whitelabel.
-        </p>
+        <h1 className="text-3xl tracking-tight font-bold text-white mb-6">Configurações Globais</h1>
+        <p className="text-gray-400 mb-8">Personalize a aparência e chaves globais do sistema.</p>
 
-        {message && (
-          <div
-            className={`p-4 mb-6 rounded-lg text-sm ${
-              message.type === "success"
-                ? "bg-emerald-900/30 text-emerald-400 border border-emerald-800"
-                : "bg-red-900/30 text-red-400 border border-red-800"
-            }`}
-          >
-            {message.text}
+        {loading && (
+          <div className="mb-6 p-4 rounded-lg text-sm bg-blue-900/30 text-blue-300 border border-blue-800">
+            Carregando configurações...
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="mb-6 p-4 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800">
+            {errorMessage}
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="mb-6 p-4 rounded-lg text-sm bg-emerald-900/30 text-emerald-300 border border-emerald-800">
+            {successMessage}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Nome do Sistema (Whitelabel)
-            </label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Sistema</label>
             <input
               type="text"
               name="nome_sistema"
               value={formData.nome_sistema}
               onChange={handleChange}
               className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
-              placeholder="Ex: Super Agent OS"
+              placeholder="Ex: Agente OS"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Cor Primária (Hexadecimal)
-            </label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Favicon</label>
+            <input
+              type="file"
+              accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml"
+              onChange={handleFaviconUpload}
+              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            {formData.favicon_base64 && (
+              <div className="mt-3">
+                <img
+                  src={formData.favicon_base64}
+                  alt="Preview favicon"
+                  className="w-8 h-8 rounded bg-white p-1 border border-gray-600"
+                />
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">O favicon aparece na aba do navegador.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Logo do Sistema</label>
+            <input
+              type="file"
+              accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml"
+              onChange={handleLogoUpload}
+              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            {formData.logo_base64 && (
+              <div className="mt-3">
+                <img
+                  src={formData.logo_base64}
+                  alt="Preview logo"
+                  className="h-12 max-w-[160px] rounded bg-white p-1 border border-gray-600 object-contain"
+                />
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">A logo é aplicada na Sidebar e na tela de Login.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Cor Primária (Hexadecimal)</label>
             <div className="flex gap-4">
               <input
                 type="color"
                 name="cor_primaria"
-                value={formData.cor_primaria || "#6366f1"}
+                value={formData.cor_primaria}
                 onChange={handleChange}
                 className="h-12 w-16 p-1 bg-[#1e1e2d] border border-gray-600 rounded-lg cursor-pointer"
               />
@@ -197,9 +197,7 @@ export default function ConfiguracoesGlobais() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Chave OpenAI Global (Fallback)
-            </label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Chave OpenAI Global (Fallback)</label>
             <input
               type="password"
               name="openai_key_global"
@@ -208,78 +206,13 @@ export default function ConfiguracoesGlobais() {
               className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
               placeholder="sk-..."
             />
-            <p className="text-xs text-gray-500 mt-2">
-              Se as empresas não informarem a própria chave, o sistema usará esta chave como padrão.
-            </p>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Favicon (PNG, ICO ou SVG)
-            </label>
-            <input
-              type="file"
-              accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml"
-              onChange={handleFaviconUpload}
-              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
-            />
-            {formData.favicon_base64 && (
-              <div className="mt-3 flex items-center gap-4">
-                <img
-                  src={formData.favicon_base64}
-                  alt="Preview do favicon"
-                  className="w-8 h-8 rounded bg-white p-1 border border-gray-600"
-                />
-                <button
-                  type="button"
-                  onClick={handleRemoveFavicon}
-                  className="text-sm text-red-400 hover:text-red-300"
-                >
-                  Remover favicon
-                </button>
-              </div>
-            )}
-            <p className="text-xs text-gray-500 mt-2">
-              O favicon é salvo em base64 nas configurações globais.
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Logo do Sistema (PNG, JPG ou SVG)
-            </label>
-            <input
-              type="file"
-              accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml"
-              onChange={handleLogoUpload}
-              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
-            />
-            {formData.logo_base64 && (
-              <div className="mt-3 flex items-center gap-4">
-                <img
-                  src={formData.logo_base64}
-                  alt="Preview da logo"
-                  className="h-12 max-w-[140px] rounded bg-white p-1 border border-gray-600 object-contain"
-                />
-                <button
-                  type="button"
-                  onClick={handleRemoveLogo}
-                  className="text-sm text-red-400 hover:text-red-300"
-                >
-                  Remover logo
-                </button>
-              </div>
-            )}
-            <p className="text-xs text-gray-500 mt-2">
-              A logo é salva em base64 e aplicada na Sidebar e Login.
-            </p>
-          </div>
-
-          <div className="pt-4">
+          <div className="pt-2">
             <button
               type="submit"
               disabled={saving}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center min-w-[150px]"
+              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center min-w-[150px] disabled:opacity-70 disabled:cursor-not-allowed"
             >
               {saving ? "Salvando..." : "Salvar Configurações"}
             </button>

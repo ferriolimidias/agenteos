@@ -7,13 +7,11 @@ async def run_migrations():
     async with engine.begin() as conn:
         try:
             print("Adding columns to ferramentas_api...")
-            # We use IF NOT EXISTS workaround or just catch errors if they exist
-            # PostgreSQL doesn't have IF NOT EXISTS for ADD COLUMN natively until v14+ in some contexts, but let's try direct ALTER
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN IF NOT EXISTS url VARCHAR;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN IF NOT EXISTS metodo VARCHAR DEFAULT 'GET';"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN IF NOT EXISTS headers TEXT;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN IF NOT EXISTS payload TEXT;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN IF NOT EXISTS schema_parametros JSONB DEFAULT '{}'::jsonb;"))
+            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN url VARCHAR;"))
+            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN metodo VARCHAR DEFAULT 'GET';"))
+            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN headers TEXT;"))
+            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN payload TEXT;"))
+            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN schema_parametros JSONB DEFAULT '{}'::jsonb;"))
             print("Columns added to ferramentas_api.")
         except Exception as e:
             print(f"Schema columns might already exist or error: {e}")
@@ -21,7 +19,7 @@ async def run_migrations():
         try:
             print("Creating especialista_ferramentas table...")
             await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS especialista_ferramentas (
+                CREATE TABLE especialista_ferramentas (
                     especialista_id UUID NOT NULL REFERENCES especialistas(id) ON DELETE CASCADE,
                     ferramenta_id UUID NOT NULL REFERENCES ferramentas_api(id) ON DELETE CASCADE,
                     PRIMARY KEY (especialista_id, ferramenta_id)
@@ -34,7 +32,7 @@ async def run_migrations():
         try:
             print("Creating especialista_tools table...")
             await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS especialista_tools (
+                CREATE TABLE especialista_tools (
                     especialista_id UUID NOT NULL REFERENCES especialistas(id) ON DELETE CASCADE,
                     api_connection_id UUID NOT NULL REFERENCES api_connections(id) ON DELETE CASCADE,
                     PRIMARY KEY (especialista_id, api_connection_id)
@@ -47,7 +45,7 @@ async def run_migrations():
         try:
             print("Adding conexao_id to mensagens_historico...")
             await conn.execute(
-                text("ALTER TABLE mensagens_historico ADD COLUMN IF NOT EXISTS conexao_id UUID;")
+                text("ALTER TABLE mensagens_historico ADD COLUMN conexao_id UUID;")
             )
             print("Column conexao_id ensured on mensagens_historico.")
         except Exception as e:
@@ -55,12 +53,12 @@ async def run_migrations():
 
         try:
             print("Applying semantic routing migrations on especialistas...")
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            await conn.execute(text("CREATE EXTENSION vector;"))
             await conn.execute(
-                text("ALTER TABLE especialistas ADD COLUMN IF NOT EXISTS descricao_roteamento TEXT;")
+                text("ALTER TABLE especialistas ADD COLUMN descricao_roteamento TEXT;")
             )
             await conn.execute(
-                text("ALTER TABLE especialistas ADD COLUMN IF NOT EXISTS embedding vector(1536);")
+                text("ALTER TABLE especialistas ADD COLUMN embedding vector(1536);")
             )
             print("Semantic routing columns ensured on especialistas.")
         except Exception as e:
@@ -69,7 +67,7 @@ async def run_migrations():
         try:
             print("Adding favicon_base64 to configuracoes_globais...")
             await conn.execute(
-                text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS favicon_base64 TEXT;")
+                text("ALTER TABLE configuracoes_globais ADD COLUMN favicon_base64 TEXT;")
             )
             print("Column favicon_base64 ensured on configuracoes_globais.")
         except Exception as e:
@@ -78,20 +76,17 @@ async def run_migrations():
         try:
             print("Adding logo_base64 to configuracoes_globais...")
             await conn.execute(
-                text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS logo_base64 TEXT;")
+                text("ALTER TABLE configuracoes_globais ADD COLUMN logo_base64 TEXT;")
             )
             print("Column logo_base64 ensured on configuracoes_globais.")
         except Exception as e:
             print(f"configuracoes_globais logo migration error: {e}")
 
-        try:
-            print("Adding logo_url to empresas...")
-            await conn.execute(
-                text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS logo_url VARCHAR;")
-            )
-            print("Column logo_url ensured on empresas.")
-        except Exception as e:
-            print(f"empresas logo_url migration error: {e}")
+        print("Adding logo_url to empresas...")
+        await conn.execute(text("ALTER TABLE empresas ADD COLUMN logo_url VARCHAR;"))
+        print("Adding favicon_url to empresas...")
+        await conn.execute(text("ALTER TABLE empresas ADD COLUMN favicon_url VARCHAR;"))
+        print("Columns logo_url and favicon_url added on empresas.")
 
     print("Migrations complete!")
 

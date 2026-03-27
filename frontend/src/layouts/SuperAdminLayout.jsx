@@ -56,9 +56,9 @@ export default function SuperAdminLayout() {
             <Building size={20} />
             <span>Empresas</span>
           </Link>
-          <Link to="/admin/orquestrador" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
+          <Link to="/admin/agente" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
             <Bot size={20} />
-            <span>IA</span>
+            <span>Agentes</span>
           </Link>
           <Link to="/admin/configuracoes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
             <Settings size={20} />

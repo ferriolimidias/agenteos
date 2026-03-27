@@ -68,7 +68,7 @@ function App() {
       {/* Rota do Super Admin */}
       <Route path="/admin" element={<SuperAdminLayout />}>
         <Route index element={<Empresas />} />
-        <Route path="orquestrador" element={<Orquestrador />} />
+        <Route path="agente" element={<Orquestrador />} />
         <Route path="configuracoes" element={<ConfiguracoesGlobais />} />
       </Route>
 
