@@ -67,6 +67,7 @@ class ConhecimentoUpload(BaseModel):
 class EspecialistaBase(BaseModel):
     empresa_id: UUID4
     nome: str
+    descricao_roteamento: str | None = None
     prompt_sistema: str
     ativo: bool | None = True
 

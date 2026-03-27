@@ -6,6 +6,7 @@ from typing import List
 from db.database import get_db
 from db.models import Especialista, APIConnection, especialista_tools
 from app.schemas import EspecialistaCreate, EspecialistaResponse, EspecialistaToolLink
+from app.services.semantic_router import SemanticRouterService
 
 router = APIRouter(
     prefix="/especialistas",
@@ -20,9 +21,12 @@ async def criar_especialista(especialista: EspecialistaCreate, db: AsyncSession 
     novo_especialista = Especialista(
         empresa_id=especialista.empresa_id,
         nome=especialista.nome,
+        descricao_roteamento=especialista.descricao_roteamento,
         prompt_sistema=especialista.prompt_sistema,
         ativo=especialista.ativo
     )
+    router_service = SemanticRouterService(db)
+    await router_service.refresh_specialist_embedding(novo_especialista)
     db.add(novo_especialista)
     try:
         await db.commit()

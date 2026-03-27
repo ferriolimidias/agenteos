@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from db.database import get_db
 from db.models import Empresa, Especialista, FerramentaAPI
+from app.services.semantic_router import SemanticRouterService
 
 router = APIRouter(
     prefix="/orquestrador",
@@ -16,6 +17,7 @@ router = APIRouter(
 class EspecialistaCreate(BaseModel):
     nome: str
     descricao_missao: Optional[str] = None
+    descricao_roteamento: Optional[str] = None
     prompt_sistema: str
     modelo_ia: Optional[str] = "gpt-4o-mini"
     usar_rag: Optional[bool] = False
@@ -46,6 +48,7 @@ async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_d
             "id": esp.id,
             "nome": esp.nome,
             "descricao_missao": esp.descricao_missao,
+            "descricao_roteamento": esp.descricao_roteamento,
             "prompt_sistema": esp.prompt_sistema,
             "modelo_ia": getattr(esp, 'modelo_ia', "gpt-4o-mini"),
             "usar_rag": getattr(esp, 'usar_rag', False),
@@ -65,6 +68,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         empresa_id=empresa.id,
         nome=payload.nome,
         descricao_missao=payload.descricao_missao,
+        descricao_roteamento=payload.descricao_roteamento,
         prompt_sistema=payload.prompt_sistema,
         modelo_ia=payload.modelo_ia,
         usar_rag=payload.usar_rag,
@@ -79,6 +83,9 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         ferramentas_objs = ferramentas_result.scalars().all()
         novo.ferramentas = ferramentas_objs
 
+    router_service = SemanticRouterService(db)
+    await router_service.refresh_specialist_embedding(novo)
+
     db.add(novo)
     await db.commit()
     await db.refresh(novo, attribute_names=["ferramentas"])
@@ -87,6 +94,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         "id": novo.id,
         "nome": novo.nome,
         "descricao_missao": novo.descricao_missao,
+        "descricao_roteamento": novo.descricao_roteamento,
         "prompt_sistema": novo.prompt_sistema,
         "modelo_ia": getattr(novo, 'modelo_ia', 'gpt-4o-mini'),
         "usar_rag": novo.usar_rag,
@@ -129,6 +137,7 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     
     especialista.nome = payload.nome
     especialista.descricao_missao = payload.descricao_missao
+    especialista.descricao_roteamento = payload.descricao_roteamento
     especialista.prompt_sistema = payload.prompt_sistema
     especialista.modelo_ia = payload.modelo_ia
     especialista.usar_rag = payload.usar_rag
@@ -143,6 +152,9 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
             especialista.ferramentas = ferramentas_result.scalars().all()
         else:
             especialista.ferramentas = []
+
+    router_service = SemanticRouterService(db)
+    await router_service.refresh_specialist_embedding(especialista)
             
     await db.commit()
     await db.refresh(especialista)

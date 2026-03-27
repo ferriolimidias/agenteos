@@ -53,6 +53,19 @@ async def run_migrations():
         except Exception as e:
             print(f"mensagens_historico migration error: {e}")
 
+        try:
+            print("Applying semantic routing migrations on especialistas...")
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            await conn.execute(
+                text("ALTER TABLE especialistas ADD COLUMN IF NOT EXISTS descricao_roteamento TEXT;")
+            )
+            await conn.execute(
+                text("ALTER TABLE especialistas ADD COLUMN IF NOT EXISTS embedding vector(1536);")
+            )
+            print("Semantic routing columns ensured on especialistas.")
+        except Exception as e:
+            print(f"semantic routing migration error: {e}")
+
     print("Migrations complete!")
 
 if __name__ == "__main__":

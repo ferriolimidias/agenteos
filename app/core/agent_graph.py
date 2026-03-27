@@ -65,6 +65,7 @@ from app.services.transferencia_service import (
     executar_transferencia_atendimento,
     listar_destinos_transferencia_para_prompt,
 )
+from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
 from app.core.tools import tool_atualizar_tags_lead
 from app.services.websocket_manager import manager
@@ -689,97 +690,59 @@ Se for small talk puro, use precisa_roteamento=False e forneça uma resposta cur
     return state
 
 async def node_roteador_maestro(state: AgentState):
-    print(f"[NODE ROTEADOR] Mapeando intenções para Especialistas...")
-    
+    print("[NODE ROTEADOR] Roteamento semântico via embeddings...")
     import uuid
-    from langchain_core.messages import SystemMessage
+
     empresa_id = state.get("empresa_id")
     try:
         empresa_uuid = uuid.UUID(empresa_id)
     except (ValueError, TypeError):
         empresa_uuid = None
 
-    nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
-    contexto_empresa = f"Você mapeia requisições para a empresa {nome_empresa}"
-    if area_atuacao:
-        contexto_empresa += f", área: {area_atuacao}."
-    else:
-        contexto_empresa += "."
+    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+    if not ultima_mensagem:
+        state["intencao"] = []
+        state["respostas_especialistas"] = []
+        state["handoff_requested"] = False
+        return state
 
-    especialistas_str = "- 'geral': Atendimento geral."
-    if empresa_uuid:
-        from db.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Especialista).where(
-                    Especialista.ativo == True,
-                    Especialista.empresa_id == empresa_uuid
-                ).options(selectinload(Especialista.ferramentas))
-            )
-            especialistas_ativos = result.scalars().all()
-            if especialistas_ativos:
-                linhas_esp = []
-                for e in especialistas_ativos:
-                    desc = e.descricao_missao if e.descricao_missao else f"{e.prompt_sistema[:150]}..."
-                    if getattr(e, 'ferramentas', None):
-                        fd = [f.nome_ferramenta for f in e.ferramentas]
-                        if fd:
-                            desc += f" (Ferramentas: {', '.join(fd)})."
-                    linhas_esp.append(f"- '{e.nome}': {desc}")
-                especialistas_str = "\n".join(linhas_esp)
+    handoff_markers = (
+        "humano",
+        "atendente",
+        "pessoa",
+        "suporte humano",
+        "falar com",
+        "transferir",
+    )
+    state["handoff_requested"] = any(marker in ultima_mensagem.lower() for marker in handoff_markers)
 
-            tags_prompt_roteador = await listar_tags_crm_para_prompt(empresa_uuid)
-            if tags_prompt_roteador:
-                especialistas_str += (
-                    "\n- 'tags_crm': Classifica o lead com tags oficiais do CRM quando a mensagem indicar perfil, interesse, urgência, objeções, origem, qualificação ou qualquer regra abaixo.\n"
-                    f"{tags_prompt_roteador}"
-                )
+    async with AsyncSessionLocal() as session:
+        router_service = SemanticRouterService(session)
+        especialistas_match = await router_service.get_matching_specialists(
+            query_text=ultima_mensagem,
+            threshold=0.75,
+            top_k=3,
+            empresa_id=str(empresa_uuid) if empresa_uuid else None,
+        )
 
-    prompt = f"""[ROTEADOR MECÂNICO]
-Sua função é APENAS rotear.
-{contexto_empresa}
+    ids_especialistas = [str(esp.id) for esp in especialistas_match]
+    nomes_especialistas = [esp.nome for esp in especialistas_match]
+    print(
+        f"[NODE ROTEADOR] Matches: {len(ids_especialistas)} "
+        f"| IDs={ids_especialistas} | Nomes={nomes_especialistas}"
+    )
 
-ESPECIALISTAS DISPONÍVEIS:
-{especialistas_str}
-
-Com base na última mensagem do cliente, retorne um ARRAY/LISTA contendo os nomes exatos dos especialistas que devem atuar. 
-Se a requisição tiver múltiplos assuntos, retorne múltiplos nomes (Ex: ['Comercial', 'Suporte']).
-Se a mensagem ativar alguma regra de tag oficial, inclua obrigatoriamente 'tags_crm' na lista.
-Se nenhum encaixar perfeitamente, retorne ['geral']."""
-    
-    mensagens_para_llm = [SystemMessage(content=prompt)] + state.get("mensagens", [])
-
-    # ── Busca explícita do modelo_roteador — independente do modelo_ia do Atendente ──
-    modelo_roteador = None
-    if empresa_uuid:
-        try:
-            from db.database import AsyncSessionLocal
-            async with AsyncSessionLocal() as _sess_rot:
-                _res_emp = await _sess_rot.execute(
-                    select(Empresa).where(Empresa.id == empresa_uuid)
-                )
-                _emp = _res_emp.scalars().first()
-                if _emp:
-                    modelo_roteador = getattr(_emp, "modelo_roteador", None)
-        except Exception as _e_rot:
-            print(f"[NODE ROTEADOR] Aviso: falha ao buscar modelo_roteador: {_e_rot}")
-    # ─────────────────────────────────────────────────────────────────────────────────
-
-    print(f"[NODE ROTEADOR] Usando modelo: '{modelo_roteador or 'default'}'")
-    llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_roteador)
-    llm_json = llm.with_structured_output(AnaliseRoteador)
-    resultado = await llm_json.ainvoke(mensagens_para_llm)
-
-    print(f"[LLM ROTEADOR] Intenções: '{resultado.intencao}' | Handoff: {resultado.handoff_requested}")
-    state["intencao"] = resultado.intencao
+    # Sem matches: volta para o Atendente Principal (bate-papo comum).
+    state["intencao"] = ids_especialistas
     state["respostas_especialistas"] = []
-    state["handoff_requested"] = resultado.handoff_requested
     return state
 
 async def node_especialista_dinamico(state: AgentState):
-    intencoes = state.get("intencao", ["geral"])
+    intencoes = state.get("intencao", [])
     if not isinstance(intencoes, list):
-        intencoes = [intencoes] if intencoes else ["geral"]
+        intencoes = [intencoes] if intencoes else []
+    if not intencoes:
+        return state
         
     print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
     
@@ -838,15 +801,27 @@ async def node_especialista_dinamico(state: AgentState):
         nomes_tools_registradas = set()
         
         especialista_db = None
+        nome_especialista_resultado = str(intencao)
+        especialista_id_uuid = None
+        try:
+            especialista_id_uuid = uuid.UUID(str(intencao))
+        except (ValueError, TypeError):
+            especialista_id_uuid = None
+
         if empresa_uuid:
             async with AsyncSessionLocal() as session:
+                filtros = [
+                    Especialista.ativo == True,
+                    Especialista.empresa_id == empresa_uuid,
+                ]
+                if especialista_id_uuid:
+                    filtros.append(Especialista.id == especialista_id_uuid)
+                else:
+                    filtros.append(Especialista.nome == intencao)
+
                 result = await session.execute(
                     select(Especialista)
-                    .where(
-                        Especialista.nome == intencao, 
-                        Especialista.ativo == True,
-                        Especialista.empresa_id == empresa_uuid
-                    )
+                    .where(*filtros)
                     .options(
                         selectinload(Especialista.api_connections),
                         selectinload(Especialista.ferramentas)
@@ -855,6 +830,7 @@ async def node_especialista_dinamico(state: AgentState):
                 especialista_db = result.scalars().first()
                 
                 if especialista_db:
+                    nome_especialista_resultado = str(especialista_db.nome)
                     # RAG Check
                     if (getattr(especialista_db, 'usar_rag', False) or intencao == "duvida") and not rag_contexto_aplicado:
                         resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
@@ -1074,7 +1050,10 @@ async def node_especialista_dinamico(state: AgentState):
         modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, 'modelo_ia') else None
         llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
         llm_extracao = llm.with_structured_output(ExtracaoEspecialista)
-        print(f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista '{intencao}' com modelo '{modelo_esp or 'default'}'...")
+        print(
+            f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista "
+            f"'{nome_especialista_resultado}' com modelo '{modelo_esp or 'default'}'..."
+        )
         if tools_disponiveis:
             print(f"  Fazendo bind dinâmico via llm.bind_tools para {len(tools_disponiveis)} ferramenta(s)")
             llm_with_tools = llm.bind_tools(tools_disponiveis)
@@ -1146,7 +1125,7 @@ async def node_especialista_dinamico(state: AgentState):
         )
 
         state["respostas_especialistas"].append(
-            f"[ESPECIALISTA: {intencao}] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
+            f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
         )
         
     return state
@@ -1196,6 +1175,8 @@ workflow.add_conditional_edges(
 
 def router_maestro(state: AgentState):
     intencoes = state.get("intencao") or []
+    if not intencoes:
+        return "node_atendente"
     if "tags_crm" in intencoes:
         return "node_especialista_tags"
     return "node_especialista_dinamico"
@@ -1205,6 +1186,7 @@ workflow.add_conditional_edges(
     "node_roteador_maestro",
     router_maestro,
     {
+        "node_atendente": "node_atendente",
         "node_especialista_tags": "node_especialista_tags",
         "node_especialista_dinamico": "node_especialista_dinamico",
     }

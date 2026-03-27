@@ -214,10 +214,12 @@ class Especialista(Base):
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
     nome = Column(String, nullable=False)
     descricao_missao = Column(String, nullable=True)
+    descricao_roteamento = Column(Text, nullable=True)
     prompt_sistema = Column(Text, nullable=False)
     modelo_ia = Column(String, default="gpt-4o-mini")
     usar_rag = Column(Boolean, default=False)
     ativo = Column(Boolean, default=True)
+    embedding = Column(Vector(1536), nullable=True)
 
     empresa = relationship("Empresa", back_populates="especialistas")
     api_connections = relationship("APIConnection", secondary=especialista_tools, back_populates="especialistas")
