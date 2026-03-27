@@ -1,99 +1,23 @@
 import asyncio
 from sqlalchemy import text
-from db.database import engine
+from db.database import engine, Base
+import db.models  # noqa: F401
 
 async def run_migrations():
-    print("Starting migrations...")
+    print("Starting base schema setup...")
     async with engine.begin() as conn:
         try:
-            print("Adding columns to ferramentas_api...")
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN url VARCHAR;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN metodo VARCHAR DEFAULT 'GET';"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN headers TEXT;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN payload TEXT;"))
-            await conn.execute(text("ALTER TABLE ferramentas_api ADD COLUMN schema_parametros JSONB DEFAULT '{}'::jsonb;"))
-            print("Columns added to ferramentas_api.")
+            print("Ensuring vector extension...")
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            print("Vector extension ready.")
         except Exception as e:
-            print(f"Schema columns might already exist or error: {e}")
+            print(f"Warning: could not ensure vector extension: {e}")
 
-        try:
-            print("Creating especialista_ferramentas table...")
-            await conn.execute(text("""
-                CREATE TABLE especialista_ferramentas (
-                    especialista_id UUID NOT NULL REFERENCES especialistas(id) ON DELETE CASCADE,
-                    ferramenta_id UUID NOT NULL REFERENCES ferramentas_api(id) ON DELETE CASCADE,
-                    PRIMARY KEY (especialista_id, ferramenta_id)
-                );
-            """))
-            print("Created especialista_ferramentas.")
-        except Exception as e:
-            print(f"Join table error: {e}")
-            
-        try:
-            print("Creating especialista_tools table...")
-            await conn.execute(text("""
-                CREATE TABLE especialista_tools (
-                    especialista_id UUID NOT NULL REFERENCES especialistas(id) ON DELETE CASCADE,
-                    api_connection_id UUID NOT NULL REFERENCES api_connections(id) ON DELETE CASCADE,
-                    PRIMARY KEY (especialista_id, api_connection_id)
-                );
-            """))
-            print("Created especialista_tools.")
-        except Exception as e:
-            print(f"Join table error: {e}")
+        print("Ensuring base tables with create_all...")
+        await conn.run_sync(Base.metadata.create_all)
+        print("Base tables ensured.")
 
-        try:
-            print("Adding conexao_id to mensagens_historico...")
-            await conn.execute(
-                text("ALTER TABLE mensagens_historico ADD COLUMN conexao_id UUID;")
-            )
-            print("Column conexao_id ensured on mensagens_historico.")
-        except Exception as e:
-            print(f"mensagens_historico migration error: {e}")
-
-        try:
-            print("Applying semantic routing migrations on especialistas...")
-            await conn.execute(text("CREATE EXTENSION vector;"))
-            await conn.execute(
-                text("ALTER TABLE especialistas ADD COLUMN descricao_roteamento TEXT;")
-            )
-            await conn.execute(
-                text("ALTER TABLE especialistas ADD COLUMN embedding vector(1536);")
-            )
-            print("Semantic routing columns ensured on especialistas.")
-        except Exception as e:
-            print(f"semantic routing migration error: {e}")
-
-        # Migração independente para favicon_base64
-        try:
-            print("Tentando adicionar favicon_base64...")
-            await conn.execute(text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS favicon_base64 TEXT;"))
-            await conn.commit()
-            print("Coluna favicon_base64 verificada/adicionada.")
-        except Exception as e:
-            await conn.rollback()
-            print(f"Aviso favicon_base64: {str(e)}")
-
-        # Migração independente para logo_base64
-        try:
-            print("Tentando adicionar logo_base64...")
-            await conn.execute(text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS logo_base64 TEXT;"))
-            await conn.commit()
-            print("Coluna logo_base64 verificada/adicionada.")
-        except Exception as e:
-            await conn.rollback()
-            print(f"Aviso logo_base64: {str(e)}")
-
-        try:
-            print("Adding logo_url to empresas...")
-            await conn.execute(text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS logo_url VARCHAR;"))
-            print("Adding favicon_url to empresas...")
-            await conn.execute(text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS favicon_url VARCHAR;"))
-            print("Columns logo_url and favicon_url ensured on empresas.")
-        except Exception as e:
-            print(f"empresas logo/favicon migration error: {e}")
-
-    print("Migrations complete!")
+    print("Base schema setup complete!")
 
 if __name__ == "__main__":
     asyncio.run(run_migrations())

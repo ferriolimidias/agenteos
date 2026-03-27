@@ -4,7 +4,7 @@ import csv
 import json
 import uuid
 from datetime import datetime
-import PyPDF2
+import pdfplumber
 import traceback
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -912,19 +912,24 @@ async def adicionar_conhecimento_rag(
 async def processar_rag_pdf_background(empresa_id: str, content: bytes, filename: str):
     try:
         async with AsyncSessionLocal() as db:
-            import PyPDF2
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+            source_name = filename or "arquivo.pdf"
+            pdf_stream = io.BytesIO(content)
             text_content = ""
-            for page in pdf_reader.pages:
-                try:
-                    extr = page.extract_text()
-                    if extr:
-                        text_content += str(extr) + "\n"
-                except Exception:
-                    pass
+            try:
+                with pdfplumber.open(pdf_stream) as pdf:
+                    num_pages = len(pdf.pages)
+                    print(f"Lendo PDF com pdfplumber: {source_name} ({num_pages} páginas)")
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content += page_text + "\n"
+            except Exception as e:
+                print(f"Erro ao abrir PDF com pdfplumber: {str(e)}")
+                return
 
-            if not text_content.strip():
-                print(f"Erro: PDF {filename} vazio ou sem texto extraível.")
+            if len(text_content.strip()) < 10:
+                print(f"Aviso: PDF {source_name} extraiu pouco ou nenhum texto. Verifique se é uma imagem.")
+                # Se for imagem, o ideal futuramente seria OCR, por hora apenas logamos.
                 return
 
             from langchain_text_splitters import RecursiveCharacterTextSplitter
