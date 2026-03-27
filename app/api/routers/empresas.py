@@ -192,6 +192,7 @@ async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_d
     """
     nova_empresa = Empresa(
         nome_empresa=empresa.nome_empresa,
+        logo_url=empresa.logo_url,
         credenciais_canais=empresa.credenciais_canais
     )
     db.add(nova_empresa)
@@ -239,6 +240,7 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "id": empresa.id,
         "nome_empresa": empresa.nome_empresa,
         "area_atuacao": empresa.area_atuacao,
+        "logo_url": empresa.logo_url,
         "credenciais_canais": empresa.credenciais_canais or {},
         "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas,
         "ia_tom_voz": empresa.ia_tom_voz,
@@ -405,6 +407,8 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         empresa.nome_empresa = data.nome_empresa
     if data.area_atuacao is not None:
         empresa.area_atuacao = data.area_atuacao
+    if data.logo_url is not None:
+        empresa.logo_url = data.logo_url
     if data.ia_instrucoes_personalizadas is not None:
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
     if data.ia_tom_voz is not None:
@@ -483,6 +487,7 @@ async def deletar_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
 class EmpresaSetupRequest(BaseModel):
     nome_empresa: str
     area_atuacao: str | None = None
+    logo_url: str | None = None
     admin_nome: str
     admin_email: str
     admin_senha: str
@@ -508,7 +513,8 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
         print("Criando empresa...")
         nova_empresa = Empresa(
             nome_empresa=data.nome_empresa,
-            area_atuacao=data.area_atuacao
+            area_atuacao=data.area_atuacao,
+            logo_url=data.logo_url
         )
         db.add(nova_empresa)
         await db.flush() # Para obter o ID da empresa gerado

@@ -32,6 +32,7 @@ export default function Empresas() {
   const [formData, setFormData] = useState({
     nome_empresa: "",
     area_atuacao: "",
+    logo_url: "",
     admin_nome: "",
     admin_email: "",
     admin_senha: ""
@@ -42,7 +43,8 @@ export default function Empresas() {
   const [empresaEdit, setEmpresaEdit] = useState(null);
   const [editFormData, setEditFormData] = useState({
     nome_empresa: "",
-    area_atuacao: ""
+    area_atuacao: "",
+    logo_url: ""
   });
 
   // Config IA State
@@ -98,7 +100,8 @@ export default function Empresas() {
     setEmpresaEdit(emp);
     setEditFormData({
       nome_empresa: emp.nome_empresa || "",
-      area_atuacao: emp.area_atuacao || ""
+      area_atuacao: emp.area_atuacao || "",
+      logo_url: emp.logo_url || ""
     });
     setShowEditModal(true);
   };
@@ -141,6 +144,7 @@ export default function Empresas() {
       setFormData({
         nome_empresa: "",
         area_atuacao: "",
+        logo_url: "",
         admin_nome: "",
         admin_email: "",
         admin_senha: ""
@@ -427,6 +431,17 @@ export default function Empresas() {
                         placeholder="Ex: Saúde / Odontologia"
                       />
                     </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">URL da Logo</label>
+                      <input
+                        type="url"
+                        name="logo_url"
+                        value={formData.logo_url}
+                        onChange={handleChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                        placeholder="https://exemplo.com/logo.png"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -527,6 +542,17 @@ export default function Empresas() {
                       <input 
                         name="area_atuacao" value={editFormData.area_atuacao} onChange={handleEditChange}
                         className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">URL da Logo</label>
+                      <input
+                        type="url"
+                        name="logo_url"
+                        value={editFormData.logo_url}
+                        onChange={handleEditChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                        placeholder="https://exemplo.com/logo.png"
                       />
                     </div>
                   </div>

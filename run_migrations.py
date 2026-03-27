@@ -84,6 +84,15 @@ async def run_migrations():
         except Exception as e:
             print(f"configuracoes_globais logo migration error: {e}")
 
+        try:
+            print("Adding logo_url to empresas...")
+            await conn.execute(
+                text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS logo_url VARCHAR;")
+            )
+            print("Column logo_url ensured on empresas.")
+        except Exception as e:
+            print(f"empresas logo_url migration error: {e}")
+
     print("Migrations complete!")
 
 if __name__ == "__main__":

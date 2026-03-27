@@ -72,6 +72,7 @@ class Empresa(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nome_empresa = Column(String, nullable=False)
     area_atuacao = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)
     # Campo legado mantido durante a migracao para a tabela conexoes.
     credenciais_canais = Column(JSONB, default={})
     informacoes_adicionais = Column(Text, nullable=True)

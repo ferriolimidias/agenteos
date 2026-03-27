@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator
 class EmpresaBase(BaseModel):
     nome_empresa: str
     area_atuacao: str | None = None
+    logo_url: str | None = None
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
     ia_instrucoes_personalizadas: str | None = None
     ia_tom_voz: str | None = None
@@ -29,6 +30,7 @@ class EmpresaCreate(EmpresaBase):
 class EmpresaUpdate(BaseModel):
     nome_empresa: str | None = None
     area_atuacao: str | None = None
+    logo_url: str | None = None
     ia_instrucoes_personalizadas: str | None = None
     ia_tom_voz: str | None = None
     conexao_disparo_id: str | None = None
