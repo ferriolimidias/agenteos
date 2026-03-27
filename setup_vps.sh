@@ -38,10 +38,9 @@ fi
 PROJECT_DIR="$(pwd)"
 cd "${PROJECT_DIR}"
 
-# Build (sem remover volumes para preservar dados do banco)
-${SUDO} docker compose down
-${SUDO} docker compose build --no-cache
-${SUDO} docker compose up -d
+# Deploy sem derrubar a stack inteira, evitando qualquer risco de reset de volume
+${SUDO} docker compose pull
+${SUDO} docker compose up -d --build --remove-orphans
 
 # Nginx/SSL (proxy reverso + certbot nao interativo)
 ${SUDO} tee /etc/nginx/sites-available/agenteos >/dev/null <<EOF
