@@ -14,6 +14,8 @@ from fastapi.responses import Response
 from db.database import get_db
 from sqlalchemy.orm import selectinload
 from db.models import (
+    ADMIN_EMPRESA_ROLE,
+    ROOT_ADMIN_ROLE,
     CampanhaDisparo,
     CampanhaDisparoStatus,
     Empresa,
@@ -32,9 +34,10 @@ from db.models import (
     TagGroup,
     TagCRM,
     TemplateMensagem,
+    is_admin_empresa_role,
     is_root_admin_email,
+    is_super_admin_role,
     normalize_user_email,
-    normalize_user_role,
 )
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
@@ -268,15 +271,11 @@ async def require_ia_config_access(
     if is_root_admin_email(usuario_bd.email):
         return usuario_bd
 
-    role_normalizada = normalize_user_role(usuario_bd.role)
     print(f"Role no Banco: {usuario_bd.role}")
-    roles_super_admin = {"super_admin", "superadmin"}
-    roles_admin_empresa = {"admin_empresa", "adminempresa"}
-
-    if role_normalizada in roles_super_admin:
+    if is_super_admin_role(usuario_bd.role):
         return usuario_bd
 
-    if role_normalizada in roles_admin_empresa:
+    if is_admin_empresa_role(usuario_bd.role):
         try:
             empresa_uuid = uuid.UUID(empresa_id)
         except ValueError:
@@ -524,7 +523,7 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
             nome=data.admin_nome,
             email=admin_email_normalizado,
             senha_hash=get_password_hash(data.admin_senha),
-            role="super_admin" if is_root_admin else "admin_empresa",
+            role=ROOT_ADMIN_ROLE if is_root_admin else ADMIN_EMPRESA_ROLE,
             ativo=True
         )
         db.add(novo_usuario)

@@ -22,6 +22,7 @@ from .database import Base
 
 ROOT_ADMIN_EMAIL = "admin@ferriolimidias.com"
 ROOT_ADMIN_ROLE = "super_admin"
+ADMIN_EMPRESA_ROLE = "admin_empresa"
 
 
 def normalize_user_email(email: str | None) -> str:
@@ -34,6 +35,14 @@ def normalize_user_role(role: str | None) -> str:
 
 def is_root_admin_email(email: str | None) -> bool:
     return normalize_user_email(email) == ROOT_ADMIN_EMAIL
+
+
+def is_super_admin_role(role: str | None) -> bool:
+    return normalize_user_role(role) == ROOT_ADMIN_ROLE
+
+
+def is_admin_empresa_role(role: str | None) -> bool:
+    return normalize_user_role(role) == ADMIN_EMPRESA_ROLE
 
 # N:N Association Table for Agentes and Ferramentas_API
 agente_ferramentas = Table(

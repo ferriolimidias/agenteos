@@ -10,7 +10,7 @@ from app.api.routers.empresas import require_ia_config_access
 from app.services.evolution_service import obter_qr_code, consultar_status_conexao
 from app.schemas import ConexaoCreate, ConexaoResponse, ConexaoUpdate
 from db.database import get_db
-from db.models import Conexao, Empresa, TipoConexao, Usuario, is_root_admin_email, normalize_user_role
+from db.models import Conexao, Empresa, TipoConexao, Usuario, is_admin_empresa_role, is_root_admin_email, is_super_admin_role
 
 
 router = APIRouter(
@@ -230,11 +230,10 @@ async def _validar_acesso_conexao(
     if is_root_admin_email(usuario_bd.email):
         return usuario_bd
 
-    role_normalizada = normalize_user_role(usuario_bd.role)
-    if role_normalizada in {"super_admin", "superadmin"}:
+    if is_super_admin_role(usuario_bd.role):
         return usuario_bd
 
-    if role_normalizada in {"admin_empresa", "adminempresa"} and usuario_bd.empresa_id == conexao.empresa_id:
+    if is_admin_empresa_role(usuario_bd.role) and usuario_bd.empresa_id == conexao.empresa_id:
         return usuario_bd
 
     raise HTTPException(status_code=403, detail="Acesso negado para esta conexão.")
