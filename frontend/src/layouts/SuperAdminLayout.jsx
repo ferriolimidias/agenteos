@@ -4,19 +4,24 @@ import { Settings, Building, LogOut, Bot } from "lucide-react";
 import axios from "axios";
 
 export default function SuperAdminLayout() {
-  const [nomeSistema, setNomeSistema] = useState("Carregando...");
+  const [configVisual, setConfigVisual] = useState({
+    nomeSistema: "Carregando...",
+    logoBase64: "",
+  });
 
   const fetchConfig = async () => {
     try {
       const response = await axios.get("/api/admin/configuracoes");
-      if (response.data && response.data.nome_sistema) {
-        setNomeSistema(response.data.nome_sistema);
-      } else {
-        setNomeSistema("ANTIGRAVITY");
-      }
+      setConfigVisual({
+        nomeSistema: response.data?.nome_sistema || "ANTIGRAVITY",
+        logoBase64: response.data?.logo_base64 || "",
+      });
     } catch (error) {
       console.error("Erro ao buscar configurações:", error);
-      setNomeSistema("ANTIGRAVITY");
+      setConfigVisual({
+        nomeSistema: "ANTIGRAVITY",
+        logoBase64: "",
+      });
     }
   };
 
@@ -34,7 +39,15 @@ export default function SuperAdminLayout() {
       {/* Sidebar */}
       <aside className="w-64 bg-gray-950 p-6 flex flex-col border-r border-gray-800">
         <div className="mb-8">
-          <h2 className="text-xl font-bold text-white uppercase tracking-wider">{nomeSistema}</h2>
+          {configVisual.logoBase64 ? (
+            <img
+              src={configVisual.logoBase64}
+              alt="Logo"
+              className="h-12 max-w-[180px] object-contain bg-white rounded-md p-1"
+            />
+          ) : (
+            <h2 className="text-xl font-bold text-white uppercase tracking-wider">{configVisual.nomeSistema}</h2>
+          )}
           <span className="text-xs text-indigo-400 font-medium tracking-widest">SUPER ADMIN</span>
         </div>
         

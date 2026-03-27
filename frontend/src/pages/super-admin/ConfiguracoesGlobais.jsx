@@ -6,7 +6,8 @@ export default function ConfiguracoesGlobais() {
     nome_sistema: "",
     cor_primaria: "",
     openai_key_global: "",
-    favicon_base64: ""
+    favicon_base64: "",
+    logo_base64: ""
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,7 +24,8 @@ export default function ConfiguracoesGlobais() {
         nome_sistema: response.data.nome_sistema || "",
         cor_primaria: response.data.cor_primaria || "",
         openai_key_global: response.data.openai_key_global || "",
-        favicon_base64: response.data.favicon_base64 || ""
+        favicon_base64: response.data.favicon_base64 || "",
+        logo_base64: response.data.logo_base64 || ""
       });
     } catch (error) {
       console.error("Erro ao carregar configurações globais:", error);
@@ -71,6 +73,39 @@ export default function ConfiguracoesGlobais() {
     setFormData((prev) => ({
       ...prev,
       favicon_base64: ""
+    }));
+  };
+
+  const handleLogoUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/svg+xml"];
+    if (!allowedTypes.includes(file.type)) {
+      setMessage({ type: "error", text: "Formato inválido. Use PNG, JPG ou SVG para a logo." });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      setFormData((prev) => ({
+        ...prev,
+        logo_base64: result
+      }));
+    };
+    reader.onerror = () => {
+      setMessage({ type: "error", text: "Falha ao processar arquivo de logo." });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = () => {
+    setFormData((prev) => ({
+      ...prev,
+      logo_base64: ""
     }));
   };
 
@@ -206,6 +241,37 @@ export default function ConfiguracoesGlobais() {
             )}
             <p className="text-xs text-gray-500 mt-2">
               O favicon é salvo em base64 nas configurações globais.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Logo do Sistema (PNG, JPG ou SVG)
+            </label>
+            <input
+              type="file"
+              accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml"
+              onChange={handleLogoUpload}
+              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            {formData.logo_base64 && (
+              <div className="mt-3 flex items-center gap-4">
+                <img
+                  src={formData.logo_base64}
+                  alt="Preview da logo"
+                  className="h-12 max-w-[140px] rounded bg-white p-1 border border-gray-600 object-contain"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemoveLogo}
+                  className="text-sm text-red-400 hover:text-red-300"
+                >
+                  Remover logo
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">
+              A logo é salva em base64 e aplicada na Sidebar e Login.
             </p>
           </div>
 

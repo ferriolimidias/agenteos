@@ -204,6 +204,7 @@ class ConfiguracaoGlobalUpdate(BaseModel):
     cor_primaria: str
     openai_key_global: str | None = None
     favicon_base64: str | None = None
+    logo_base64: str | None = None
 
 
 class ConfiguracaoGlobalResponse(BaseModel):
@@ -212,5 +213,6 @@ class ConfiguracaoGlobalResponse(BaseModel):
     cor_primaria: str
     openai_key_global: str | None = None
     favicon_base64: str | None = None
+    logo_base64: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,10 +1,16 @@
+import { useEffect, useState } from "react";
 import { Outlet, Link, useNavigate } from "react-router-dom";
 import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, ArrowRightLeft, Megaphone, Tag } from "lucide-react";
+import axios from "axios";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
 
 export default function TenantLayout() {
   const navigate = useNavigate();
   const user = getStoredUser();
+  const [configVisual, setConfigVisual] = useState({
+    nomeSistema: "Minha Empresa",
+    logoBase64: "",
+  });
 
   const isImpersonating = localStorage.getItem("impersonating") === "true";
   const impersonatingEmpresa = localStorage.getItem("impersonating_empresa");
@@ -20,12 +26,44 @@ export default function TenantLayout() {
     localStorage.removeItem("token");
     navigate("/");
   };
+
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await axios.get("/api/admin/configuracoes");
+        setConfigVisual({
+          nomeSistema: response.data?.nome_sistema || "Minha Empresa",
+          logoBase64: response.data?.logo_base64 || "",
+        });
+      } catch (error) {
+        setConfigVisual({
+          nomeSistema: "Minha Empresa",
+          logoBase64: "",
+        });
+      }
+    };
+
+    fetchConfig();
+    window.addEventListener("configuracoesUpdated", fetchConfig);
+    return () => {
+      window.removeEventListener("configuracoesUpdated", fetchConfig);
+    };
+  }, []);
+
   return (
     <div className="min-h-screen flex bg-gray-50 text-gray-900">
       {/* Sidebar */}
       <aside className="w-64 bg-blue-900 text-white p-6 flex flex-col shadow-xl">
         <div className="mb-8">
-          <h2 className="text-2xl font-bold truncate">Minha Empresa</h2>
+          {configVisual.logoBase64 ? (
+            <img
+              src={configVisual.logoBase64}
+              alt="Logo"
+              className="h-12 max-w-[180px] object-contain bg-white rounded-md p-1"
+            />
+          ) : (
+            <h2 className="text-2xl font-bold truncate">{configVisual.nomeSistema}</h2>
+          )}
           <span className="text-blue-300 text-sm font-medium">Painel de Controle</span>
         </div>
         

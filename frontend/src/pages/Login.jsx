@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogIn } from "lucide-react";
+import axios from "axios";
 import api from "../services/api";
 import { clearImpersonation } from "../utils/auth";
 
@@ -10,6 +11,29 @@ export default function Login() {
   const [senha, setSenha] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [configVisual, setConfigVisual] = useState({
+    nomeSistema: "Antigravity OS",
+    logoBase64: "",
+  });
+
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await axios.get("/api/admin/configuracoes");
+        setConfigVisual({
+          nomeSistema: response.data?.nome_sistema || "Antigravity OS",
+          logoBase64: response.data?.logo_base64 || "",
+        });
+      } catch {
+        setConfigVisual({
+          nomeSistema: "Antigravity OS",
+          logoBase64: "",
+        });
+      }
+    };
+
+    fetchConfig();
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -46,7 +70,15 @@ export default function Login() {
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center p-4">
       <div className="bg-white p-10 rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
         <div className="text-center mb-10">
-          <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Antigravity OS</h1>
+          {configVisual.logoBase64 ? (
+            <img
+              src={configVisual.logoBase64}
+              alt="Logo"
+              className="h-14 max-w-[220px] object-contain mx-auto bg-white rounded-md p-1 border border-gray-200"
+            />
+          ) : (
+            <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{configVisual.nomeSistema}</h1>
+          )}
           <p className="text-gray-500 mt-2">Acesso ao sistema SaaS</p>
         </div>
         

@@ -19,6 +19,7 @@ async def get_configuracoes_globais(db: AsyncSession = Depends(get_db)):
             cor_primaria="#6366f1",
             openai_key_global="",
             favicon_base64=None,
+            logo_base64=None,
         )
         db.add(config)
         await db.commit()
@@ -39,6 +40,7 @@ async def update_configuracoes_globais(config_data: ConfiguracaoGlobalUpdate, db
     config.cor_primaria = config_data.cor_primaria
     config.openai_key_global = config_data.openai_key_global
     config.favicon_base64 = config_data.favicon_base64
+    config.logo_base64 = config_data.logo_base64
     
     await db.commit()
     await db.refresh(config)
