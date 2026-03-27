@@ -82,11 +82,14 @@ async def run_migrations():
         except Exception as e:
             print(f"configuracoes_globais logo migration error: {e}")
 
-        print("Adding logo_url to empresas...")
-        await conn.execute(text("ALTER TABLE empresas ADD COLUMN logo_url VARCHAR;"))
-        print("Adding favicon_url to empresas...")
-        await conn.execute(text("ALTER TABLE empresas ADD COLUMN favicon_url VARCHAR;"))
-        print("Columns logo_url and favicon_url added on empresas.")
+        try:
+            print("Adding logo_url to empresas...")
+            await conn.execute(text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS logo_url VARCHAR;"))
+            print("Adding favicon_url to empresas...")
+            await conn.execute(text("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS favicon_url VARCHAR;"))
+            print("Columns logo_url and favicon_url ensured on empresas.")
+        except Exception as e:
+            print(f"empresas logo/favicon migration error: {e}")
 
     print("Migrations complete!")
 
