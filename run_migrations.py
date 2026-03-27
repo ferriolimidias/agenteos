@@ -64,23 +64,25 @@ async def run_migrations():
         except Exception as e:
             print(f"semantic routing migration error: {e}")
 
+        # Migração independente para favicon_base64
         try:
-            print("Adding favicon_base64 to configuracoes_globais...")
-            await conn.execute(
-                text("ALTER TABLE configuracoes_globais ADD COLUMN favicon_base64 TEXT;")
-            )
-            print("Column favicon_base64 ensured on configuracoes_globais.")
+            print("Tentando adicionar favicon_base64...")
+            await conn.execute(text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS favicon_base64 TEXT;"))
+            await conn.commit()
+            print("Coluna favicon_base64 verificada/adicionada.")
         except Exception as e:
-            print(f"configuracoes_globais migration error: {e}")
+            await conn.rollback()
+            print(f"Aviso favicon_base64: {str(e)}")
 
+        # Migração independente para logo_base64
         try:
-            print("Adding logo_base64 to configuracoes_globais...")
-            await conn.execute(
-                text("ALTER TABLE configuracoes_globais ADD COLUMN logo_base64 TEXT;")
-            )
-            print("Column logo_base64 ensured on configuracoes_globais.")
+            print("Tentando adicionar logo_base64...")
+            await conn.execute(text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS logo_base64 TEXT;"))
+            await conn.commit()
+            print("Coluna logo_base64 verificada/adicionada.")
         except Exception as e:
-            print(f"configuracoes_globais logo migration error: {e}")
+            await conn.rollback()
+            print(f"Aviso logo_base64: {str(e)}")
 
         try:
             print("Adding logo_url to empresas...")
