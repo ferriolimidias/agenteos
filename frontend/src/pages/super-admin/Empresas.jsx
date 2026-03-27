@@ -91,9 +91,31 @@ export default function Empresas() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData({ ...formData, logo_url: reader.result });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleEditChange = (e) => {
     const { name, value } = e.target;
     setEditFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleEditLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditFormData({ ...editFormData, logo_url: reader.result });
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const openEditModal = (emp) => {
@@ -440,15 +462,21 @@ export default function Empresas() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">URL da Logo</label>
-                      <input
-                        type="url"
-                        name="logo_url"
-                        value={formData.logo_url}
-                        onChange={handleChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                        placeholder="https://exemplo.com/logo.png"
-                      />
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
+                      <div className="flex items-center gap-4 mt-1">
+                        {formData.logo_url && (
+                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
+                            <img src={formData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
+                          </div>
+                        )}
+                        <input
+                          type="file"
+                          accept=".png, .jpg, .jpeg, .svg"
+                          onChange={handleLogoUpload}
+                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
                     </div>
                   </div>
                 </div>
@@ -553,15 +581,21 @@ export default function Empresas() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">URL da Logo</label>
-                      <input
-                        type="url"
-                        name="logo_url"
-                        value={editFormData.logo_url}
-                        onChange={handleEditChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                        placeholder="https://exemplo.com/logo.png"
-                      />
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
+                      <div className="flex items-center gap-4 mt-1">
+                        {editFormData.logo_url && (
+                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
+                            <img src={editFormData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
+                          </div>
+                        )}
+                        <input
+                          type="file"
+                          accept=".png, .jpg, .jpeg, .svg"
+                          onChange={handleEditLogoUpload}
+                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
                     </div>
                   </div>
                 </div>
