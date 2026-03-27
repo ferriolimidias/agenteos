@@ -74,15 +74,14 @@ async def require_super_admin(
     if not usuario_bd:
         raise HTTPException(status_code=401, detail="Usu?rio n?o encontrado.")
 
-    if is_root_admin_email(usuario_bd.email):
-        return
+    if is_root_admin_email(usuario_bd.email) or is_super_admin_role(usuario_bd.role):
+        return usuario_bd
 
     print(f"Role no Banco: {usuario_bd.role}")
-    if not is_super_admin_role(usuario_bd.role):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Acesso negado. Apenas Super Admin com role '{ROOT_ADMIN_ROLE}'.",
-        )
+    raise HTTPException(
+        status_code=403,
+        detail=f"Acesso negado. Apenas Super Admin com role '{ROOT_ADMIN_ROLE}'.",
+    )
 
 @router.post("/impersonate/{empresa_id}")
 async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: None = Depends(require_super_admin)):

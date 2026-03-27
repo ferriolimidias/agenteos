@@ -1,14 +1,13 @@
 import axios from 'axios';
-import { getStoredUser } from "../utils/auth";
+import { getAuthenticatedToken, getAuthenticatedUser } from "../utils/auth";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api'
 });
 
 api.interceptors.request.use((config) => {
-  const user = getStoredUser();
-  const rawToken = localStorage.getItem("token");
-  const token = rawToken && rawToken !== "null" && rawToken !== "undefined" ? rawToken : null;
+  const user = getAuthenticatedUser();
+  const token = getAuthenticatedToken();
 
   if (token) {
     config.headers["Authorization"] = `Bearer ${token}`;

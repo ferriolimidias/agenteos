@@ -268,13 +268,10 @@ async def require_ia_config_access(
     if not usuario_bd:
         raise HTTPException(status_code=401, detail="Usuário não encontrado.")
 
-    if is_root_admin_email(usuario_bd.email):
+    if is_root_admin_email(usuario_bd.email) or is_super_admin_role(usuario_bd.role):
         return usuario_bd
 
     print(f"Role no Banco: {usuario_bd.role}")
-    if is_super_admin_role(usuario_bd.role):
-        return usuario_bd
-
     if is_admin_empresa_role(usuario_bd.role):
         try:
             empresa_uuid = uuid.UUID(empresa_id)

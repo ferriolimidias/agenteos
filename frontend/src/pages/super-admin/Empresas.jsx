@@ -249,9 +249,17 @@ export default function Empresas() {
     try {
       const res = await api.post(`/auth/impersonate/${emp.id}`);
       const data = res.data;
+      const currentUser = localStorage.getItem("user");
+      const currentToken = localStorage.getItem("token");
 
       // Mantém a identidade autenticada original e troca apenas o tenant ativo.
       clearImpersonation();
+      if (currentUser) {
+        localStorage.setItem("original_user", currentUser);
+      }
+      if (currentToken && currentToken !== "null" && currentToken !== "undefined") {
+        localStorage.setItem("original_token", currentToken);
+      }
       localStorage.setItem("impersonating", "true");
       localStorage.setItem("impersonating_empresa", emp.nome_empresa);
       localStorage.setItem("impersonated_empresa_id", emp.id);
