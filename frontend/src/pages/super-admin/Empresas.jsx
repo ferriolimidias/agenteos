@@ -234,7 +234,7 @@ export default function Empresas() {
     setSavingConfigIA(true);
     try {
       await api.put(`/empresas/${empresaSelecionada.id}/ia-config`, configIAData);
-      alert("Configuração do Orquestrador salva com sucesso!");
+      alert("Configuração de IA salva com sucesso!");
       setShowConfigIAModal(false);
     } catch (err) {
       console.error(err);
@@ -317,9 +317,17 @@ export default function Empresas() {
                 empresas.map((emp) => (
                   <tr key={emp.id} className="hover:bg-gray-800/50 transition-colors">
                     <td className="px-6 py-4 font-medium flex items-center space-x-3">
-                      <div className="w-8 h-8 rounded-md bg-indigo-900/50 text-indigo-400 flex items-center justify-center">
-                        <Building size={16} />
-                      </div>
+                      {emp.logo_url ? (
+                        <img
+                          src={emp.logo_url}
+                          alt={`Logo de ${emp.nome_empresa}`}
+                          className="w-8 h-8 rounded-md object-contain"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-indigo-900/50 text-indigo-400 flex items-center justify-center">
+                          <Building size={16} />
+                        </div>
+                      )}
                       <span>{emp.nome_empresa}</span>
                     </td>
                     <td className="px-6 py-4 text-gray-400">
@@ -347,7 +355,7 @@ export default function Empresas() {
                         <button 
                           onClick={() => openConfigIAModal(emp)}
                           className="text-gray-400 hover:text-purple-400 transition-colors p-2 hover:bg-purple-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
-                          title="Configurar Orquestrador IA"
+                          title="Configuração de IA"
                         >
                           <Brain size={16} />
                         </button>
@@ -727,7 +735,7 @@ export default function Empresas() {
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Brain className="text-purple-500" size={24} />
-                  Configurar Orquestrador IA
+                  Configuração de IA
                 </h2>
                 <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
               </div>
