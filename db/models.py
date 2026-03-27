@@ -504,6 +504,7 @@ class ConfiguracoesGlobais(Base):
     nome_sistema = Column(String, nullable=False, default="ANTIGRAVITY")
     cor_primaria = Column(String, nullable=False, default="#6366f1")
     openai_key_global = Column(String, nullable=True)
+    favicon_base64 = Column(Text, nullable=True)
 
 class WebhookSaida(Base):
     __tablename__ = "webhooks_saida"

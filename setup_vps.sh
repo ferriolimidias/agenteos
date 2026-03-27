@@ -38,8 +38,8 @@ fi
 PROJECT_DIR="$(pwd)"
 cd "${PROJECT_DIR}"
 
-# Build
-${SUDO} docker compose down -v --remove-orphans
+# Build (sem remover volumes para preservar dados do banco)
+${SUDO} docker compose down
 ${SUDO} docker compose build --no-cache
 ${SUDO} docker compose up -d
 

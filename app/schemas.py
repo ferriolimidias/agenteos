@@ -197,3 +197,20 @@ class TagOfficialResponse(TagOfficialBase):
 class EspecialistaToolLink(BaseModel):
     especialista_id: UUID4
     api_connection_id: UUID4
+
+
+class ConfiguracaoGlobalUpdate(BaseModel):
+    nome_sistema: str
+    cor_primaria: str
+    openai_key_global: str | None = None
+    favicon_base64: str | None = None
+
+
+class ConfiguracaoGlobalResponse(BaseModel):
+    id: int
+    nome_sistema: str
+    cor_primaria: str
+    openai_key_global: str | None = None
+    favicon_base64: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)

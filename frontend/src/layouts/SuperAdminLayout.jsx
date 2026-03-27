@@ -45,7 +45,7 @@ export default function SuperAdminLayout() {
           </Link>
           <Link to="/admin/orquestrador" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
             <Bot size={20} />
-            <span>Orquestrador de IA</span>
+            <span>Agente Atendente</span>
           </Link>
           <Link to="/admin/configuracoes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
             <Settings size={20} />

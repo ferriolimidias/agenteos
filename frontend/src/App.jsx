@@ -23,6 +23,42 @@ function App() {
       alert(`ERRO CRÍTICO CAPTURADO NO REACT:\n\n${message}\n\nArquivo: ${source}\nLinha: ${lineno}`);
       return false; 
     };
+
+    const applyFavicon = (faviconHref) => {
+      if (!faviconHref) {
+        return;
+      }
+      let link = document.querySelector("link[rel='icon']");
+      if (!link) {
+        link = document.createElement("link");
+        link.setAttribute("rel", "icon");
+        document.head.appendChild(link);
+      }
+      link.setAttribute("href", faviconHref);
+    };
+
+    const loadGlobalFavicon = async () => {
+      try {
+        const response = await fetch("/api/admin/configuracoes");
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        applyFavicon(data?.favicon_base64);
+      } catch (error) {
+        console.error("Falha ao carregar favicon global:", error);
+      }
+    };
+
+    const onConfigUpdated = () => {
+      loadGlobalFavicon();
+    };
+
+    loadGlobalFavicon();
+    window.addEventListener("configuracoesUpdated", onConfigUpdated);
+    return () => {
+      window.removeEventListener("configuracoesUpdated", onConfigUpdated);
+    };
   }, []);
 
   return (

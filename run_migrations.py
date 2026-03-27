@@ -66,6 +66,15 @@ async def run_migrations():
         except Exception as e:
             print(f"semantic routing migration error: {e}")
 
+        try:
+            print("Adding favicon_base64 to configuracoes_globais...")
+            await conn.execute(
+                text("ALTER TABLE configuracoes_globais ADD COLUMN IF NOT EXISTS favicon_base64 TEXT;")
+            )
+            print("Column favicon_base64 ensured on configuracoes_globais.")
+        except Exception as e:
+            print(f"configuracoes_globais migration error: {e}")
+
     print("Migrations complete!")
 
 if __name__ == "__main__":

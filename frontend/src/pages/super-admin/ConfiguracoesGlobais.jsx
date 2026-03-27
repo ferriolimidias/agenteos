@@ -5,7 +5,8 @@ export default function ConfiguracoesGlobais() {
   const [formData, setFormData] = useState({
     nome_sistema: "",
     cor_primaria: "",
-    openai_key_global: ""
+    openai_key_global: "",
+    favicon_base64: ""
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -21,7 +22,8 @@ export default function ConfiguracoesGlobais() {
       setFormData({
         nome_sistema: response.data.nome_sistema || "",
         cor_primaria: response.data.cor_primaria || "",
-        openai_key_global: response.data.openai_key_global || ""
+        openai_key_global: response.data.openai_key_global || "",
+        favicon_base64: response.data.favicon_base64 || ""
       });
     } catch (error) {
       console.error("Erro ao carregar configurações globais:", error);
@@ -36,6 +38,39 @@ export default function ConfiguracoesGlobais() {
     setFormData((prev) => ({
       ...prev,
       [name]: value
+    }));
+  };
+
+  const handleFaviconUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const allowedTypes = ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"];
+    if (!allowedTypes.includes(file.type)) {
+      setMessage({ type: "error", text: "Formato inválido. Use PNG, ICO ou SVG." });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      setFormData((prev) => ({
+        ...prev,
+        favicon_base64: result
+      }));
+    };
+    reader.onerror = () => {
+      setMessage({ type: "error", text: "Falha ao processar arquivo de favicon." });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveFavicon = () => {
+    setFormData((prev) => ({
+      ...prev,
+      favicon_base64: ""
     }));
   };
 
@@ -140,6 +175,37 @@ export default function ConfiguracoesGlobais() {
             />
             <p className="text-xs text-gray-500 mt-2">
               Se as empresas não informarem a própria chave, o sistema usará esta chave como padrão.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Favicon (PNG, ICO ou SVG)
+            </label>
+            <input
+              type="file"
+              accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml"
+              onChange={handleFaviconUpload}
+              className="w-full bg-[#1e1e2d] border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            />
+            {formData.favicon_base64 && (
+              <div className="mt-3 flex items-center gap-4">
+                <img
+                  src={formData.favicon_base64}
+                  alt="Preview do favicon"
+                  className="w-8 h-8 rounded bg-white p-1 border border-gray-600"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemoveFavicon}
+                  className="text-sm text-red-400 hover:text-red-300"
+                >
+                  Remover favicon
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">
+              O favicon é salvo em base64 nas configurações globais.
             </p>
           </div>
 
