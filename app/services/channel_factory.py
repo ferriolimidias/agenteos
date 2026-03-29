@@ -80,12 +80,15 @@ async def despachar_mensagem(
     if not texto:
         return False
 
-    # Lógica de Humanização: quebrando a resposta usando quebra de linha
-    # Também poderia incluir divisão por '.' se o texto for muito longo e sem parágrafos
-    partes = [p.strip() for p in texto.split('\n') if p.strip()]
-    
+    texto = texto.strip()
+    if not texto:
+        return False
+
+    # Lógica de Humanização: quebrando por "gavetas visuais" (parágrafos separados por linha em branco)
+    partes = [bloco.strip() for bloco in texto.split("\n\n") if bloco.strip()]
+
     if not partes:
-        partes = [texto]
+        return False
         
     sucesso_geral = True
 

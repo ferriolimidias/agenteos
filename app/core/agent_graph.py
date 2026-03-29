@@ -650,7 +650,6 @@ async def node_atendente(state: AgentState):
         identidade_prompt = ia_identidade or ia_instrucoes_personalizadas
         regras_prompt = ia_regras_negocio or ia_instrucoes_personalizadas
         estrategia_prompt = ia_estrategia_vendas or ia_instrucoes_personalizadas
-        formatacao_prompt = ia_formatacao_whatsapp or ia_instrucoes_personalizadas
 
         diretrizes_base = regras_prompt or "(não configuradas)"
         blocos.append(
@@ -664,14 +663,26 @@ async def node_atendente(state: AgentState):
         if estrategia_prompt:
             blocos.append(f"Estratégia Comercial/Vendas: {estrategia_prompt}")
 
-        formatacao_base = formatacao_prompt or (
-            "Seja extremamente conciso. Use parágrafos muito curtos (máx 2-3 linhas). "
-            "Use *negrito* apenas para destacar valores monetários, nomes de produtos/combos e pontos cruciais. "
-            "Use listas com emojis ou marcadores se for listar opções."
+        formatacao_base = (
+            "DIRETRIZES DE DESIGN DE MENSAGEM (WHATSAPP):\n"
+            "- Use Emojis Temáticos: Use emojis no início de cada parágrafo ou tópico para facilitar a leitura "
+            "(ex: 🚀 para cursos, 💰 para preços, ✅ para benefícios).\n"
+            "- Estrutura de Lista: Sempre que listar módulos, bônus ou cursos, use uma lista com marcadores "
+            "(ex: '•' ou '✅').\n"
+            "- Negrito Tático: Use *asteriscos* para destacar *Nomes de Cursos*, *Valores Monetários* e o "
+            "*Call to Action* final.\n"
+            "- Hierarquia Visual:\n"
+            "  1. Comece com uma saudação empática ou uma frase de transição.\n"
+            "  2. Apresente a informação principal em blocos curtos.\n"
+            "  3. Separe assuntos diferentes (ex: descrição de curso vs. preço) usando uma quebra de linha "
+            "dupla (\\n\\n).\n"
+            "- Mensagem Final: O Call to Action (CTA) deve ser uma linha isolada no final, precedida de um "
+            "emoji de convite (ex: 📅 ou ✨)."
         )
-        blocos.append(f"Instruções de Formatação para WhatsApp: {formatacao_base}")
+        blocos.append(formatacao_base)
 
-        is_primeira_interacao = len(mensagens_estado) <= 2
+        ja_respondeu = "Assistente:" in str(historico_bd or "")
+        is_primeira_interacao = not ja_respondeu
         if is_primeira_interacao and saudacao_configurada:
             blocos.append(
                 f"Inicie sua resposta EXATAMENTE com esta saudação: {saudacao_configurada}"
@@ -687,8 +698,9 @@ async def node_atendente(state: AgentState):
 
         return "\n\n".join(blocos).strip()
 
-    # Identifica primeiro contato pelo tamanho do histórico de mensagens no estado.
-    is_primeiro_contato = len(mensagens_estado) <= 2
+    # Identifica primeiro contato pelo histórico persistido no banco.
+    ja_respondeu = "Assistente:" in str(historico_bd or "")
+    is_primeiro_contato = not ja_respondeu
     is_primeira_msg = is_primeiro_contato
 
     instrucao_primeiro_contato = ""
