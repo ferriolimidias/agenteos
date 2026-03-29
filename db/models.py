@@ -77,6 +77,10 @@ class Empresa(Base):
     credenciais_canais = Column(JSONB, default={})
     informacoes_adicionais = Column(Text, nullable=True)
     ia_instrucoes_personalizadas = Column(Text, nullable=True)
+    ia_identidade = Column(Text, nullable=True)
+    ia_regras_negocio = Column(Text, nullable=True)
+    ia_estrategia_vendas = Column(Text, nullable=True)
+    ia_formatacao_whatsapp = Column(Text, nullable=True)
     ia_tom_voz = Column(String, nullable=True)
     # Agent Configuration
     nome_agente = Column(String, default="Assistente Virtual")

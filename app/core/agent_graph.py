@@ -566,6 +566,10 @@ async def node_atendente(state: AgentState):
     empresa = None
     saudacao_configurada = ""
     ia_instrucoes_personalizadas = ""
+    ia_identidade = ""
+    ia_regras_negocio = ""
+    ia_estrategia_vendas = ""
+    ia_formatacao_whatsapp = ""
     ia_tom_voz = ""
     if empresa_id:
         try:
@@ -582,15 +586,31 @@ async def node_atendente(state: AgentState):
     if empresa:
         saudacao_configurada = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
         ia_instrucoes_personalizadas = str(getattr(empresa, "ia_instrucoes_personalizadas", "") or "").strip()
+        ia_identidade = str(getattr(empresa, "ia_identidade", "") or "").strip()
+        ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
+        ia_estrategia_vendas = str(getattr(empresa, "ia_estrategia_vendas", "") or "").strip()
+        ia_formatacao_whatsapp = str(getattr(empresa, "ia_formatacao_whatsapp", "") or "").strip()
         ia_tom_voz = str(getattr(empresa, "ia_tom_voz", "") or "").strip()
 
-    if not empresa or not any([saudacao_configurada, ia_instrucoes_personalizadas, ia_tom_voz]):
+    if not empresa or not any([
+        saudacao_configurada,
+        ia_instrucoes_personalizadas,
+        ia_identidade,
+        ia_regras_negocio,
+        ia_estrategia_vendas,
+        ia_formatacao_whatsapp,
+        ia_tom_voz,
+    ]):
         logger.error(
             "[NODE ATENDENTE] Dados da empresa vazios ou incompletos para empresa_id=%s "
-            "(saudacao=%s, instrucoes=%s, tom_voz=%s)",
+            "(saudacao=%s, instrucoes=%s, identidade=%s, regras=%s, estrategia=%s, formatacao=%s, tom_voz=%s)",
             empresa_id,
             bool(saudacao_configurada),
             bool(ia_instrucoes_personalizadas),
+            bool(ia_identidade),
+            bool(ia_regras_negocio),
+            bool(ia_estrategia_vendas),
+            bool(ia_formatacao_whatsapp),
             bool(ia_tom_voz),
         )
     
@@ -627,18 +647,29 @@ async def node_atendente(state: AgentState):
         hora_formatada = agora.strftime("%H:%M")
         blocos.append(f"Contexto temporal: Hoje é {dia_da_semana}, {data_formatada} às {hora_formatada}.")
 
+        identidade_prompt = ia_identidade or ia_instrucoes_personalizadas
+        regras_prompt = ia_regras_negocio or ia_instrucoes_personalizadas
+        estrategia_prompt = ia_estrategia_vendas or ia_instrucoes_personalizadas
+        formatacao_prompt = ia_formatacao_whatsapp or ia_instrucoes_personalizadas
+
+        diretrizes_base = regras_prompt or "(não configuradas)"
         blocos.append(
             "Diretrizes de Atendimento: "
-            f"{ia_instrucoes_personalizadas or '(não configuradas)'}. "
+            f"{diretrizes_base}. "
             f"Tom de voz: {ia_tom_voz or '(não configurado)'}."
         )
 
-        blocos.append(
-            "Instruções de Formatação para WhatsApp: Seja extremamente conciso. "
-            "Use parágrafos muito curtos (máx 2-3 linhas). "
+        if identidade_prompt:
+            blocos.append(f"Diretriz de Identidade da Marca: {identidade_prompt}")
+        if estrategia_prompt:
+            blocos.append(f"Estratégia Comercial/Vendas: {estrategia_prompt}")
+
+        formatacao_base = formatacao_prompt or (
+            "Seja extremamente conciso. Use parágrafos muito curtos (máx 2-3 linhas). "
             "Use *negrito* apenas para destacar valores monetários, nomes de produtos/combos e pontos cruciais. "
             "Use listas com emojis ou marcadores se for listar opções."
         )
+        blocos.append(f"Instruções de Formatação para WhatsApp: {formatacao_base}")
 
         is_primeira_interacao = len(mensagens_estado) <= 2
         if is_primeira_interacao and saudacao_configurada:

@@ -6,7 +6,7 @@ import base64
 import re
 from datetime import datetime, timedelta
 
-from app.api.schemas import StandardMessage
+from app.schemas import StandardMessage
 from app.api.utils import handle_debouncer
 from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal

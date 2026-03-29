@@ -33,6 +33,10 @@ export default function Empresas() {
     nome_empresa: "",
     area_atuacao: "",
     logo_url: "",
+    ia_identidade: "",
+    ia_regras_negocio: "",
+    ia_estrategia_vendas: "",
+    ia_formatacao_whatsapp: "",
     admin_nome: "",
     admin_email: "",
     admin_senha: ""
@@ -50,6 +54,10 @@ export default function Empresas() {
   // Config IA State
   const [showConfigIAModal, setShowConfigIAModal] = useState(false);
   const [configIAData, setConfigIAData] = useState({
+    ia_identidade: "",
+    ia_regras_negocio: "",
+    ia_estrategia_vendas: "",
+    ia_formatacao_whatsapp: "",
     modelo_ia: "gpt-4o-mini",
     modelo_roteador: "gpt-4o-mini",
     followup_ativo: false,
@@ -170,6 +178,10 @@ export default function Empresas() {
         nome_empresa: "",
         area_atuacao: "",
         logo_url: "",
+        ia_identidade: "",
+        ia_regras_negocio: "",
+        ia_estrategia_vendas: "",
+        ia_formatacao_whatsapp: "",
         admin_nome: "",
         admin_email: "",
         admin_senha: ""
@@ -235,7 +247,10 @@ export default function Empresas() {
     try {
       const res = await api.get(`/empresas/${emp.id}/ia-config`);
       setConfigIAData({
-        ia_instrucoes_personalizadas: res.data.ia_instrucoes_personalizadas || "",
+        ia_identidade: res.data.ia_identidade || "",
+        ia_regras_negocio: res.data.ia_regras_negocio || "",
+        ia_estrategia_vendas: res.data.ia_estrategia_vendas || "",
+        ia_formatacao_whatsapp: res.data.ia_formatacao_whatsapp || "",
         ia_tom_voz: res.data.ia_tom_voz || "",
         nome_agente: res.data.nome_agente || "",
         mensagem_saudacao: res.data.mensagem_saudacao || "",
@@ -483,6 +498,61 @@ export default function Empresas() {
                         />
                       </div>
                       <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-800 my-2"></div>
+
+                {/* Configuração Inicial da IA */}
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Brain size={16} /> Instruções da IA
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Identidade da Persona</label>
+                      <textarea
+                        name="ia_identidade"
+                        value={formData.ia_identidade}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="Quem é o agente? Ex: especialista da marca, tom e postura do atendimento."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Regras de Negócio</label>
+                      <textarea
+                        name="ia_regras_negocio"
+                        value={formData.ia_regras_negocio}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="O que ele não pode fazer? Ex: limites de desconto, políticas e restrições."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Estratégia de Vendas/CTA</label>
+                      <textarea
+                        name="ia_estrategia_vendas"
+                        value={formData.ia_estrategia_vendas}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="Como oferecer combos? Ex: gatilhos de fechamento e quando convidar para comprar."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Formatação WhatsApp</label>
+                      <textarea
+                        name="ia_formatacao_whatsapp"
+                        value={formData.ia_formatacao_whatsapp}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="Como responder no WhatsApp? Ex: mensagens curtas, listas, emojis e quebras de linha."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
                     </div>
                   </div>
                 </div>
@@ -947,13 +1017,52 @@ export default function Empresas() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">
-                      Instruções Personalizadas
+                      Identidade da Persona
                     </label>
                     <textarea
-                      value={configIAData.ia_instrucoes_personalizadas}
-                      onChange={(e) => setConfigIAData({...configIAData, ia_instrucoes_personalizadas: e.target.value})}
+                      value={configIAData.ia_identidade}
+                      onChange={(e) => setConfigIAData({...configIAData, ia_identidade: e.target.value})}
                       rows={4}
-                      placeholder="Diretrizes gerais, restrições ou objetivos principais do assistente."
+                      placeholder="Quem é o agente? Ex: especialista, tom e postura esperada no atendimento."
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Regras de Negócio
+                    </label>
+                    <textarea
+                      value={configIAData.ia_regras_negocio}
+                      onChange={(e) => setConfigIAData({...configIAData, ia_regras_negocio: e.target.value})}
+                      rows={4}
+                      placeholder="O que ele não pode fazer? Regras, limites, políticas comerciais e operacionais."
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Estratégia de Vendas/CTA
+                    </label>
+                    <textarea
+                      value={configIAData.ia_estrategia_vendas}
+                      onChange={(e) => setConfigIAData({...configIAData, ia_estrategia_vendas: e.target.value})}
+                      rows={4}
+                      placeholder="Como oferecer combos? Quando conduzir para fechamento, gatilhos e chamadas para ação."
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Formatação WhatsApp
+                    </label>
+                    <textarea
+                      value={configIAData.ia_formatacao_whatsapp}
+                      onChange={(e) => setConfigIAData({...configIAData, ia_formatacao_whatsapp: e.target.value})}
+                      rows={4}
+                      placeholder="Como estruturar mensagens no WhatsApp: quebras de linha, listas, emojis e objetividade."
                       className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
                     />
                   </div>

@@ -52,13 +52,16 @@ from app.services.tag_crm_service import (
 )
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
-class EvolutionCredentials(BaseModel):
-    evolution_url: str
-    evolution_apikey: str
-    evolution_instance: str
-    openai_api_key: Optional[str] = None
-
-from app.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate
+from app.schemas import (
+    EmpresaCreate,
+    EmpresaResponse,
+    EmpresaSetupRequest,
+    EmpresaUpdate,
+    EvolutionCredentials,
+    IAConfigResponse,
+    IAConfigUpdateRequest,
+    StandardMessage,
+)
 
 router = APIRouter(
     prefix="/empresas",
@@ -194,7 +197,13 @@ async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_d
     nova_empresa = Empresa(
         nome_empresa=empresa.nome_empresa,
         logo_url=empresa.logo_url,
-        credenciais_canais=empresa.credenciais_canais
+        credenciais_canais=empresa.credenciais_canais,
+        ia_instrucoes_personalizadas=empresa.ia_instrucoes_personalizadas,
+        ia_identidade=empresa.ia_identidade,
+        ia_regras_negocio=empresa.ia_regras_negocio,
+        ia_estrategia_vendas=empresa.ia_estrategia_vendas,
+        ia_formatacao_whatsapp=empresa.ia_formatacao_whatsapp,
+        ia_tom_voz=empresa.ia_tom_voz,
     )
     db.add(nova_empresa)
     try:
@@ -244,6 +253,10 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "logo_url": empresa.logo_url,
         "credenciais_canais": empresa.credenciais_canais or {},
         "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas,
+        "ia_identidade": getattr(empresa, "ia_identidade", None),
+        "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
+        "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
+        "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
         "ia_tom_voz": empresa.ia_tom_voz,
         "conexao_disparo_id": empresa.conexao_disparo_id,
         "disparo_delay_min": empresa.disparo_delay_min if empresa.disparo_delay_min is not None else 3,
@@ -293,38 +306,6 @@ async def require_ia_config_access(
         detail="Acesso negado. Apenas Super Admin ou Admin da própria empresa."
     )
 
-class IAConfigResponse(BaseModel):
-    ia_instrucoes_personalizadas: str | None = None
-    ia_tom_voz: str | None = None
-    nome_agente: str | None = None
-    mensagem_saudacao: str | None = None
-    modelo_ia: str | None = None
-    modelo_roteador: str | None = None
-    followup_ativo: bool = False
-    followup_espera_nivel_1_minutos: int = 20
-    followup_espera_nivel_2_minutos: int = 10
-    limite_certeza: float = 0.65
-    limite_duvida: float = 0.45
-    max_agentes_desempate: int = 3
-    informacoes_adicionais: str | None = None
-    coletar_nome: bool = True
-
-class IAConfigUpdateRequest(BaseModel):
-    ia_instrucoes_personalizadas: str | None = None
-    ia_tom_voz: str | None = None
-    nome_agente: str | None = None
-    mensagem_saudacao: str | None = None
-    modelo_ia: str | None = None
-    modelo_roteador: str | None = None
-    followup_ativo: bool | None = None
-    followup_espera_nivel_1_minutos: int | None = None
-    followup_espera_nivel_2_minutos: int | None = None
-    limite_certeza: float | None = None
-    limite_duvida: float | None = None
-    max_agentes_desempate: int | None = None
-    informacoes_adicionais: str | None = None
-    coletar_nome: bool | None = None
-    
 @router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
 async def get_ia_config(
     empresa_id: str,
@@ -337,6 +318,10 @@ async def get_ia_config(
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     return {
         "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
+        "ia_identidade": getattr(empresa, "ia_identidade", None),
+        "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
+        "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
+        "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
         "ia_tom_voz": empresa.ia_tom_voz,
         "nome_agente": empresa.nome_agente,
         "mensagem_saudacao": empresa.mensagem_saudacao,
@@ -366,6 +351,14 @@ async def put_ia_config(
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     if data.ia_instrucoes_personalizadas is not None:
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
+    if data.ia_identidade is not None:
+        empresa.ia_identidade = data.ia_identidade
+    if data.ia_regras_negocio is not None:
+        empresa.ia_regras_negocio = data.ia_regras_negocio
+    if data.ia_estrategia_vendas is not None:
+        empresa.ia_estrategia_vendas = data.ia_estrategia_vendas
+    if data.ia_formatacao_whatsapp is not None:
+        empresa.ia_formatacao_whatsapp = data.ia_formatacao_whatsapp
     if data.ia_tom_voz is not None:
         empresa.ia_tom_voz = data.ia_tom_voz
     if data.nome_agente is not None:
@@ -408,6 +401,10 @@ async def put_ia_config(
         await db.refresh(empresa)
         return {
             "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
+            "ia_identidade": getattr(empresa, "ia_identidade", None),
+            "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
+            "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
+            "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
             "ia_tom_voz": empresa.ia_tom_voz,
             "nome_agente": empresa.nome_agente,
             "mensagem_saudacao": empresa.mensagem_saudacao,
@@ -444,6 +441,14 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         empresa.logo_url = data.logo_url
     if data.ia_instrucoes_personalizadas is not None:
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
+    if data.ia_identidade is not None:
+        empresa.ia_identidade = data.ia_identidade
+    if data.ia_regras_negocio is not None:
+        empresa.ia_regras_negocio = data.ia_regras_negocio
+    if data.ia_estrategia_vendas is not None:
+        empresa.ia_estrategia_vendas = data.ia_estrategia_vendas
+    if data.ia_formatacao_whatsapp is not None:
+        empresa.ia_formatacao_whatsapp = data.ia_formatacao_whatsapp
     if data.ia_tom_voz is not None:
         empresa.ia_tom_voz = data.ia_tom_voz
     if data.disparo_delay_min is not None:
@@ -536,14 +541,6 @@ async def deletar_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao deletar empresa: {str(e)}")
 
-class EmpresaSetupRequest(BaseModel):
-    nome_empresa: str
-    area_atuacao: str | None = None
-    logo_url: str | None = None
-    admin_nome: str
-    admin_email: str
-    admin_senha: str
-
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
 async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(get_db)):
     """
@@ -566,7 +563,11 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
         nova_empresa = Empresa(
             nome_empresa=data.nome_empresa,
             area_atuacao=data.area_atuacao,
-            logo_url=data.logo_url
+            logo_url=data.logo_url,
+            ia_identidade=data.ia_identidade,
+            ia_regras_negocio=data.ia_regras_negocio,
+            ia_estrategia_vendas=data.ia_estrategia_vendas,
+            ia_formatacao_whatsapp=data.ia_formatacao_whatsapp,
         )
         db.add(nova_empresa)
         await db.flush() # Para obter o ID da empresa gerado
@@ -2530,7 +2531,6 @@ async def simulador_chat(
     Fire-and-Forget: salva a mensagem no Redis via handle_debouncer em background
     e retorna 202 imediatamente. A resposta da IA fica disponível via GET /simulador/resposta/{sessao_id}.
     """
-    from app.api.schemas import StandardMessage
     from app.api.utils import handle_debouncer
     from app.api.main import redis_client
 

@@ -75,7 +75,7 @@ for route in app.routes:
 print("--- FIM DO MAPEAMENTO DE ROTAS ---")
 
 
-from app.api.schemas import StandardMessage
+from app.schemas import StandardMessage
 
 if __name__ == "__main__":
     import uvicorn

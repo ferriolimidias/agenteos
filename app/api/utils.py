@@ -1,7 +1,7 @@
 import asyncio
 import os
 from typing import List
-from app.api.schemas import StandardMessage
+from app.schemas import StandardMessage
 from app.services.websocket_manager import manager
 
 LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()

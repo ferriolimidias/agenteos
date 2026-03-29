@@ -9,6 +9,10 @@ class EmpresaBase(BaseModel):
     logo_url: str | None = None
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
     ia_instrucoes_personalizadas: str | None = None
+    ia_identidade: str | None = None
+    ia_regras_negocio: str | None = None
+    ia_estrategia_vendas: str | None = None
+    ia_formatacao_whatsapp: str | None = None
     ia_tom_voz: str | None = None
     disparo_delay_min: int = 3
     disparo_delay_max: int = 7
@@ -35,6 +39,10 @@ class EmpresaUpdate(BaseModel):
     area_atuacao: str | None = None
     logo_url: str | None = None
     ia_instrucoes_personalizadas: str | None = None
+    ia_identidade: str | None = None
+    ia_regras_negocio: str | None = None
+    ia_estrategia_vendas: str | None = None
+    ia_formatacao_whatsapp: str | None = None
     ia_tom_voz: str | None = None
     conexao_disparo_id: str | None = None
     disparo_delay_min: int | None = None
@@ -48,6 +56,78 @@ class EmpresaResponse(EmpresaBase):
     conexao_disparo_id: UUID4 | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class IAConfigResponse(BaseModel):
+    ia_instrucoes_personalizadas: str | None = None
+    ia_identidade: str | None = None
+    ia_regras_negocio: str | None = None
+    ia_estrategia_vendas: str | None = None
+    ia_formatacao_whatsapp: str | None = None
+    ia_tom_voz: str | None = None
+    nome_agente: str | None = None
+    mensagem_saudacao: str | None = None
+    modelo_ia: str | None = None
+    modelo_roteador: str | None = None
+    followup_ativo: bool = False
+    followup_espera_nivel_1_minutos: int = 20
+    followup_espera_nivel_2_minutos: int = 10
+    limite_certeza: float = 0.65
+    limite_duvida: float = 0.45
+    max_agentes_desempate: int = 3
+    informacoes_adicionais: str | None = None
+    coletar_nome: bool = True
+
+
+class IAConfigUpdateRequest(BaseModel):
+    ia_instrucoes_personalizadas: str | None = None
+    ia_identidade: str | None = None
+    ia_regras_negocio: str | None = None
+    ia_estrategia_vendas: str | None = None
+    ia_formatacao_whatsapp: str | None = None
+    ia_tom_voz: str | None = None
+    nome_agente: str | None = None
+    mensagem_saudacao: str | None = None
+    modelo_ia: str | None = None
+    modelo_roteador: str | None = None
+    followup_ativo: bool | None = None
+    followup_espera_nivel_1_minutos: int | None = None
+    followup_espera_nivel_2_minutos: int | None = None
+    limite_certeza: float | None = None
+    limite_duvida: float | None = None
+    max_agentes_desempate: int | None = None
+    informacoes_adicionais: str | None = None
+    coletar_nome: bool | None = None
+
+
+class EmpresaSetupRequest(BaseModel):
+    nome_empresa: str
+    area_atuacao: str | None = None
+    logo_url: str | None = None
+    ia_identidade: str | None = None
+    ia_regras_negocio: str | None = None
+    ia_estrategia_vendas: str | None = None
+    ia_formatacao_whatsapp: str | None = None
+    admin_nome: str
+    admin_email: str
+    admin_senha: str
+
+
+class EvolutionCredentials(BaseModel):
+    evolution_url: str
+    evolution_apikey: str
+    evolution_instance: str
+    openai_api_key: str | None = None
+
+
+class StandardMessage(BaseModel):
+    empresa_id: str
+    canal: str
+    identificador_origem: str
+    conexao_id: str | None = None
+    nome_contato: str | None = None
+    texto_mensagem: str
+    is_human_agent: bool
 
 # --- Schemas para Agente ---
 class AgenteBase(BaseModel):
