@@ -233,7 +233,7 @@ export default function EmpresaConexoesManager({
       form.tipo === "evolution"
         ? {
             tipo: "evolution",
-            nome_instancia: form.nome_instancia,
+            nome_instancia: form.nome_instancia || form.evolution_instance,
             credenciais: {
               evolution_url: form.evolution_url,
               evolution_instance: form.evolution_instance,
@@ -715,14 +715,13 @@ export default function EmpresaConexoesManager({
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
                       <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Nome da Instância
+                        Nome Amigável (Opcional)
                       </label>
                       <input
                         type="text"
-                        required
                         value={form.nome_instancia}
                         onChange={(e) => handleChange("nome_instancia", e.target.value)}
-                        placeholder="whatsapp-cliente-01"
+                        placeholder="Se vazio, será igual ao Nome da Instância na API"
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>

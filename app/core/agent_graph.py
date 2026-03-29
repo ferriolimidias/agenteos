@@ -389,7 +389,8 @@ class AnaliseRoteador(BaseModel):
 
 
 class ExtracaoEspecialista(BaseModel):
-    dados: str | dict = Field(description="Dados crus extraidos pelo especialista.")
+    model_config = {"extra": "forbid"}
+    dados: str = Field(description="Dados crus extraidos pelo especialista.")
     fontes: List[str] = Field(default_factory=list, description="Ferramentas, APIs ou documentos usados na extracao.")
     erros: List[str] = Field(default_factory=list, description="Falhas tecnicas encontradas durante a extracao.")
 

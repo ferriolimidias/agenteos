@@ -76,7 +76,10 @@ def _validar_payload(tipo: TipoConexao, payload: ConexaoCreate) -> tuple[str, di
                 status_code=400,
                 detail=f"Campos obrigatórios ausentes para Evolution: {', '.join(missing)}"
             )
-        nome_instancia = (payload.nome_instancia or credenciais.get("evolution_instance") or "").strip()
+        evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
+        credenciais["evolution_instance"] = evolution_instance
+        # "Nome amigável" opcional: quando vazio, usa automaticamente o identificador da instância.
+        nome_instancia = (payload.nome_instancia or evolution_instance or "").strip()
         if not nome_instancia:
             raise HTTPException(status_code=400, detail="Nome da instância é obrigatório para Evolution.")
         return nome_instancia, credenciais
@@ -93,6 +96,54 @@ def _validar_payload(tipo: TipoConexao, payload: ConexaoCreate) -> tuple[str, di
     if not nome_instancia:
         raise HTTPException(status_code=400, detail="ID do telefone/página é obrigatório.")
     return nome_instancia, credenciais
+
+
+async def _validar_instancia_evolution_existe(credenciais: dict[str, Any]) -> None:
+    evolution_url = str(credenciais.get("evolution_url") or "").rstrip("/")
+    evolution_apikey = str(credenciais.get("evolution_apikey") or "").strip()
+    evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
+
+    if not all([evolution_url, evolution_apikey, evolution_instance]):
+        raise HTTPException(
+            status_code=400,
+            detail="Não foi possível validar a instância Evolution: credenciais incompletas.",
+        )
+
+    endpoint = f"{evolution_url}/instance/connectionState/{evolution_instance}"
+    headers = {"apikey": evolution_apikey}
+    timeout = httpx.Timeout(10.0, connect=5.0)
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        try:
+            response = await client.get(endpoint, headers=headers)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Falha ao validar instância '{evolution_instance}' na Evolution API: {exc}",
+            ) from exc
+
+    response_text = str(response.text or "")
+    response_lower = response_text.lower()
+
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A instância '{evolution_instance}' não existe na Evolution API.",
+        )
+
+    if response.status_code >= 400:
+        if "not found" in response_lower or "não encontrada" in response_lower or "nao encontrada" in response_lower:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A instância '{evolution_instance}' não existe na Evolution API.",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Falha ao validar instância '{evolution_instance}' na Evolution API: "
+                f"status {response.status_code}."
+            ),
+        )
 
 
 async def _testar_conectividade(tipo: TipoConexao, credenciais: dict[str, Any]) -> None:
@@ -285,6 +336,8 @@ async def criar_conexao(
     nome_instancia, credenciais = _validar_payload(tipo, payload)
 
     await _testar_conectividade(tipo, credenciais)
+    if tipo == TipoConexao.EVOLUTION:
+        await _validar_instancia_evolution_existe(credenciais)
 
     result_existente = await db.execute(
         select(Conexao).where(
@@ -388,6 +441,8 @@ async def atualizar_conexao(
     )
     nome_instancia, credenciais = _validar_payload(tipo, payload_validacao)
     await _testar_conectividade(tipo, credenciais)
+    if tipo == TipoConexao.EVOLUTION:
+        await _validar_instancia_evolution_existe(credenciais)
 
     result_existente = await db.execute(
         select(Conexao).where(
