@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()
+try:
+    MAX_MSGS_CONTEXT = max(1, int(os.getenv("MAX_MSGS_CONTEXT", "20")))
+except (TypeError, ValueError):
+    MAX_MSGS_CONTEXT = 20
 
 
 def _conversation_debug_enabled() -> bool:
@@ -543,8 +547,8 @@ async def node_capturar_nome(state: AgentState):
 async def node_atendente(state: AgentState):
     print(f"[NODE ATENDENTE] Iniciando processamento...")
     import uuid
+    from datetime import datetime
     from langchain_core.messages import SystemMessage
-    from app.api.utils import get_orchestrator_system_prompt
 
     # 1. Inicialização de Variáveis Locais (Prevenção de UnboundLocalError)
     empresa_id = state.get("empresa_id")
@@ -554,6 +558,7 @@ async def node_atendente(state: AgentState):
     especialistas_selecionados = state.get("especialistas_selecionados", []) or []
     super_contexto_especialistas = str(state.get("super_contexto_especialistas", "") or "").strip()
     mensagens_estado = state.get("mensagens") or []
+    mensagens_recentes = mensagens_estado[-MAX_MSGS_CONTEXT:]
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
 
@@ -600,22 +605,61 @@ async def node_atendente(state: AgentState):
             f"<respostas_especialistas>\n{esp_content}\n</respostas_especialistas>"
         )
 
-    def _bloco_config_empresa() -> str:
-        return (
-            "<configuracoes_empresa>\n"
-            f"<saudacao_configurada>{saudacao_configurada or '(nao configurada)'}</saudacao_configurada>\n"
-            f"<ia_instrucoes_personalizadas>{ia_instrucoes_personalizadas or '(nao configuradas)'}</ia_instrucoes_personalizadas>\n"
-            f"<ia_tom_voz>{ia_tom_voz or '(nao configurado)'}</ia_tom_voz>\n"
-            "</configuracoes_empresa>"
+    def _montar_system_prompt_modular(incluir_especialistas: bool = False) -> str:
+        blocos: list[str] = []
+
+        nome_agente = str(getattr(empresa, "nome_agente", "") or "").strip() or "Assistente Virtual"
+        nome_empresa_prompt = str(getattr(empresa, "nome_empresa", "") or "").strip() or "Empresa"
+        blocos.append(f"Você é {nome_agente}, assistente virtual da {nome_empresa_prompt}.")
+
+        agora = datetime.now()
+        dias_semana = [
+            "segunda-feira",
+            "terça-feira",
+            "quarta-feira",
+            "quinta-feira",
+            "sexta-feira",
+            "sábado",
+            "domingo",
+        ]
+        dia_da_semana = dias_semana[agora.weekday()]
+        data_formatada = agora.strftime("%d/%m/%Y")
+        hora_formatada = agora.strftime("%H:%M")
+        blocos.append(f"Contexto temporal: Hoje é {dia_da_semana}, {data_formatada} às {hora_formatada}.")
+
+        blocos.append(
+            "Diretrizes de Atendimento: "
+            f"{ia_instrucoes_personalizadas or '(não configuradas)'}. "
+            f"Tom de voz: {ia_tom_voz or '(não configurado)'}."
         )
 
+        blocos.append(
+            "Instruções de Formatação para WhatsApp: Seja extremamente conciso. "
+            "Use parágrafos muito curtos (máx 2-3 linhas). "
+            "Use *negrito* apenas para destacar valores monetários, nomes de produtos/combos e pontos cruciais. "
+            "Use listas com emojis ou marcadores se for listar opções."
+        )
+
+        is_primeira_interacao = len(mensagens_estado) <= 2
+        if is_primeira_interacao and saudacao_configurada:
+            blocos.append(
+                f"Inicie sua resposta EXATAMENTE com esta saudação: {saudacao_configurada}"
+            )
+
+        if incluir_especialistas and respostas_especialistas:
+            respostas_texto = "\n".join([str(r) for r in respostas_especialistas if str(r).strip()])
+            blocos.append(
+                "Baseie sua resposta RIGOROSAMENTE nas seguintes informações técnicas resolvidas pelos especialistas: "
+                f"{respostas_texto}. "
+                "Sintetize todas as informações em uma única resposta fluida e natural, sem dizer que consultou especialistas."
+            )
+
+        return "\n\n".join(blocos).strip()
+
     # Identifica primeiro contato pelo tamanho do histórico de mensagens no estado.
-    is_primeiro_contato = len(mensagens_estado) <= 1
+    is_primeiro_contato = len(mensagens_estado) <= 2
     is_primeira_msg = is_primeiro_contato
 
-    # Pegar prompt base
-    system_prompt_base = await get_orchestrator_system_prompt(empresa_id, is_primeira_mensagem=is_primeira_msg)
-    bloco_config_empresa = _bloco_config_empresa()
     instrucao_primeiro_contato = ""
     if is_primeiro_contato:
         instrucao_primeiro_contato = (
@@ -632,9 +676,7 @@ async def node_atendente(state: AgentState):
 
         bloco_xml_sintese = _bloco_xml(historico_bd, respostas_especialistas)
 
-        prompt_sintese = f"""{system_prompt_base}
-
-{bloco_config_empresa}
+        prompt_sintese = f"""{_montar_system_prompt_modular(incluir_especialistas=True)}
 
 {bloco_xml_sintese}
 
@@ -660,7 +702,7 @@ REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contex
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
-        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + state.get("mensagens", [])
+        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + mensagens_recentes
         llm = await get_llm(empresa_id)
         resposta = await llm.ainvoke(mensagens_para_llm)
 
@@ -677,9 +719,7 @@ REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contex
 
     bloco_xml = _bloco_xml(historico_bd, [])
 
-    prompt_decisao = f"""{system_prompt_base}
-
-{bloco_config_empresa}
+    prompt_decisao = f"""{_montar_system_prompt_modular(incluir_especialistas=False)}
 
 {bloco_xml}
 
@@ -700,7 +740,7 @@ Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> nas saudações 
 </instrucao_decisao>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
-    mensagens_para_llm = [SystemMessage(content=prompt_decisao)] + state.get("mensagens", [])
+    mensagens_para_llm = [SystemMessage(content=prompt_decisao)] + mensagens_recentes
 
     llm = await get_llm(empresa_id)
     llm_json = llm.with_structured_output(DecisaoAtendente)
