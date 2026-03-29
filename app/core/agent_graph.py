@@ -1190,11 +1190,11 @@ async def node_especialista_dinamico(state: AgentState):
 
         modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, 'modelo_ia') else None
         llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
-        llm_extracao = llm.with_structured_output(ExtracaoEspecialista)
         print(
             f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista "
             f"'{nome_especialista_resultado}' com modelo '{modelo_esp or 'default'}'..."
         )
+        resposta_parcial = ""
         if tools_disponiveis:
             print(f"  Fazendo bind dinâmico via llm.bind_tools para {len(tools_disponiveis)} ferramenta(s)")
             llm_with_tools = llm.bind_tools(tools_disponiveis)
@@ -1251,22 +1251,14 @@ async def node_especialista_dinamico(state: AgentState):
 
         fontes_unicas = sorted(list({f for f in fontes_usadas if str(f).strip()}))
         erros_unicos = sorted(list({e for e in erros_extracao if str(e).strip()}))
-        extracao = await llm_extracao.ainvoke(
-            [
-                (
-                    "system",
-                    "Estruture o material recebido no schema ExtracaoEspecialista. "
-                    "Nao crie conversa com cliente. Mantenha dados tecnicos e objetivos."
-                ),
-                (
-                    "user",
-                    f"dados_brutos:\n{dados_crus}\n\nfontes_detectadas:\n{fontes_unicas}\n\nerros_detectados:\n{erros_unicos}",
-                ),
-            ]
-        )
+        extracao = {
+            "dados": str(resposta_parcial or ""),
+            "fontes": fontes_unicas,
+            "erros": erros_unicos,
+        }
 
         state["respostas_especialistas"].append(
-            f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
+            f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao, ensure_ascii=False)}"
         )
 
         prompt_para_super_contexto = (
