@@ -538,8 +538,41 @@ async def node_atendente(state: AgentState):
     lead_id = state.get("lead_id")
     historico_bd = state.get("historico_bd", "")
     respostas_especialistas = state.get("respostas_especialistas", [])
+    mensagens_estado = state.get("mensagens") or []
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
+
+    # Carrega configuração da empresa para garantir injeção de contexto no prompt.
+    empresa = None
+    saudacao_configurada = ""
+    ia_instrucoes_personalizadas = ""
+    ia_tom_voz = ""
+    if empresa_id:
+        try:
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            async with AsyncSessionLocal() as session:
+                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa = result_empresa.scalars().first()
+        except Exception as e:
+            logger.error("[NODE ATENDENTE] Falha ao carregar empresa %s: %s", empresa_id, e)
+            empresa = None
+    else:
+        logger.error("[NODE ATENDENTE] Estado sem empresa_id; não foi possível carregar configurações da empresa.")
+
+    if empresa:
+        saudacao_configurada = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
+        ia_instrucoes_personalizadas = str(getattr(empresa, "ia_instrucoes_personalizadas", "") or "").strip()
+        ia_tom_voz = str(getattr(empresa, "ia_tom_voz", "") or "").strip()
+
+    if not empresa or not any([saudacao_configurada, ia_instrucoes_personalizadas, ia_tom_voz]):
+        logger.error(
+            "[NODE ATENDENTE] Dados da empresa vazios ou incompletos para empresa_id=%s "
+            "(saudacao=%s, instrucoes=%s, tom_voz=%s)",
+            empresa_id,
+            bool(saudacao_configurada),
+            bool(ia_instrucoes_personalizadas),
+            bool(ia_tom_voz),
+        )
     
     # Helper para montar bloco de contexto XML
     def _bloco_xml(historico: str, respostas: list[str]) -> str:
@@ -552,11 +585,29 @@ async def node_atendente(state: AgentState):
             f"<respostas_especialistas>\n{esp_content}\n</respostas_especialistas>"
         )
 
-    # Identifica se é o primeiro turno para a trava de saudação
-    is_primeira_msg = (not historico_bd or historico_bd.strip() == "(nenhuma interacao anterior registrada)")
+    def _bloco_config_empresa() -> str:
+        return (
+            "<configuracoes_empresa>\n"
+            f"<saudacao_configurada>{saudacao_configurada or '(nao configurada)'}</saudacao_configurada>\n"
+            f"<ia_instrucoes_personalizadas>{ia_instrucoes_personalizadas or '(nao configuradas)'}</ia_instrucoes_personalizadas>\n"
+            f"<ia_tom_voz>{ia_tom_voz or '(nao configurado)'}</ia_tom_voz>\n"
+            "</configuracoes_empresa>"
+        )
+
+    # Identifica primeiro contato pelo tamanho do histórico de mensagens no estado.
+    is_primeiro_contato = len(mensagens_estado) <= 1
+    is_primeira_msg = is_primeiro_contato
 
     # Pegar prompt base
     system_prompt_base = await get_orchestrator_system_prompt(empresa_id, is_primeira_mensagem=is_primeira_msg)
+    bloco_config_empresa = _bloco_config_empresa()
+    instrucao_primeiro_contato = ""
+    if is_primeiro_contato:
+        instrucao_primeiro_contato = (
+            'REGRA DE PRIMEIRO CONTATO: Você DEVE iniciar sua resposta obrigatoriamente usando o estilo e as informações '
+            'contidas em <saudacao_configurada>. Não invente saudações genéricas como "Como posso ajudar?" '
+            "se houver uma saudação personalizada disponível."
+        )
 
     # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
     if respostas_especialistas:
@@ -568,6 +619,8 @@ async def node_atendente(state: AgentState):
 
         prompt_sintese = f"""{system_prompt_base}
 
+{bloco_config_empresa}
+
 {bloco_xml_sintese}
 
 <instrucao_final>
@@ -577,6 +630,8 @@ Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou rote
 Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
 Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
 Responda em uma única mensagem clara e objetiva.
+Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
+{instrucao_primeiro_contato}
 REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contexto, significa que esta é a primeira resposta que o cliente vai receber. Nesse caso, você DEVE iniciar sua resposta incorporando a essência e a simpatia dessa saudação oficial, e logo em seguida entregar os dados que o especialista extraiu de forma natural.
 </instrucao_final>"""
 
@@ -598,6 +653,8 @@ REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contex
 
     prompt_decisao = f"""{system_prompt_base}
 
+{bloco_config_empresa}
+
 {bloco_xml}
 
 <instrucao_decisao>
@@ -612,6 +669,8 @@ Defina precisa_roteamento=True obrigatoriamente para qualquer solicitação que 
 Quando precisa_roteamento=True, deixe 'resposta' como nula.
 É proibido responder com limitação do tipo "não consigo consultar" na fase de decisão; nesses casos, roteie.
 Se for small talk puro, use precisa_roteamento=False e forneça sua resposta em 'resposta'. ATENÇÃO VITAL: Se existir a tag <saudacao_obrigatoria> no seu contexto, você é PROIBIDO de inventar uma saudação genérica. Você DEVE usar o texto da <saudacao_obrigatoria> como a BASE exata da sua resposta. Adapte-a levemente ao contexto se o cliente tiver feito algum comentário extra, mas garanta que a essência, as perguntas e a identidade da saudação original sejam entregues ao cliente.
+Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> nas saudações e em qualquer resposta ao cliente.
+{instrucao_primeiro_contato}
 </instrucao_decisao>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
