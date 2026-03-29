@@ -63,7 +63,10 @@ from sqlalchemy.orm import selectinload
 from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_from_json_schema
 from app.services.transferencia_service import (
     executar_transferencia_atendimento,
-    listar_destinos_transferencia_para_prompt,
+)
+from app.services.ferramentas_service import (
+    criar_tool_rag_contextual,
+    criar_tool_transferencia_contextual,
 )
 from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
@@ -843,533 +846,382 @@ async def node_roteador_maestro(state: AgentState):
     return state
 
 async def node_especialista_dinamico(state: AgentState):
-    especialistas_selecionados = state.get("especialistas_selecionados", []) or []
-    if not isinstance(especialistas_selecionados, list):
-        especialistas_selecionados = []
-
-    # Compatibilidade retroativa: converte intencoes antigas para o novo formato.
-    if not especialistas_selecionados:
-        intencoes_legadas = state.get("intencao", [])
-        if not isinstance(intencoes_legadas, list):
-            intencoes_legadas = [intencoes_legadas] if intencoes_legadas else []
-        especialistas_selecionados = [
-            {"id": str(item), "nome": str(item), "prompt_sistema": "", "usar_rag": False}
-            for item in intencoes_legadas
-            if str(item or "").strip()
-        ]
-
-    intencoes = [str(item.get("id") or item.get("nome") or "").strip() for item in especialistas_selecionados if isinstance(item, dict)]
-    metadados_por_id = {
-        str(item.get("id") or item.get("nome") or "").strip(): item
-        for item in especialistas_selecionados
-        if isinstance(item, dict) and str(item.get("id") or item.get("nome") or "").strip()
-    }
-    if not intencoes:
-        return state
-        
-    print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
-    
-    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
-    
-    import uuid
-    empresa_id = state.get("empresa_id")
     try:
-        empresa_uuid = uuid.UUID(empresa_id)
-    except (ValueError, TypeError):
-        empresa_uuid = None
+        especialistas_selecionados = state.get("especialistas_selecionados", []) or []
+        if not isinstance(especialistas_selecionados, list):
+            especialistas_selecionados = []
 
-    nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
-    contexto_empresa = f"Empresa: {nome_empresa}"
-    if area_atuacao:
-        contexto_empresa += f" | Área de atuação: {area_atuacao}.\n"
-    else:
-        contexto_empresa += ".\n"
+        if not especialistas_selecionados:
+            intencoes_legadas = state.get("intencao", [])
+            if not isinstance(intencoes_legadas, list):
+                intencoes_legadas = [intencoes_legadas] if intencoes_legadas else []
+            especialistas_selecionados = [
+                {"id": str(item), "nome": str(item), "prompt_sistema": "", "usar_rag": False}
+                for item in intencoes_legadas
+                if str(item or "").strip()
+            ]
 
-    state["respostas_especialistas"] = []
-    blocos_super_contexto: list[str] = []
-    lead_id = state.get("lead_id")
-    conexao_id = state.get("conexao_id")
-    destinos_transferencia_prompt = await listar_destinos_transferencia_para_prompt(empresa_id)
-    
-    for intencao in intencoes:
-        meta_especialista = metadados_por_id.get(str(intencao), {})
-        nome_especialista_meta = str(meta_especialista.get("nome") or intencao)
-        prompt_especialista_meta = str(meta_especialista.get("prompt_sistema") or "").strip()
-        usar_rag_meta = bool(meta_especialista.get("usar_rag", False))
-        contexto_adicional = ""
-        dados_crus_partes: list[str] = []
-        fontes_usadas: list[str] = []
-        erros_extracao: list[str] = []
-        rag_contexto_aplicado = False
-        dados_rag_para_super_contexto = ""
-        
-        if usar_rag_meta and empresa_uuid:
-            try:
-                resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-                dados_rag = str(resultado_rag.get("dados", "") or "").strip()
-                fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
-                erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
+        intencoes = [
+            str(item.get("id") or item.get("nome") or "").strip()
+            for item in especialistas_selecionados
+            if isinstance(item, dict)
+        ]
+        metadados_por_id = {
+            str(item.get("id") or item.get("nome") or "").strip(): item
+            for item in especialistas_selecionados
+            if isinstance(item, dict) and str(item.get("id") or item.get("nome") or "").strip()
+        }
+        if not intencoes:
+            return state
 
-                if dados_rag:
-                    dados_rag_para_super_contexto = dados_rag
-                    contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
-                    dados_crus_partes.append(f"[RAG]: {dados_rag}")
-                if fontes_rag:
-                    fontes_usadas.extend(fontes_rag)
-                if erros_rag:
-                    erros_extracao.extend(erros_rag)
-                rag_contexto_aplicado = True
-            except Exception as e:
-                logger.exception(
-                    "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao carregar RAG para especialista '%s': %s",
-                    nome_especialista_meta,
-                    e,
-                )
-                erros_extracao.append(f"Falha na ETAPA 1 (RAG): {e}")
-            
-        prompt_base = (
-            "Você é um extrator de dados.\n"
-            "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
-            "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
-            "NÃO redija mensagens para o cliente final.\n"
-            f"{contexto_adicional}"
-        )
-        tools_disponiveis = []
-        descricoes_tools = []
-        nomes_tools_registradas = set()
-        
-        especialista_db = None
-        nome_especialista_resultado = nome_especialista_meta
-        especialista_id_uuid = None
+        print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
+        ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+
+        import uuid
+        empresa_id = state.get("empresa_id")
         try:
-            especialista_id_uuid = uuid.UUID(str(intencao))
+            empresa_uuid = uuid.UUID(empresa_id)
         except (ValueError, TypeError):
+            empresa_uuid = None
+
+        nome_empresa, area_atuacao = await ler_dados_empresa(empresa_uuid)
+        contexto_empresa = f"Empresa: {nome_empresa}"
+        if area_atuacao:
+            contexto_empresa += f" | Área de atuação: {area_atuacao}.\n"
+        else:
+            contexto_empresa += ".\n"
+
+        state["respostas_especialistas"] = []
+        blocos_super_contexto: list[str] = []
+        lead_id = state.get("lead_id")
+        conexao_id = state.get("conexao_id")
+
+        def _tool_name_safe(raw_name: str) -> str:
+            nome = str(raw_name or "").strip().replace(" ", "_").lower()
+            nome = "".join(ch for ch in nome if ch.isalnum() or ch == "_")
+            return nome or "tool_sem_nome"
+
+        for intencao in intencoes:
+            meta_especialista = metadados_por_id.get(str(intencao), {})
+            nome_especialista_meta = str(meta_especialista.get("nome") or intencao)
+            prompt_especialista_meta = str(meta_especialista.get("prompt_sistema") or "").strip()
+            usar_rag_meta = bool(meta_especialista.get("usar_rag", False))
+            dados_crus_partes: list[str] = []
+            fontes_usadas: list[str] = []
+            erros_extracao: list[str] = []
+            tools_disponiveis: list[Any] = []
+            descricoes_tools: list[str] = []
+            nomes_tools_registradas: set[str] = set()
+
+            especialista_db = None
+            nome_especialista_resultado = nome_especialista_meta
             especialista_id_uuid = None
+            try:
+                especialista_id_uuid = uuid.UUID(str(intencao))
+            except (ValueError, TypeError):
+                especialista_id_uuid = None
 
-        try:
-            if empresa_uuid:
-                async with AsyncSessionLocal() as session:
-                    filtros = [
-                        Especialista.ativo == True,
-                        Especialista.empresa_id == empresa_uuid,
-                    ]
-                    if especialista_id_uuid:
-                        filtros.append(Especialista.id == especialista_id_uuid)
-                    else:
-                        filtros.append(Especialista.nome == intencao)
-
-                    result = await session.execute(
-                        select(Especialista)
-                        .where(*filtros)
-                        .options(
-                            selectinload(Especialista.api_connections),
-                            selectinload(Especialista.ferramentas)
-                        )
-                    )
-                    especialista_db = result.scalars().first()
-                    
-                    if especialista_db:
-                        nome_especialista_resultado = str(especialista_db.nome)
-                        # RAG Check
-                        if (getattr(especialista_db, 'usar_rag', False) or usar_rag_meta) and not rag_contexto_aplicado:
-                            resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
-                            dados_rag = str(resultado_rag.get("dados", "") or "").strip()
-                            fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
-                            erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
-
-                            if dados_rag:
-                                dados_rag_para_super_contexto = dados_rag
-                                contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
-                                dados_crus_partes.append(f"[RAG]: {dados_rag}")
-                            if fontes_rag:
-                                fontes_usadas.extend(fontes_rag)
-                            if erros_rag:
-                                erros_extracao.extend(erros_rag)
-                            rag_contexto_aplicado = True
-
-                        prompt_base = (
-                            "Você é um extrator de dados.\n"
-                            "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
-                            "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
-                            "NÃO redija mensagens para o cliente final.\n"
-                            f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{especialista_db.prompt_sistema}\n"
-                            f"{contexto_adicional}"
-                        )
-                        
-                        # Carrega ferramentas associadas a este especialista (API Connections)
-                        for conexao in especialista_db.api_connections:
-                            try:
-                                nova_tool = create_dynamic_tool(conexao)
-                                tools_disponiveis.append(nova_tool)
-                                nomes_tools_registradas.add(nova_tool.name)
-                                desc = nova_tool.description if nova_tool.description else "Ferramenta sem descrição."
-                                descricoes_tools.append(f"- {conexao.nome}: {desc}")
-                            except Exception as e:
-                                logger.exception(
-                                    "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao instanciar API Connection '%s': %s",
-                                    conexao.nome,
-                                    e,
-                                )
-                                erros_extracao.append(f"Falha ao instanciar ferramenta {conexao.nome}: {e}")
-
-                    # Busca dinâmica de Ferramentas vinculadas a este Especialista
-                    ferramentas_nativas = especialista_db.ferramentas if especialista_db else []
-                    for f_db in ferramentas_nativas:
-                        try:
-                            schema_dict = f_db.schema_parametros if f_db.schema_parametros else {}
-                            if isinstance(schema_dict, str):
-                                import json
-                                schema_dict = json.loads(schema_dict)
-                                
-                            ArgsSchema = _create_pydantic_model_from_json_schema(
-                                schema_dict, 
-                                model_name=f"{f_db.nome_ferramenta}Args"
-                            )
-
-                            if f_db.nome_ferramenta in MAP_FUNCOES_NATIVAS:
-                                # Hardcoded native function
-                                func_python = MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta]
-                                nova_tool = StructuredTool(
-                                    name=f_db.nome_ferramenta,
-                                    description=f_db.descricao_ia,
-                                    args_schema=ArgsSchema,
-                                    coroutine=func_python
-                                )
-                                tools_disponiveis.append(nova_tool)
-                                nomes_tools_registradas.add(nova_tool.name)
-                                descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
-                            elif getattr(f_db, 'url', None):
-                                # Dynamic HTTP Builder Tool
-                                headers_str = getattr(f_db, 'headers', '{}')
-                                payload_str = getattr(f_db, 'payload', '{}')
-                                
-                                def create_http_tool_coroutine(url, method, headers_json, payload_json, nome_tool):
-                                    async def http_tool_coroutine(**kwargs) -> str:
-                                        import json
-                                        import httpx
-                                        
-                                        logger.info("[TOOL EXECUTION] Chamando %s com parametros: %s", nome_tool, kwargs)
-                                        
-                                        # Parse JSONs safely
-                                        try:
-                                            h_dict = json.loads(headers_json) if headers_json else {}
-                                        except:
-                                            h_dict = {}
-                                            
-                                        try:
-                                            p_dict = json.loads(payload_json) if payload_json else {}
-                                        except:
-                                            p_dict = {}
-
-                                        try:
-                                            # Substituir {{variaveis}} no URL
-                                            final_url = url or ""
-                                            for k, v in kwargs.items():
-                                                final_url = final_url.replace(f"{{{{{k}}}}}", str(v))
-                                                # Suporte legado para single brackets caso o cliente o use
-                                                final_url = final_url.replace(f"{{{k}}}", str(v))
-
-                                            if "{" in final_url or "}" in final_url:
-                                                resultado = (
-                                                    f"Falha ao executar ferramenta {nome_tool}: URL template não preenchido. "
-                                                    f"URL atual: {final_url}. Parametros recebidos: {kwargs}"
-                                                )
-                                                logger.warning("[TOOL ERROR] %s", resultado)
-                                                return resultado
-                                                
-                                            # Substituir {{variaveis}} no Payload (convertendo para string, substituindo e voltando para dict)
-                                            p_str = json.dumps(p_dict)
-                                            for k, v in kwargs.items():
-                                                p_str = p_str.replace(f"{{{{{k}}}}}", str(v))
-                                            final_payload = json.loads(p_str)
-
-                                            path_placeholders = {
-                                                k for k in kwargs.keys()
-                                                if f"{{{k}}}" in (url or "") or f"{{{{{k}}}}}" in (url or "")
-                                            }
-                                            query_params = {k: v for k, v in kwargs.items() if k not in path_placeholders}
-
-                                            logger.info(
-                                                "[TOOL HTTP REQUEST] tool=%s method=%s url=%s query_params=%s",
-                                                nome_tool,
-                                                method.upper(),
-                                                final_url,
-                                                query_params if method.upper() in ["GET", "DELETE"] else {},
-                                            )
-
-                                            async with httpx.AsyncClient() as client:
-                                                if method.upper() == "GET":
-                                                    resp = await client.get(final_url, headers=h_dict, params=query_params, timeout=10.0)
-                                                elif method.upper() == "POST":
-                                                    resp = await client.post(final_url, headers=h_dict, json=final_payload, timeout=10.0)
-                                                elif method.upper() == "PUT":
-                                                    resp = await client.put(final_url, headers=h_dict, json=final_payload, timeout=10.0)
-                                                elif method.upper() == "DELETE":
-                                                    resp = await client.delete(final_url, headers=h_dict, params=query_params, timeout=10.0)
-                                                else:
-                                                    resultado = f"Método HTTP {method} não suportado."
-                                                    logger.warning("[TOOL ERROR] %s", resultado)
-                                                    return resultado
-
-                                                logger.info(
-                                                    "[TOOL HTTP RESPONSE] tool=%s method=%s url=%s status_code=%s",
-                                                    nome_tool,
-                                                    method.upper(),
-                                                    final_url,
-                                                    resp.status_code,
-                                                )
-                                                    
-                                                if resp.status_code >= 400:
-                                                    resultado = f"Erro na requisição: {resp.status_code} - {resp.text}"
-                                                    logger.warning("[TOOL ERROR] %s", resultado)
-                                                    return resultado
-
-                                                resp.raise_for_status()
-                                                
-                                                try:
-                                                    resp_json = resp.json()
-                                                    if isinstance(resp_json, dict) and resp_json.get("erro") in [True, "true", "True"]:
-                                                        resultado = f"Erro na API: {resp.text}"
-                                                        logger.warning("[TOOL ERROR] %s", resultado)
-                                                        return resultado
-                                                except Exception:
-                                                    pass
-
-                                                resultado = resp.text
-                                                logger.info("[TOOL RESULT] Ferramenta %s retornou %d chars", nome_tool, len(resultado))
-                                                return resultado
-                                        except Exception as e:
-                                            resultado = f"Falha ao executar ferramenta {nome_tool}: {str(e)}"
-                                            logger.exception("[TOOL ERROR] %s", resultado)
-                                            return resultado
-                                    return http_tool_coroutine
-
-                                nova_tool = StructuredTool(
-                                    name=f_db.nome_ferramenta,
-                                    description=f_db.descricao_ia,
-                                    args_schema=ArgsSchema,
-                                    coroutine=create_http_tool_coroutine(f_db.url, f_db.metodo, headers_str, payload_str, f_db.nome_ferramenta)
-                                )
-                                tools_disponiveis.append(nova_tool)
-                                nomes_tools_registradas.add(nova_tool.name)
-                                descricoes_tools.append(f"- {f_db.nome_ferramenta}: {f_db.descricao_ia}")
-
-                        except Exception as e:
-                            logger.exception(
-                                "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao instanciar ferramenta nativa '%s': %s",
-                                f_db.nome_ferramenta,
-                                e,
-                            )
-                            erros_extracao.append(f"Falha ao instanciar ferramenta nativa {f_db.nome_ferramenta}: {e}")
-        except Exception as e:
-            logger.exception(
-                "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha na montagem de ferramentas para intenção '%s': %s",
-                intencao,
-                e,
-            )
-            erros_extracao.append(f"Falha na ETAPA 1 (montagem de ferramentas): {e}")
-
-        if not especialista_db and prompt_especialista_meta:
             prompt_base = (
                 "Você é um extrator de dados.\n"
                 "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
                 "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
                 "NÃO redija mensagens para o cliente final.\n"
-                f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{prompt_especialista_meta}\n"
-                f"{contexto_adicional}"
             )
 
-        try:
-            if lead_id and empresa_id and destinos_transferencia_prompt and "action_transferir_atendimento" not in nomes_tools_registradas:
-                tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
-                    lead_id=lead_id,
-                    empresa_id=empresa_id,
-                    conexao_id=conexao_id,
-                )
-                tools_disponiveis.append(tool_transferencia)
-                descricoes_tools.append(
-                    "- action_transferir_atendimento: transfere o atendimento para um destino humano configurado, registra auditoria e dispara o aviso interno."
-                )
-        except Exception as e:
-            logger.exception(
-                "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao preparar ferramenta de transferência: %s",
-                e,
-            )
-            erros_extracao.append(f"Falha na ETAPA 1 (ferramenta de transferência): {e}")
-
-        nomes_tools_etapa_1 = [str(getattr(t, "name", "")).strip() for t in tools_disponiveis if str(getattr(t, "name", "")).strip()]
-        logger.info(
-            "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Ferramentas montadas para '%s': %s",
-            nome_especialista_resultado,
-            nomes_tools_etapa_1,
-        )
-        nomes_invalidos = [n for n in nomes_tools_etapa_1 if " " in n]
-        if nomes_invalidos:
-            logger.warning(
-                "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Ferramentas com nome inválido (espaço): %s",
-                nomes_invalidos,
-            )
-
-        system_message_adicional = f"\n{contexto_empresa}"
-        
-        if descricoes_tools:
-            system_message_adicional += "\n\nVocê tem acesso às seguintes ferramentas:\n"
-            system_message_adicional += "\n".join(descricoes_tools)
-            system_message_adicional += "\nUse-as quando necessário para obter os dados brutos."
-
-        if destinos_transferencia_prompt:
-            system_message_adicional += (
-                "\n\nVocê tem os seguintes destinos de transferência disponíveis:\n"
-                f"{destinos_transferencia_prompt}\n"
-                "Quando o cenário bater com as instruções de ativação acima, use a ferramenta 'action_transferir_atendimento'. "
-                "Retorne apenas o resultado cru da execução da ferramenta."
-            )
-
-        if state.get("handoff_requested", False):
-            system_message_adicional += (
-                "\n\nInformação importante: O usuário pediu atendimento humano. "
-                "Se houver um destino compatível, priorize usar 'action_transferir_atendimento' e retorne só o resultado bruto."
-            )
-            
-        prompt_completo = prompt_base + system_message_adicional
-
-        modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, 'modelo_ia') else None
-        llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
-        print(
-            f"[NODE ESPECIALISTA DINAMICO] Avaliando especialista "
-            f"'{nome_especialista_resultado}' com modelo '{modelo_esp or 'default'}'..."
-        )
-        resposta_parcial = ""
-        if tools_disponiveis:
-            print(f"  Fazendo bind dinâmico via llm.bind_tools para {len(tools_disponiveis)} ferramenta(s)")
+            # ETAPA 1: montar tools sem I/O de banco no construtor das ferramentas.
             try:
-                logger.info(
-                    "[NODE ESPECIALISTA DINAMICO][ETAPA 2] Iniciando bind_tools para '%s' com %d ferramenta(s).",
-                    nome_especialista_resultado,
-                    len(tools_disponiveis),
-                )
-                llm_with_tools = llm.bind_tools(tools_disponiveis)
-                tool_node = ToolNode(tools_disponiveis)
-            except Exception as e:
-                logger.exception(
-                    "[NODE ESPECIALISTA DINAMICO][ETAPA 2] Falha no bind_tools para '%s': %s",
-                    nome_especialista_resultado,
-                    e,
-                )
-                erros_extracao.append(f"Falha na ETAPA 2 (bind_tools): {e}")
-                tools_disponiveis = []
-            
-            if tools_disponiveis:
-                from langchain_core.messages import SystemMessage, HumanMessage
-                mensagens = [SystemMessage(content=prompt_completo), HumanMessage(content=ultima_mensagem)]
-                
-                for _ in range(5):
-                    try:
-                        logger.info(
-                            "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Invocando LLM com tools para '%s'.",
-                            nome_especialista_resultado,
+                if empresa_uuid:
+                    async with AsyncSessionLocal() as session:
+                        filtros = [
+                            Especialista.ativo == True,
+                            Especialista.empresa_id == empresa_uuid,
+                        ]
+                        if especialista_id_uuid:
+                            filtros.append(Especialista.id == especialista_id_uuid)
+                        else:
+                            filtros.append(Especialista.nome == intencao)
+
+                        result = await session.execute(
+                            select(Especialista)
+                            .where(*filtros)
+                            .options(
+                                selectinload(Especialista.api_connections),
+                                selectinload(Especialista.ferramentas),
+                            )
                         )
-                        resposta = await llm_with_tools.ainvoke(mensagens)
+                        especialista_db = result.scalars().first()
+
+                if especialista_db:
+                    nome_especialista_resultado = str(especialista_db.nome)
+                    prompt_base += f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{especialista_db.prompt_sistema}\n"
+                elif prompt_especialista_meta:
+                    prompt_base += f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{prompt_especialista_meta}\n"
+
+                usar_rag_final = bool(
+                    usar_rag_meta or (especialista_db and getattr(especialista_db, "usar_rag", False))
+                )
+                if usar_rag_final and empresa_id:
+                    rag_tool = criar_tool_rag_contextual(empresa_id=str(empresa_id))
+                    tools_disponiveis.append(rag_tool)
+                    nomes_tools_registradas.add(rag_tool.name)
+                    descricoes_tools.append(
+                        "- action_buscar_conhecimento_rag: consulta a base de conhecimento interna (RAG)."
+                    )
+
+                if lead_id and empresa_id and "action_transferir_atendimento" not in nomes_tools_registradas:
+                    transferencia_tool = criar_tool_transferencia_contextual(
+                        empresa_id=str(empresa_id),
+                        lead_id=str(lead_id),
+                        conexao_id=str(conexao_id) if conexao_id else None,
+                    )
+                    tools_disponiveis.append(transferencia_tool)
+                    nomes_tools_registradas.add(transferencia_tool.name)
+                    descricoes_tools.append(
+                        "- action_transferir_atendimento: transfere o atendimento para um destino humano."
+                    )
+
+                for conexao in (especialista_db.api_connections if especialista_db else []):
+                    try:
+                        nova_tool = create_dynamic_tool(conexao)
+                        tools_disponiveis.append(nova_tool)
+                        nomes_tools_registradas.add(str(nova_tool.name))
+                        desc = nova_tool.description if nova_tool.description else "Ferramenta sem descrição."
+                        descricoes_tools.append(f"- {conexao.nome}: {desc}")
                     except Exception as e:
                         logger.exception(
-                            "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Falha ao invocar LLM com tools para '%s': %s",
-                            nome_especialista_resultado,
+                            "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao instanciar API Connection '%s': %s",
+                            conexao.nome,
                             e,
                         )
-                        resposta_parcial = f"Falha na ETAPA 3 (invoke com tools): {e}"
-                        erros_extracao.append(str(resposta_parcial))
-                        break
+                        erros_extracao.append(f"Falha ao instanciar ferramenta {conexao.nome}: {e}")
 
-                    mensagens.append(resposta)
-                    
-                    if hasattr(resposta, "tool_calls") and len(resposta.tool_calls) > 0:
-                        nomes = [t['name'] for t in resposta.tool_calls]
-                        print(f"  Ferramentas acionadas pelo fluxo: {nomes}")
-                        fontes_usadas.extend([str(n).strip() for n in nomes if str(n).strip()])
-                        try:
-                            # Executa o ToolNode Langgraph Customizado em loop local
-                            resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
-                            mensagens.extend(resultado_toolnode["messages"])
-                            for tool_msg in resultado_toolnode.get("messages", []):
-                                conteudo_tool = str(getattr(tool_msg, "content", "") or "").strip()
-                                if conteudo_tool:
-                                    dados_crus_partes.append(conteudo_tool)
-                                    if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
-                                        erros_extracao.append(conteudo_tool)
-                        except Exception as e:
-                            logger.exception(
-                                "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Falha no ToolNode para '%s': %s",
-                                nome_especialista_resultado,
-                                e,
+                for f_db in (especialista_db.ferramentas if especialista_db else []):
+                    try:
+                        schema_dict = f_db.schema_parametros if f_db.schema_parametros else {}
+                        if isinstance(schema_dict, str):
+                            schema_dict = json.loads(schema_dict)
+
+                        args_schema = _create_pydantic_model_from_json_schema(
+                            schema_dict,
+                            model_name=f"{_tool_name_safe(f_db.nome_ferramenta)}Args",
+                        )
+                        tool_name = _tool_name_safe(f_db.nome_ferramenta)
+
+                        if f_db.nome_ferramenta in MAP_FUNCOES_NATIVAS:
+                            nova_tool = StructuredTool(
+                                name=tool_name,
+                                description=f_db.descricao_ia,
+                                args_schema=args_schema,
+                                coroutine=MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta],
                             )
-                            resposta_parcial = f"Erro no sistema de execução: {e}"
-                            erros_extracao.append(str(resposta_parcial))
-                            break
-                    else:
-                        resposta_parcial = resposta.content
-                        if "erro" in str(resposta_parcial or "").lower() or "falha" in str(resposta_parcial or "").lower():
-                            erros_extracao.append(str(resposta_parcial))
-                        break
-                else:
-                    resposta_parcial = "Tentei utilizar as ferramentas várias vezes mas não consegui concluir. Houve limite de tentativas."
-                    erros_extracao.append(resposta_parcial)
-        else:
-            print("  Resposta direta via LLM (sem ferramentas)")
-            try:
+                            tools_disponiveis.append(nova_tool)
+                            nomes_tools_registradas.add(nova_tool.name)
+                            descricoes_tools.append(f"- {tool_name}: {f_db.descricao_ia}")
+                        elif getattr(f_db, "url", None):
+                            headers_str = getattr(f_db, "headers", "{}")
+                            payload_str = getattr(f_db, "payload", "{}")
+
+                            def create_http_tool_coroutine(url, method, headers_json, payload_json, nome_tool):
+                                async def http_tool_coroutine(**kwargs) -> str:
+                                    import httpx
+
+                                    try:
+                                        h_dict = json.loads(headers_json) if headers_json else {}
+                                    except Exception:
+                                        h_dict = {}
+                                    try:
+                                        p_dict = json.loads(payload_json) if payload_json else {}
+                                    except Exception:
+                                        p_dict = {}
+
+                                    try:
+                                        final_url = url or ""
+                                        for k, v in kwargs.items():
+                                            final_url = final_url.replace(f"{{{{{k}}}}}", str(v))
+                                            final_url = final_url.replace(f"{{{k}}}", str(v))
+
+                                        if "{" in final_url or "}" in final_url:
+                                            return f"Falha ao executar ferramenta {nome_tool}: URL template não preenchido."
+
+                                        p_str = json.dumps(p_dict)
+                                        for k, v in kwargs.items():
+                                            p_str = p_str.replace(f"{{{{{k}}}}}", str(v))
+                                        final_payload = json.loads(p_str)
+
+                                        async with httpx.AsyncClient() as client:
+                                            if str(method).upper() == "GET":
+                                                resp = await client.get(final_url, headers=h_dict, timeout=10.0)
+                                            elif str(method).upper() == "POST":
+                                                resp = await client.post(final_url, headers=h_dict, json=final_payload, timeout=10.0)
+                                            elif str(method).upper() == "PUT":
+                                                resp = await client.put(final_url, headers=h_dict, json=final_payload, timeout=10.0)
+                                            elif str(method).upper() == "DELETE":
+                                                resp = await client.delete(final_url, headers=h_dict, timeout=10.0)
+                                            else:
+                                                return f"Método HTTP {method} não suportado."
+
+                                        if resp.status_code >= 400:
+                                            return f"Erro na requisição: {resp.status_code} - {resp.text}"
+                                        return resp.text
+                                    except Exception as e:
+                                        logger.exception("[TOOL ERROR] Falha em '%s': %s", nome_tool, e)
+                                        return f"Falha ao executar ferramenta {nome_tool}: {e}"
+
+                                return http_tool_coroutine
+
+                            nova_tool = StructuredTool(
+                                name=tool_name,
+                                description=f_db.descricao_ia,
+                                args_schema=args_schema,
+                                coroutine=create_http_tool_coroutine(
+                                    f_db.url,
+                                    f_db.metodo,
+                                    headers_str,
+                                    payload_str,
+                                    tool_name,
+                                ),
+                            )
+                            tools_disponiveis.append(nova_tool)
+                            nomes_tools_registradas.add(nova_tool.name)
+                            descricoes_tools.append(f"- {tool_name}: {f_db.descricao_ia}")
+                    except Exception as e:
+                        logger.exception(
+                            "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha ao instanciar ferramenta '%s': %s",
+                            getattr(f_db, "nome_ferramenta", "desconhecida"),
+                            e,
+                        )
+                        erros_extracao.append(f"Falha ao instanciar ferramenta nativa: {e}")
+
+                nomes_tools = [
+                    str(getattr(t, "name", "")).strip()
+                    for t in tools_disponiveis
+                    if str(getattr(t, "name", "")).strip()
+                ]
                 logger.info(
-                    "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Invocando LLM sem tools para '%s'.",
+                    "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Ferramentas montadas para '%s': %s",
                     nome_especialista_resultado,
+                    nomes_tools,
                 )
-                resposta = await llm.ainvoke([("system", prompt_completo), ("user", ultima_mensagem)])
-                resposta_parcial = resposta.content
-                fontes_usadas.append("LLM_SEM_TOOL")
-                if "erro" in str(resposta_parcial or "").lower() or "falha" in str(resposta_parcial or "").lower():
-                    erros_extracao.append(str(resposta_parcial))
             except Exception as e:
                 logger.exception(
-                    "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Falha ao invocar LLM sem tools para '%s': %s",
+                    "[NODE ESPECIALISTA DINAMICO][ETAPA 1] Falha na montagem de ferramentas para '%s': %s",
                     nome_especialista_resultado,
                     e,
                 )
-                resposta_parcial = f"Falha na ETAPA 3 (invoke sem tools): {e}"
-                erros_extracao.append(str(resposta_parcial))
+                erros_extracao.append(f"Falha na ETAPA 1 (ferramentas): {e}")
 
-        conteudo_final = str(resposta_parcial or "").strip()
-        if conteudo_final:
-            dados_crus_partes.append(conteudo_final)
-        dados_crus = "\n".join([p for p in dados_crus_partes if str(p).strip()]).strip()
-        if not dados_crus:
-            dados_crus = "Sem dados crus retornados."
+            system_message_adicional = f"\n{contexto_empresa}"
+            if descricoes_tools:
+                system_message_adicional += "\n\nFerramentas disponíveis:\n" + "\n".join(descricoes_tools)
+                system_message_adicional += "\nUse-as quando necessário para obter dados técnicos."
+            if state.get("handoff_requested", False):
+                system_message_adicional += (
+                    "\n\nO usuário pediu atendimento humano; priorize tool de transferência quando aplicável."
+                )
+            prompt_completo = prompt_base + system_message_adicional
 
-        fontes_unicas = sorted(list({f for f in fontes_usadas if str(f).strip()}))
-        erros_unicos = sorted(list({e for e in erros_extracao if str(e).strip()}))
-        extracao = {
-            "dados": str(resposta_parcial or ""),
-            "fontes": fontes_unicas,
-            "erros": erros_unicos,
-        }
+            modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, "modelo_ia") else None
+            llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
+            resposta_parcial = ""
 
-        state["respostas_especialistas"].append(
-            f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao, ensure_ascii=False)}"
-        )
+            llm_para_invocar = llm
+            tool_node = None
+            if tools_disponiveis:
+                try:
+                    logger.info(
+                        "[NODE ESPECIALISTA DINAMICO][ETAPA 2] bind_tools para '%s' com %d tools",
+                        nome_especialista_resultado,
+                        len(tools_disponiveis),
+                    )
+                    llm_para_invocar = llm.bind_tools(tools_disponiveis)
+                    tool_node = ToolNode(tools_disponiveis)
+                except Exception as e:
+                    logger.exception(
+                        "[NODE ESPECIALISTA DINAMICO][ETAPA 2] Falha no bind_tools para '%s': %s",
+                        nome_especialista_resultado,
+                        e,
+                    )
+                    erros_extracao.append(f"Falha na ETAPA 2 (bind_tools): {e}")
+                    llm_para_invocar = llm
+                    tool_node = None
 
-        prompt_para_super_contexto = (
-            str(getattr(especialista_db, "prompt_sistema", "") or "").strip()
-            if especialista_db
-            else prompt_especialista_meta
-        )
-        blocos_super_contexto.append(
-            "\n".join(
-                [
-                    f"[ESPECIALISTA: {nome_especialista_resultado}]",
-                    f"PROMPT_SISTEMA:\n{prompt_para_super_contexto or '(sem prompt técnico)'}",
-                    f"CONTEXTO_RAG:\n{dados_rag_para_super_contexto or '(sem RAG aplicado)'}",
-                ]
+            # ETAPA 3: invoke
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+
+                mensagens = [SystemMessage(content=prompt_completo), HumanMessage(content=ultima_mensagem)]
+                for _ in range(5):
+                    logger.info(
+                        "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Invocando LLM para '%s'",
+                        nome_especialista_resultado,
+                    )
+                    resposta = await llm_para_invocar.ainvoke(mensagens)
+                    mensagens.append(resposta)
+
+                    if tool_node and hasattr(resposta, "tool_calls") and resposta.tool_calls:
+                        nomes = [str(t.get("name", "")).strip() for t in resposta.tool_calls if str(t.get("name", "")).strip()]
+                        fontes_usadas.extend(nomes)
+                        resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
+                        mensagens.extend(resultado_toolnode.get("messages", []))
+                        for tool_msg in resultado_toolnode.get("messages", []):
+                            conteudo_tool = str(getattr(tool_msg, "content", "") or "").strip()
+                            if conteudo_tool:
+                                dados_crus_partes.append(conteudo_tool)
+                                if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
+                                    erros_extracao.append(conteudo_tool)
+                        continue
+
+                    resposta_parcial = str(getattr(resposta, "content", "") or "").strip()
+                    break
+                else:
+                    resposta_parcial = "Não foi possível concluir após múltiplas tentativas."
+                    erros_extracao.append(resposta_parcial)
+            except Exception as e:
+                logger.exception(
+                    "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Falha no invoke para '%s': %s",
+                    nome_especialista_resultado,
+                    e,
+                )
+                resposta_parcial = f"Falha na ETAPA 3 (invoke): {e}"
+                erros_extracao.append(resposta_parcial)
+
+            if resposta_parcial:
+                dados_crus_partes.append(resposta_parcial)
+
+            fontes_unicas = sorted({f for f in fontes_usadas if str(f).strip()})
+            erros_unicos = sorted({e for e in erros_extracao if str(e).strip()})
+            extracao = {
+                "dados": str(resposta_parcial or ""),
+                "fontes": list(fontes_unicas),
+                "erros": list(erros_unicos),
+            }
+            state["respostas_especialistas"].append(
+                f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao, ensure_ascii=False)}"
             )
-        )
 
-    state["super_contexto_especialistas"] = "\n\n".join(blocos_super_contexto).strip()
-    return state
+            prompt_para_super_contexto = (
+                str(getattr(especialista_db, "prompt_sistema", "") or "").strip()
+                if especialista_db
+                else prompt_especialista_meta
+            )
+            blocos_super_contexto.append(
+                "\n".join(
+                    [
+                        f"[ESPECIALISTA: {nome_especialista_resultado}]",
+                        f"PROMPT_SISTEMA:\n{prompt_para_super_contexto or '(sem prompt técnico)'}",
+                    ]
+                )
+            )
+
+        state["super_contexto_especialistas"] = "\n\n".join(blocos_super_contexto).strip()
+        return state
+    except Exception as e:
+        logger.exception("[NODE ESPECIALISTA DINAMICO] Erro crítico no nó: %s", e)
+        return {
+            **state,
+            "erros_extracao": [f"Erro crítico no nó: {str(e)}"],
+            "dados": "Erro interno.",
+        }
 
 # Função condicional de roteamento
 def router_crm(state: AgentState):

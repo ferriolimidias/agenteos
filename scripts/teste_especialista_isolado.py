@@ -20,12 +20,13 @@ from db.database import AsyncSessionLocal
 from db.models import CRMLead, Especialista
 from app.core.agent_graph import (
     MAP_FUNCOES_NATIVAS,
-    buscar_conhecimento,
-    criar_ferramenta_transferir_atendimento_contextual,
     create_dynamic_tool,
     get_llm,
-    listar_destinos_transferencia_para_prompt,
     _create_pydantic_model_from_json_schema,
+)
+from app.services.ferramentas_service import (
+    criar_tool_rag_contextual,
+    criar_tool_transferencia_contextual,
 )
 
 ESPECIALISTA_ID = "26a3c8bd-4e93-4a66-9b83-05076b57ba72"
@@ -58,21 +59,14 @@ async def main() -> None:
         tools_disponiveis = []
         nomes_tools = []
         erros_etapa_1 = []
-        contexto_adicional = ""
 
         print("[ETAPA 1] Montando ferramentas (RAG, Transferência, APIs)...")
         try:
             if getattr(especialista, "usar_rag", False):
-                try:
-                    rag = await buscar_conhecimento(MENSAGEM_TESTE, especialista.empresa_id)
-                    dados_rag = str(rag.get("dados", "") or "").strip()
-                    if dados_rag:
-                        contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
-                        print(f"[ETAPA 1] RAG carregado com {len(dados_rag)} chars.")
-                except Exception as e:
-                    erros_etapa_1.append(f"Falha no RAG: {e}")
-                    print(f"[ETAPA 1][ERRO] Falha no RAG: {e}")
-                    traceback.print_exc()
+                rag_tool = criar_tool_rag_contextual(empresa_id=empresa_id)
+                tools_disponiveis.append(rag_tool)
+                nomes_tools.append(str(getattr(rag_tool, "name", "")).strip())
+                print("[ETAPA 1] Tool de RAG anexada.")
 
             for conexao in especialista.api_connections:
                 try:
@@ -159,17 +153,16 @@ async def main() -> None:
                     print(f"[ETAPA 1][ERRO] Ferramenta nativa '{f_db.nome_ferramenta}': {e}")
                     traceback.print_exc()
 
-            destinos = await listar_destinos_transferencia_para_prompt(empresa_id)
             result_lead = await session.execute(
                 select(CRMLead)
                 .where(CRMLead.empresa_id == especialista.empresa_id)
                 .limit(1)
             )
             lead = result_lead.scalars().first()
-            if lead and destinos:
-                tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
-                    lead_id=str(lead.id),
+            if lead:
+                tool_transferencia = criar_tool_transferencia_contextual(
                     empresa_id=empresa_id,
+                    lead_id=str(lead.id),
                     conexao_id=None,
                 )
                 tools_disponiveis.append(tool_transferencia)
@@ -191,7 +184,6 @@ async def main() -> None:
             "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
             "NÃO redija mensagens para o cliente final.\n"
             f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{str(getattr(especialista, 'prompt_sistema', '') or '').strip()}\n"
-            f"{contexto_adicional}"
         )
 
         llm_para_invocar = llm
