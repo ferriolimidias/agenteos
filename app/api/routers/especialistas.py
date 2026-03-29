@@ -21,7 +21,7 @@ async def criar_especialista(especialista: EspecialistaCreate, db: AsyncSession 
     novo_especialista = Especialista(
         empresa_id=especialista.empresa_id,
         nome=especialista.nome,
-        descricao_roteamento=especialista.descricao_roteamento,
+        descricao_missao=especialista.descricao_missao,
         prompt_sistema=especialista.prompt_sistema,
         ativo=especialista.ativo
     )

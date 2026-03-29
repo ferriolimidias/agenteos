@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import List, Optional
 
 from langchain_openai import OpenAIEmbeddings
@@ -6,6 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Especialista
+
+logger = logging.getLogger(__name__)
 
 
 class SemanticRouterService:
@@ -19,15 +22,16 @@ class SemanticRouterService:
 
     @staticmethod
     def _build_routing_text(especialista: Especialista) -> str:
-        return (
-            (especialista.descricao_roteamento or "").strip()
-            or (especialista.descricao_missao or "").strip()
-            or (especialista.prompt_sistema or "").strip()
-        )
+        # Unificacao: roteamento semantico deve depender apenas da missao do especialista.
+        return (especialista.descricao_missao or "").strip()
 
     async def generate_embedding_for_specialist(self, especialista: Especialista) -> list[float] | None:
         routing_text = self._build_routing_text(especialista)
         if not routing_text:
+            logger.warning(
+                "[SEMANTIC ROUTER] Especialista '%s' sem descricao_missao; embedding nao gerado.",
+                getattr(especialista, "nome", "desconhecido"),
+            )
             return None
         return await self.embeddings_model.aembed_query(routing_text)
 

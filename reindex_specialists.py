@@ -19,7 +19,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _build_fallback_routing_text(especialista: Especialista) -> str:
+def _build_fallback_mission_text(especialista: Especialista) -> str:
     funcao = (
         (especialista.descricao_missao or "").strip()
         or (especialista.prompt_sistema or "").strip()
@@ -61,8 +61,8 @@ async def reindex_specialists() -> None:
         for idx, especialista in enumerate(especialistas, start=1):
             try:
                 async with session.begin_nested():
-                    if not (especialista.descricao_roteamento or "").strip():
-                        especialista.descricao_roteamento = _build_fallback_routing_text(especialista)
+                    if not (especialista.descricao_missao or "").strip():
+                        especialista.descricao_missao = _build_fallback_mission_text(especialista)
 
                     embedding = await router_service.generate_embedding_for_specialist(especialista)
                     if not embedding:
