@@ -642,6 +642,9 @@ async def node_atendente(state: AgentState):
 Você recebeu os seguintes DADOS CRUS dos especialistas do sistema em <respostas_especialistas>, no formato JSON com os campos: "dados", "fontes" e "erros".
 Sua tarefa é ler esses dados e formular uma resposta natural, educada e coesa para o cliente, assumindo a persona da empresa.
 Você também recebeu um super-contexto técnico consolidado dos especialistas selecionados para esta pergunta.
+IMPORTANTE: podem existir múltiplos especialistas cobrindo assuntos diferentes (ex.: curso, preço, agenda, suporte).
+Você DEVE mesclar tudo em uma única resposta integrada e fluida, sem segmentar por especialista e sem parecer múltiplas vozes.
+Quando houver pontos complementares, conecte-os com transições naturais para o cliente perceber uma única resposta contínua.
 Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou roteamento.
 Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
 Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
@@ -825,11 +828,12 @@ async def node_roteador_maestro(state: AgentState):
                     continue
             return float("-inf")
 
+        # Mantém todos os especialistas acima do threshold e apenas ordena por relevância.
         especialistas_match = sorted(
             especialistas_match,
             key=_score_similaridade,
             reverse=True,
-        )[:1]
+        )
 
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
     nomes_especialistas = [esp.get("nome") for esp in especialistas_match]
@@ -891,7 +895,10 @@ async def node_especialista_dinamico(state: AgentState):
         else:
             contexto_empresa += ".\n"
 
-        state["respostas_especialistas"] = []
+        respostas_existentes = state.get("respostas_especialistas") or []
+        if not isinstance(respostas_existentes, list):
+            respostas_existentes = []
+        state["respostas_especialistas"] = list(respostas_existentes)
         blocos_super_contexto: list[str] = []
         lead_id = state.get("lead_id")
         conexao_id = state.get("conexao_id")
@@ -1213,7 +1220,13 @@ async def node_especialista_dinamico(state: AgentState):
                 )
             )
 
-        state["super_contexto_especialistas"] = "\n\n".join(blocos_super_contexto).strip()
+        super_contexto_existente = str(state.get("super_contexto_especialistas") or "").strip()
+        super_contexto_novo = "\n\n".join(blocos_super_contexto).strip()
+        state["super_contexto_especialistas"] = (
+            f"{super_contexto_existente}\n\n{super_contexto_novo}".strip()
+            if super_contexto_existente and super_contexto_novo
+            else (super_contexto_novo or super_contexto_existente)
+        )
         return state
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA DINAMICO] Erro crítico no nó: %s", e)
