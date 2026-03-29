@@ -80,33 +80,76 @@ class SemanticRouterService:
         top_k: int = 3,
         empresa_id: Optional[str] = None,
     ) -> list[tuple[Especialista, float]]:
+        async def _buscar_por_texto(texto_busca: str) -> list[tuple[Especialista, float]]:
+            query_embedding = await self.embeddings_model.aembed_query(texto_busca)
+            similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
+
+            stmt = (
+                select(Especialista, similarity_expr)
+                .where(
+                    Especialista.ativo.is_(True),
+                    Especialista.embedding.isnot(None),
+                    similarity_expr >= threshold,
+                )
+                .order_by(similarity_expr.desc())
+                .limit(top_k)
+            )
+            if empresa_id:
+                stmt = stmt.where(Especialista.empresa_id == empresa_id)
+
+            result = await self.db.execute(stmt)
+            rows = result.all()
+            parsed_rows: list[tuple[Especialista, float]] = []
+            for row in rows:
+                especialista, similarity = row
+                parsed_rows.append((especialista, float(similarity or 0.0)))
+            return parsed_rows
+
+        async def _expandir_consulta(texto_original: str) -> list[str]:
+            prompt = (
+                f"O usuário perguntou: '{texto_original}'. "
+                "Extraia e retorne apenas 3 ou 4 variações de termos técnicos ou palavras-chave que representem "
+                "a intenção dessa pergunta para uma busca semântica em um banco de especialistas. "
+                "Retorne apenas os termos separados por vírgula."
+            )
+            try:
+                llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+                resposta = await llm.ainvoke(prompt)
+                conteudo = str(getattr(resposta, "content", "") or "").strip()
+                if not conteudo:
+                    return []
+                return [termo.strip() for termo in conteudo.split(",") if termo.strip()]
+            except Exception as exc:
+                logger.warning("[SEMANTIC ROUTER] Falha no query expansion: %s", exc)
+                return []
+
         normalized_query = (query_text or "").strip()
         if not normalized_query:
             return []
 
-        query_embedding = await self.embeddings_model.aembed_query(normalized_query)
-        similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
+        # 1) Busca semântica padrão
+        primeira_busca = await _buscar_por_texto(normalized_query)
+        if primeira_busca:
+            return primeira_busca
 
-        stmt = (
-            select(Especialista, similarity_expr)
-            .where(
-                Especialista.ativo.is_(True),
-                Especialista.embedding.isnot(None),
-                similarity_expr >= threshold,
-            )
-            .order_by(similarity_expr.desc())
-            .limit(top_k)
+        # 2) Fallback: Query Expansion via LLM e nova busca semântica
+        logger.info(
+            "[SEMANTIC ROUTER] Threshold não atingido para: '%s'. Iniciando Expansão de Consulta.",
+            normalized_query,
         )
-        if empresa_id:
-            stmt = stmt.where(Especialista.empresa_id == empresa_id)
+        termos_expandidos = await _expandir_consulta(normalized_query)
+        logger.info("[SEMANTIC ROUTER] Termos sugeridos pelo LLM: %s.", termos_expandidos)
+        if not termos_expandidos:
+            return []
 
-        result = await self.db.execute(stmt)
-        rows = result.all()
-        parsed_rows: list[tuple[Especialista, float]] = []
-        for row in rows:
-            especialista, similarity = row
-            parsed_rows.append((especialista, float(similarity or 0.0)))
-        return parsed_rows
+        consulta_expandida = ", ".join(termos_expandidos)
+        logger.info("[SEMANTIC ROUTER] Query expansion aplicado: %s", consulta_expandida)
+        segunda_busca = await _buscar_por_texto(consulta_expandida)
+        logger.info(
+            "[SEMANTIC ROUTER] Resultados da segunda busca: %s encontrados.",
+            len(segunda_busca),
+        )
+        return segunda_busca
 
     @staticmethod
     def _normalizar_resposta_nomes(resposta: str) -> list[str]:
