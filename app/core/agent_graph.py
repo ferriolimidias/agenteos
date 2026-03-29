@@ -577,6 +577,7 @@ Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou rote
 Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
 Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
 Responda em uma única mensagem clara e objetiva.
+REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contexto, significa que esta é a primeira resposta que o cliente vai receber. Nesse caso, você DEVE iniciar sua resposta incorporando a essência e a simpatia dessa saudação oficial, e logo em seguida entregar os dados que o especialista extraiu de forma natural.
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -610,7 +611,7 @@ Defina precisa_roteamento=True obrigatoriamente para qualquer solicitação que 
 - intenção desconhecida, ambígua, incompleta, ou qualquer pedido que você não possa resolver somente com conversa.
 Quando precisa_roteamento=True, deixe 'resposta' como nula.
 É proibido responder com limitação do tipo "não consigo consultar" na fase de decisão; nesses casos, roteie.
-Se for small talk puro, use precisa_roteamento=False e forneça uma resposta curta em 'resposta' (máximo 2 frases).
+Se for small talk puro, use precisa_roteamento=False e forneça sua resposta em 'resposta'. ATENÇÃO VITAL: Se existir a tag <saudacao_obrigatoria> no seu contexto, você é PROIBIDO de inventar uma saudação genérica. Você DEVE usar o texto da <saudacao_obrigatoria> como a BASE exata da sua resposta. Adapte-a levemente ao contexto se o cliente tiver feito algum comentário extra, mas garanta que a essência, as perguntas e a identidade da saudação original sejam entregues ao cliente.
 </instrucao_decisao>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
