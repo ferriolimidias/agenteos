@@ -11,9 +11,11 @@ from app.api.utils import handle_debouncer
 from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal
 from db.models import Empresa, CRMLead, MensagemHistorico, Conexao, TipoConexao
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 router = APIRouter(prefix="/webhook", tags=["Webhook"])
+
+EVOLUTION_WEBHOOK_STATUS_VALIDOS = {"ativo", "connected", "open"}
 
 
 def _mask_phone(telefone: str) -> str:
@@ -82,11 +84,12 @@ async def get_conexao_id_por_tipo(
     tipo: TipoConexao,
     nome_instancia: str | None = None,
 ) -> str | None:
+    status_validos = {status.lower() for status in EVOLUTION_WEBHOOK_STATUS_VALIDOS}
     result = await session.execute(
         select(Conexao).where(
             Conexao.empresa_id == empresa_uuid,
             Conexao.tipo == tipo,
-            Conexao.status == "ativo",
+            func.lower(Conexao.status).in_(status_validos),
         )
     )
     conexoes = result.scalars().all()

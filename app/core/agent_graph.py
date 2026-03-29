@@ -6,7 +6,7 @@ import logging
 import json
 from typing import TypedDict, List, Optional, Literal, Any
 from langgraph.graph import StateGraph, END
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictStr
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -390,7 +390,7 @@ class AnaliseRoteador(BaseModel):
 
 class ExtracaoEspecialista(BaseModel):
     model_config = {"extra": "forbid"}
-    dados: str = Field(description="Dados crus extraidos pelo especialista.")
+    dados: StrictStr = Field(description="Dados crus extraidos pelo especialista.")
     fontes: List[str] = Field(default_factory=list, description="Ferramentas, APIs ou documentos usados na extracao.")
     erros: List[str] = Field(default_factory=list, description="Falhas tecnicas encontradas durante a extracao.")
 
@@ -809,6 +809,24 @@ async def node_roteador_maestro(state: AgentState):
             query_text=ultima_mensagem,
             empresa_id=str(empresa_uuid) if empresa_uuid else None,
         )
+
+    if len(especialistas_match) > 1:
+        def _score_similaridade(item: dict) -> float:
+            for chave in ("score", "similaridade", "similarity", "similarity_score"):
+                valor = item.get(chave)
+                if isinstance(valor, (int, float)):
+                    return float(valor)
+                try:
+                    return float(valor)
+                except (TypeError, ValueError):
+                    continue
+            return float("-inf")
+
+        especialistas_match = sorted(
+            especialistas_match,
+            key=_score_similaridade,
+            reverse=True,
+        )[:1]
 
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
     nomes_especialistas = [esp.get("nome") for esp in especialistas_match]

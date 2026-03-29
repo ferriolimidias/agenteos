@@ -23,6 +23,8 @@ status_router = APIRouter(
     tags=["Conexoes"]
 )
 
+STATUSS_CONEXAO_ATIVOS = {"ativo", "connected", "open", "online"}
+
 
 def _normalizar_tipo(tipo: str) -> TipoConexao:
     try:
@@ -63,6 +65,15 @@ def _mask_credenciais(tipo: TipoConexao, credenciais: dict[str, Any] | None) -> 
         credenciais["access_token"] = _mask_secret(str(credenciais["access_token"]))
 
     return credenciais
+
+
+def _normalizar_status_conexao(status: str | None, default: str = "ativo") -> str:
+    valor = str(status or "").strip()
+    if not valor:
+        return default
+    if valor.lower() in STATUSS_CONEXAO_ATIVOS:
+        return "ativo"
+    return valor
 
 
 def _validar_payload(tipo: TipoConexao, payload: ConexaoCreate) -> tuple[str, dict[str, Any]]:
@@ -358,7 +369,7 @@ async def criar_conexao(
         tipo=tipo,
         nome_instancia=nome_instancia,
         credenciais=credenciais,
-        status=(payload.status or "ativo").strip() or "ativo",
+        status=_normalizar_status_conexao(payload.status, default="ativo"),
     )
     db.add(conexao)
 
@@ -462,7 +473,7 @@ async def atualizar_conexao(
     conexao.tipo = tipo
     conexao.nome_instancia = nome_instancia
     conexao.credenciais = credenciais
-    conexao.status = (payload.status or conexao.status or "ativo").strip() or "ativo"
+    conexao.status = _normalizar_status_conexao(payload.status or conexao.status, default="ativo")
 
     try:
         await db.commit()
@@ -498,8 +509,8 @@ async def status_conexao(
             if status_result.get("success"):
                 status_normalizado = str(status_result.get("status") or "disconnected").lower()
                 online = status_normalizado == "open"
-                status_db = "CONNECTED" if online else ("CONNECTING" if status_normalizado == "connecting" else "DISCONNECTED")
-                if str(conexao.status or "").upper() != status_db:
+                status_db = "ativo" if online else ("connecting" if status_normalizado == "connecting" else "disconnected")
+                if _normalizar_status_conexao(conexao.status, default="") != _normalizar_status_conexao(status_db, default=""):
                     conexao.status = status_db
                     await db.commit()
                 return {
