@@ -248,6 +248,9 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "conexao_disparo_id": empresa.conexao_disparo_id,
         "disparo_delay_min": empresa.disparo_delay_min if empresa.disparo_delay_min is not None else 3,
         "disparo_delay_max": empresa.disparo_delay_max if empresa.disparo_delay_max is not None else 7,
+        "limite_certeza": empresa.limite_certeza if getattr(empresa, "limite_certeza", None) is not None else 0.65,
+        "limite_duvida": empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45,
+        "max_agentes_desempate": empresa.max_agentes_desempate if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
     }
 
 # --- ROTAS DA IA CONFIGURATOR ---
@@ -300,6 +303,9 @@ class IAConfigResponse(BaseModel):
     followup_ativo: bool = False
     followup_espera_nivel_1_minutos: int = 20
     followup_espera_nivel_2_minutos: int = 10
+    limite_certeza: float = 0.65
+    limite_duvida: float = 0.45
+    max_agentes_desempate: int = 3
     informacoes_adicionais: str | None = None
     coletar_nome: bool = True
 
@@ -313,6 +319,9 @@ class IAConfigUpdateRequest(BaseModel):
     followup_ativo: bool | None = None
     followup_espera_nivel_1_minutos: int | None = None
     followup_espera_nivel_2_minutos: int | None = None
+    limite_certeza: float | None = None
+    limite_duvida: float | None = None
+    max_agentes_desempate: int | None = None
     informacoes_adicionais: str | None = None
     coletar_nome: bool | None = None
     
@@ -336,6 +345,9 @@ async def get_ia_config(
         "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
         "followup_espera_nivel_1_minutos": getattr(empresa, 'followup_espera_nivel_1_minutos', 20) or 20,
         "followup_espera_nivel_2_minutos": getattr(empresa, 'followup_espera_nivel_2_minutos', 10) or 10,
+        "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
+        "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,
+        "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
         "informacoes_adicionais": getattr(empresa, 'informacoes_adicionais', None),
         "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
     }
@@ -370,10 +382,27 @@ async def put_ia_config(
         empresa.followup_espera_nivel_1_minutos = data.followup_espera_nivel_1_minutos
     if data.followup_espera_nivel_2_minutos is not None:
         empresa.followup_espera_nivel_2_minutos = data.followup_espera_nivel_2_minutos
+    if data.limite_certeza is not None:
+        empresa.limite_certeza = data.limite_certeza
+    if data.limite_duvida is not None:
+        empresa.limite_duvida = data.limite_duvida
+    if data.max_agentes_desempate is not None:
+        empresa.max_agentes_desempate = data.max_agentes_desempate
     if data.informacoes_adicionais is not None:
         empresa.informacoes_adicionais = data.informacoes_adicionais
     if data.coletar_nome is not None:
         empresa.coletar_nome = data.coletar_nome
+    limite_duvida = empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45
+    limite_certeza = empresa.limite_certeza if getattr(empresa, "limite_certeza", None) is not None else 0.65
+    max_desempate = empresa.max_agentes_desempate if getattr(empresa, "max_agentes_desempate", None) is not None else 3
+    if limite_duvida < 0 or limite_duvida > 1:
+        raise HTTPException(status_code=400, detail="limite_duvida deve estar entre 0 e 1")
+    if limite_certeza < 0 or limite_certeza > 1:
+        raise HTTPException(status_code=400, detail="limite_certeza deve estar entre 0 e 1")
+    if limite_duvida > limite_certeza:
+        raise HTTPException(status_code=400, detail="limite_duvida não pode ser maior que limite_certeza")
+    if max_desempate < 1:
+        raise HTTPException(status_code=400, detail="max_agentes_desempate deve ser >= 1")
     try:
         await db.commit()
         await db.refresh(empresa)
@@ -387,6 +416,9 @@ async def put_ia_config(
             "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
             "followup_espera_nivel_1_minutos": getattr(empresa, 'followup_espera_nivel_1_minutos', 20) or 20,
             "followup_espera_nivel_2_minutos": getattr(empresa, 'followup_espera_nivel_2_minutos', 10) or 10,
+            "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
+            "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,
+            "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
             "informacoes_adicionais": getattr(empresa, 'informacoes_adicionais', None),
             "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
         }
@@ -422,6 +454,18 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         if data.disparo_delay_max < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="disparo_delay_max não pode ser negativo")
         empresa.disparo_delay_max = data.disparo_delay_max
+    if data.limite_certeza is not None:
+        if data.limite_certeza < 0 or data.limite_certeza > 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limite_certeza deve estar entre 0 e 1")
+        empresa.limite_certeza = data.limite_certeza
+    if data.limite_duvida is not None:
+        if data.limite_duvida < 0 or data.limite_duvida > 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limite_duvida deve estar entre 0 e 1")
+        empresa.limite_duvida = data.limite_duvida
+    if data.max_agentes_desempate is not None:
+        if data.max_agentes_desempate < 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_agentes_desempate deve ser >= 1")
+        empresa.max_agentes_desempate = data.max_agentes_desempate
     if data.conexao_disparo_id is not None:
         if data.conexao_disparo_id == "":
             empresa.conexao_disparo_id = None
@@ -451,6 +495,13 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="O intervalo mínimo de disparo não pode ser maior que o máximo",
+        )
+    limite_duvida = empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45
+    limite_certeza = empresa.limite_certeza if getattr(empresa, "limite_certeza", None) is not None else 0.65
+    if limite_duvida > limite_certeza:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="limite_duvida não pode ser maior que limite_certeza",
         )
         
     try:

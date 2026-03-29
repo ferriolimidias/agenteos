@@ -54,7 +54,10 @@ export default function Empresas() {
     modelo_roteador: "gpt-4o-mini",
     followup_ativo: false,
     followup_espera_nivel_1_minutos: 20,
-    followup_espera_nivel_2_minutos: 10
+    followup_espera_nivel_2_minutos: 10,
+    limite_certeza: 0.65,
+    limite_duvida: 0.45,
+    max_agentes_desempate: 3,
   });
   const [loadingConfigIA, setLoadingConfigIA] = useState(false);
   const [savingConfigIA, setSavingConfigIA] = useState(false);
@@ -240,7 +243,10 @@ export default function Empresas() {
         modelo_roteador: res.data.modelo_roteador || "gpt-4o-mini",
         followup_ativo: res.data.followup_ativo || false,
         followup_espera_nivel_1_minutos: res.data.followup_espera_nivel_1_minutos || 20,
-        followup_espera_nivel_2_minutos: res.data.followup_espera_nivel_2_minutos || 10
+        followup_espera_nivel_2_minutos: res.data.followup_espera_nivel_2_minutos || 10,
+        limite_certeza: typeof res.data.limite_certeza === "number" ? res.data.limite_certeza : 0.65,
+        limite_duvida: typeof res.data.limite_duvida === "number" ? res.data.limite_duvida : 0.45,
+        max_agentes_desempate: typeof res.data.max_agentes_desempate === "number" ? res.data.max_agentes_desempate : 3,
       });
     } catch (err) {
       console.error(err);
@@ -847,6 +853,52 @@ export default function Empresas() {
                         {!modelosDisponiveis.includes("gpt-4o-mini") && <option value="gpt-4o-mini">gpt-4o-mini</option>}
                       </select>
                     </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Roteador Semântico (Multi-Agentes)
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Certeza</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={configIAData.limite_certeza}
+                          onChange={(e) => setConfigIAData({...configIAData, limite_certeza: parseFloat(e.target.value) || 0})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Dúvida</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={configIAData.limite_duvida}
+                          onChange={(e) => setConfigIAData({...configIAData, limite_duvida: parseFloat(e.target.value) || 0})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Máx. Agentes de Desempate</label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={configIAData.max_agentes_desempate}
+                          onChange={(e) => setConfigIAData({...configIAData, max_agentes_desempate: parseInt(e.target.value, 10) || 1})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Ajuste a sensibilidade para ativação automática e seleção por desempate do roteador multi-especialistas.
+                    </p>
                   </div>
 
                   <div className="pt-4 border-t border-gray-800 space-y-4">

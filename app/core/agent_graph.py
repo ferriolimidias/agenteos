@@ -353,6 +353,13 @@ async def buscar_conhecimento(pergunta: str, empresa_uuid):
         return {"dados": "", "fontes": [], "erros": [f"Erro ao buscar conhecimento: {str(e)}"]}
 
 # 1. Definir o Estado
+class EspecialistaSelecionadoState(TypedDict):
+    id: str
+    nome: str
+    prompt_sistema: str
+    usar_rag: bool
+
+
 class AgentState(TypedDict):
     empresa_id: str
     identificador_origem: str
@@ -362,6 +369,8 @@ class AgentState(TypedDict):
     historico_bd: str          # Histórico real do PostgreSQL, formatado
     nome_contato: Optional[str]
     intencao: List[str]
+    especialistas_selecionados: List[EspecialistaSelecionadoState]
+    super_contexto_especialistas: str
     respostas_especialistas: List[str]
     handoff_requested: bool
     resposta_final: Optional[str]
@@ -538,6 +547,8 @@ async def node_atendente(state: AgentState):
     lead_id = state.get("lead_id")
     historico_bd = state.get("historico_bd", "")
     respostas_especialistas = state.get("respostas_especialistas", [])
+    especialistas_selecionados = state.get("especialistas_selecionados", []) or []
+    super_contexto_especialistas = str(state.get("super_contexto_especialistas", "") or "").strip()
     mensagens_estado = state.get("mensagens") or []
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
@@ -626,9 +637,15 @@ async def node_atendente(state: AgentState):
 <instrucao_final>
 Você recebeu os seguintes DADOS CRUS dos especialistas do sistema em <respostas_especialistas>, no formato JSON com os campos: "dados", "fontes" e "erros".
 Sua tarefa é ler esses dados e formular uma resposta natural, educada e coesa para o cliente, assumindo a persona da empresa.
+Você também recebeu um super-contexto técnico consolidado dos especialistas selecionados para esta pergunta.
 Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou roteamento.
 Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
 Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
+Considere o seguinte super-contexto como fonte adicional para cobrir todas as partes da pergunta do usuário:
+<super_contexto_especialistas>
+{super_contexto_especialistas or '(sem super-contexto consolidado)'}
+</super_contexto_especialistas>
+Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
 Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
 {instrucao_primeiro_contato}
@@ -643,6 +660,8 @@ REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contex
         state["resposta_final"] = resposta.content
         state["respostas_especialistas"] = []
         state["intencao"] = []
+        state["especialistas_selecionados"] = []
+        state["super_contexto_especialistas"] = ""
 
         return state
 
@@ -742,10 +761,15 @@ Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> nas saudações 
         state["resposta_final"] = resultado.resposta
         state["intencao"] = []
         state["respostas_especialistas"] = []
+        state["especialistas_selecionados"] = []
+        state["super_contexto_especialistas"] = ""
         print(f"[NODE ATENDENTE] Resolvido via Small Talk: {resultado.resposta}")
     else:
         print("[NODE ATENDENTE] Optou por acionar Roteador.")
         state["resposta_final"] = None
+        state["respostas_especialistas"] = []
+        state["especialistas_selecionados"] = []
+        state["super_contexto_especialistas"] = ""
 
     return state
 
@@ -762,6 +786,8 @@ async def node_roteador_maestro(state: AgentState):
     ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
     if not ultima_mensagem:
         state["intencao"] = []
+        state["especialistas_selecionados"] = []
+        state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = []
         state["handoff_requested"] = False
         return state
@@ -778,29 +804,47 @@ async def node_roteador_maestro(state: AgentState):
 
     async with AsyncSessionLocal() as session:
         router_service = SemanticRouterService(session)
-        especialistas_match = await router_service.get_matching_specialists(
+        especialistas_match = await router_service.route_multi_specialists(
             query_text=ultima_mensagem,
-            threshold=0.75,
-            top_k=3,
             empresa_id=str(empresa_uuid) if empresa_uuid else None,
         )
 
-    ids_especialistas = [str(esp.id) for esp in especialistas_match]
-    nomes_especialistas = [esp.nome for esp in especialistas_match]
+    ids_especialistas = [esp.get("id") for esp in especialistas_match]
+    nomes_especialistas = [esp.get("nome") for esp in especialistas_match]
     print(
         f"[NODE ROTEADOR] Matches: {len(ids_especialistas)} "
         f"| IDs={ids_especialistas} | Nomes={nomes_especialistas}"
     )
 
     # Sem matches: volta para o Atendente Principal (bate-papo comum).
-    state["intencao"] = ids_especialistas
+    state["especialistas_selecionados"] = especialistas_match
     state["respostas_especialistas"] = []
+    state["super_contexto_especialistas"] = ""
+    state["intencao"] = []
     return state
 
 async def node_especialista_dinamico(state: AgentState):
-    intencoes = state.get("intencao", [])
-    if not isinstance(intencoes, list):
-        intencoes = [intencoes] if intencoes else []
+    especialistas_selecionados = state.get("especialistas_selecionados", []) or []
+    if not isinstance(especialistas_selecionados, list):
+        especialistas_selecionados = []
+
+    # Compatibilidade retroativa: converte intencoes antigas para o novo formato.
+    if not especialistas_selecionados:
+        intencoes_legadas = state.get("intencao", [])
+        if not isinstance(intencoes_legadas, list):
+            intencoes_legadas = [intencoes_legadas] if intencoes_legadas else []
+        especialistas_selecionados = [
+            {"id": str(item), "nome": str(item), "prompt_sistema": "", "usar_rag": False}
+            for item in intencoes_legadas
+            if str(item or "").strip()
+        ]
+
+    intencoes = [str(item.get("id") or item.get("nome") or "").strip() for item in especialistas_selecionados if isinstance(item, dict)]
+    metadados_por_id = {
+        str(item.get("id") or item.get("nome") or "").strip(): item
+        for item in especialistas_selecionados
+        if isinstance(item, dict) and str(item.get("id") or item.get("nome") or "").strip()
+    }
     if not intencoes:
         return state
         
@@ -823,24 +867,31 @@ async def node_especialista_dinamico(state: AgentState):
         contexto_empresa += ".\n"
 
     state["respostas_especialistas"] = []
+    blocos_super_contexto: list[str] = []
     lead_id = state.get("lead_id")
     conexao_id = state.get("conexao_id")
     destinos_transferencia_prompt = await listar_destinos_transferencia_para_prompt(empresa_id)
     
     for intencao in intencoes:
+        meta_especialista = metadados_por_id.get(str(intencao), {})
+        nome_especialista_meta = str(meta_especialista.get("nome") or intencao)
+        prompt_especialista_meta = str(meta_especialista.get("prompt_sistema") or "").strip()
+        usar_rag_meta = bool(meta_especialista.get("usar_rag", False))
         contexto_adicional = ""
         dados_crus_partes: list[str] = []
         fontes_usadas: list[str] = []
         erros_extracao: list[str] = []
         rag_contexto_aplicado = False
+        dados_rag_para_super_contexto = ""
         
-        if intencao == "duvida" and empresa_uuid:
+        if usar_rag_meta and empresa_uuid:
             resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
             dados_rag = str(resultado_rag.get("dados", "") or "").strip()
             fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
             erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
 
             if dados_rag:
+                dados_rag_para_super_contexto = dados_rag
                 contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
                 dados_crus_partes.append(f"[RAG]: {dados_rag}")
             if fontes_rag:
@@ -861,7 +912,7 @@ async def node_especialista_dinamico(state: AgentState):
         nomes_tools_registradas = set()
         
         especialista_db = None
-        nome_especialista_resultado = str(intencao)
+        nome_especialista_resultado = nome_especialista_meta
         especialista_id_uuid = None
         try:
             especialista_id_uuid = uuid.UUID(str(intencao))
@@ -892,13 +943,14 @@ async def node_especialista_dinamico(state: AgentState):
                 if especialista_db:
                     nome_especialista_resultado = str(especialista_db.nome)
                     # RAG Check
-                    if (getattr(especialista_db, 'usar_rag', False) or intencao == "duvida") and not rag_contexto_aplicado:
+                    if (getattr(especialista_db, 'usar_rag', False) or usar_rag_meta) and not rag_contexto_aplicado:
                         resultado_rag = await buscar_conhecimento(ultima_mensagem, empresa_uuid)
                         dados_rag = str(resultado_rag.get("dados", "") or "").strip()
                         fontes_rag = [str(f).strip() for f in (resultado_rag.get("fontes") or []) if str(f).strip()]
                         erros_rag = [str(e).strip() for e in (resultado_rag.get("erros") or []) if str(e).strip()]
 
                         if dados_rag:
+                            dados_rag_para_super_contexto = dados_rag
                             contexto_adicional = f"\n\nDADOS_RAG_BRUTOS:\n{dados_rag}"
                             dados_crus_partes.append(f"[RAG]: {dados_rag}")
                         if fontes_rag:
@@ -1073,6 +1125,16 @@ async def node_especialista_dinamico(state: AgentState):
                         print(f"Erro ao instanciar Ferramenta Nativa {f_db.nome_ferramenta}: {e}")
                         erros_extracao.append(f"Falha ao instanciar ferramenta nativa {f_db.nome_ferramenta}: {e}")
 
+        if not especialista_db and prompt_especialista_meta:
+            prompt_base = (
+                "Você é um extrator de dados.\n"
+                "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
+                "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
+                "NÃO redija mensagens para o cliente final.\n"
+                f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{prompt_especialista_meta}\n"
+                f"{contexto_adicional}"
+            )
+
         if lead_id and empresa_id and destinos_transferencia_prompt and "action_transferir_atendimento" not in nomes_tools_registradas:
             tool_transferencia = criar_ferramenta_transferir_atendimento_contextual(
                 lead_id=lead_id,
@@ -1187,7 +1249,23 @@ async def node_especialista_dinamico(state: AgentState):
         state["respostas_especialistas"].append(
             f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
         )
-        
+
+        prompt_para_super_contexto = (
+            str(getattr(especialista_db, "prompt_sistema", "") or "").strip()
+            if especialista_db
+            else prompt_especialista_meta
+        )
+        blocos_super_contexto.append(
+            "\n".join(
+                [
+                    f"[ESPECIALISTA: {nome_especialista_resultado}]",
+                    f"PROMPT_SISTEMA:\n{prompt_para_super_contexto or '(sem prompt técnico)'}",
+                    f"CONTEXTO_RAG:\n{dados_rag_para_super_contexto or '(sem RAG aplicado)'}",
+                ]
+            )
+        )
+
+    state["super_contexto_especialistas"] = "\n\n".join(blocos_super_contexto).strip()
     return state
 
 # Função condicional de roteamento
@@ -1235,11 +1313,14 @@ workflow.add_conditional_edges(
 
 def router_maestro(state: AgentState):
     intencoes = state.get("intencao") or []
-    if not intencoes:
+    especialistas_selecionados = state.get("especialistas_selecionados") or []
+    if not intencoes and not especialistas_selecionados:
         return "node_atendente"
     if "tags_crm" in intencoes:
         return "node_especialista_tags"
-    return "node_especialista_dinamico"
+    if especialistas_selecionados:
+        return "node_especialista_dinamico"
+    return "node_atendente"
 
 
 workflow.add_conditional_edges(
@@ -1253,8 +1334,8 @@ workflow.add_conditional_edges(
 )
 
 def router_pos_tags(state: AgentState):
-    intencoes = state.get("intencao") or []
-    if intencoes:
+    especialistas_selecionados = state.get("especialistas_selecionados") or []
+    if especialistas_selecionados:
         return "node_especialista_dinamico"
     return "node_atendente"
 

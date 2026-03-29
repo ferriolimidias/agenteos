@@ -12,6 +12,9 @@ class EmpresaBase(BaseModel):
     ia_tom_voz: str | None = None
     disparo_delay_min: int = 3
     disparo_delay_max: int = 7
+    limite_certeza: float = 0.65
+    limite_duvida: float = 0.45
+    max_agentes_desempate: int = 3
 
     @field_validator("disparo_delay_min", mode="before")
     @classmethod
@@ -36,6 +39,9 @@ class EmpresaUpdate(BaseModel):
     conexao_disparo_id: str | None = None
     disparo_delay_min: int | None = None
     disparo_delay_max: int | None = None
+    limite_certeza: float | None = None
+    limite_duvida: float | None = None
+    max_agentes_desempate: int | None = None
 
 class EmpresaResponse(EmpresaBase):
     id: UUID4
