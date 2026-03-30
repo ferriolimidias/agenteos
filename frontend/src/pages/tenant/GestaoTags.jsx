@@ -35,10 +35,6 @@ export default function GestaoTags() {
   const [editingGroup, setEditingGroup] = useState(null);
   const [formData, setFormData] = useState(initialTagForm);
   const [groupFormData, setGroupFormData] = useState(initialGroupForm);
-  const tagForm = formData;
-  const setTagForm = (updater) => {
-    setFormData((prev) => (typeof updater === "function" ? updater(prev) : updater));
-  };
 
   const fetchTags = async () => {
     if (!empresaId) return;
@@ -614,7 +610,7 @@ export default function GestaoTags() {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 mt-3">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 mt-3">
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-gray-800">Ação de Fechamento</p>
@@ -625,17 +621,21 @@ export default function GestaoTags() {
                       <button
                         type="button"
                         role="switch"
-                        aria-checked={tagForm.acao_fechamento}
-                        onClick={() => setTagForm(prev => ({ ...prev, acao_fechamento: !prev.acao_fechamento }))}
-                        className={`${
-                          tagForm.acao_fechamento ? 'bg-primary-600' : 'bg-gray-200'
-                        } relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        aria-checked={formData.acao_fechamento}
+                        onClick={() =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            acao_fechamento: !prev.acao_fechamento,
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          formData.acao_fechamento ? "bg-blue-600" : "bg-gray-300"
+                        }`}
                       >
                         <span
                           className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                            tagForm.acao_fechamento ? 'translate-x-5' : 'translate-x-0'
+                            formData.acao_fechamento ? "translate-x-6" : "translate-x-1"
                           }`}
-                          aria-hidden="true"
                         />
                       </button>
                     </div>

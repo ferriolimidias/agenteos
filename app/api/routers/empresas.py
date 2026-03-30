@@ -2652,9 +2652,13 @@ def _validar_e_normalizar_excecoes_payload(excecoes_payload: Any) -> List[Dict[s
     return excecoes_normalizadas
 
 
-def _serialize_agenda_config(config: AgendaConfiguracao | None) -> dict | None:
+def _serialize_agenda_config(config: AgendaConfiguracao | None) -> dict:
     if not config:
-        return None
+        return {
+            "dias_funcionamento": _dias_funcionamento_base(),
+            "excecoes": [],
+            "duracao_minutos": 30
+        }
     dias_obj = _normalizar_dias_funcionamento(
         config.dias_funcionamento,
         horario_inicio_legacy=config.horario_inicio,
