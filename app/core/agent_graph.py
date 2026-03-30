@@ -673,12 +673,13 @@ async def node_atendente(state: AgentState):
 
         if is_primeira_interacao and saudacao_configurada:
             blocos.append(
-                "Utilize a seguinte mensagem como base para sua saudação: "
-                f"'{saudacao_configurada}'. "
-                "REGRA DE CORDIALIDADE: Adapte o início da mensagem de forma natural para espelhar a cordialidade do usuário. "
-                "Se ele disser 'Bom dia', 'Boa tarde' ou 'Boa noite', retribua a saudação adequadamente antes de entregar "
-                "o conteúdo da mensagem base. Mantenha a essência, o tom de voz e a pergunta final da saudação "
-                "configurada intactos."
+                "PRIMEIRA INTERAÇÃO DA CONVERSA:\n"
+                "1. Retribua a saudação do usuário de forma natural (ex: espelhe o 'Bom dia').\n"
+                f"2. Entregue o conteúdo desta mensagem base: '{saudacao_configurada}'.\n"
+                "3. TRAVA DE ESCOPO: Neste turno específico, limite-se ESTRITAMENTE aos passos 1 e 2. "
+                "Não aplique nenhuma outra diretriz estrutural, não adicione tópicos extras e não formule "
+                "perguntas adicionais além das que já existirem na mensagem base. Encerre a resposta "
+                "imediatamente após a saudação."
             )
 
         if incluir_especialistas and respostas_especialistas:
