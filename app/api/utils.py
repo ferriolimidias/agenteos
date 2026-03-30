@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from typing import List
 from app.schemas import StandardMessage
 from app.services.websocket_manager import manager
@@ -283,13 +284,24 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
             except Exception as e:
                 print(f"[SIMULADOR] Aviso: falha ao salvar histórico simulador: {e}")
         else:
-            enviado = await despachar_mensagem(
-                canal=mensagens[0].canal,
-                identificador_origem=mensagens[0].identificador_origem,
-                texto=resposta,
-                conexao_id=conexao_id_dispatch,
-                empresa_id=mensagens[0].empresa_id,
-            )
+            try:
+                enviado = await despachar_mensagem(
+                    canal=mensagens[0].canal,
+                    identificador_origem=mensagens[0].identificador_origem,
+                    texto=resposta,
+                    conexao_id=conexao_id_dispatch,
+                    empresa_id=mensagens[0].empresa_id,
+                )
+            except Exception as e:
+                print(
+                    f"[ENGINE] Falha no envio outbound da IA. "
+                    f"empresa_id={mensagens[0].empresa_id} canal={mensagens[0].canal} "
+                    f"identificador='{mensagens[0].identificador_origem}' conexao_id={conexao_id_dispatch}"
+                )
+                print(f"Erro real no outbound: {str(e)}")
+                traceback.print_exc()
+                return
+
             if not enviado:
                 print(
                     f"[ENGINE] Falha no envio outbound da IA. "
@@ -353,6 +365,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         )
             except Exception as e:
                 print(f"Erro ao salvar histórico do Grafo (Webhook): {e}")
+                traceback.print_exc()
             
     else:
         print("\n[Aviso] Nenhuma 'resposta_final' gerada pelo grafo.")
