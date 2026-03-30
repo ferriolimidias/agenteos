@@ -9,11 +9,8 @@ class EmpresaBase(BaseModel):
     logo_url: str | None = None
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
     ia_instrucoes_personalizadas: str | None = None
-    ia_identidade: str | None = None
+    ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
-    ia_estrategia_vendas: str | None = None
-    ia_formatacao_whatsapp: str | None = None
-    ia_tom_voz: str | None = None
     disparo_delay_min: int = 3
     disparo_delay_max: int = 7
     limite_certeza: float = 0.65
@@ -39,11 +36,8 @@ class EmpresaUpdate(BaseModel):
     area_atuacao: str | None = None
     logo_url: str | None = None
     ia_instrucoes_personalizadas: str | None = None
-    ia_identidade: str | None = None
+    ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
-    ia_estrategia_vendas: str | None = None
-    ia_formatacao_whatsapp: str | None = None
-    ia_tom_voz: str | None = None
     conexao_disparo_id: str | None = None
     disparo_delay_min: int | None = None
     disparo_delay_max: int | None = None
@@ -60,11 +54,8 @@ class EmpresaResponse(EmpresaBase):
 
 class IAConfigResponse(BaseModel):
     ia_instrucoes_personalizadas: str | None = None
-    ia_identidade: str | None = None
+    ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
-    ia_estrategia_vendas: str | None = None
-    ia_formatacao_whatsapp: str | None = None
-    ia_tom_voz: str | None = None
     nome_agente: str | None = None
     mensagem_saudacao: str | None = None
     modelo_ia: str | None = None
@@ -81,11 +72,8 @@ class IAConfigResponse(BaseModel):
 
 class IAConfigUpdateRequest(BaseModel):
     ia_instrucoes_personalizadas: str | None = None
-    ia_identidade: str | None = None
+    ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
-    ia_estrategia_vendas: str | None = None
-    ia_formatacao_whatsapp: str | None = None
-    ia_tom_voz: str | None = None
     nome_agente: str | None = None
     mensagem_saudacao: str | None = None
     modelo_ia: str | None = None
@@ -104,10 +92,8 @@ class EmpresaSetupRequest(BaseModel):
     nome_empresa: str
     area_atuacao: str | None = None
     logo_url: str | None = None
-    ia_identidade: str | None = None
+    ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
-    ia_estrategia_vendas: str | None = None
-    ia_formatacao_whatsapp: str | None = None
     admin_nome: str
     admin_email: str
     admin_senha: str

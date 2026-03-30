@@ -199,11 +199,8 @@ async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_d
         logo_url=empresa.logo_url,
         credenciais_canais=empresa.credenciais_canais,
         ia_instrucoes_personalizadas=empresa.ia_instrucoes_personalizadas,
-        ia_identidade=empresa.ia_identidade,
+        ia_personalidade=empresa.ia_personalidade,
         ia_regras_negocio=empresa.ia_regras_negocio,
-        ia_estrategia_vendas=empresa.ia_estrategia_vendas,
-        ia_formatacao_whatsapp=empresa.ia_formatacao_whatsapp,
-        ia_tom_voz=empresa.ia_tom_voz,
     )
     db.add(nova_empresa)
     try:
@@ -253,11 +250,8 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "logo_url": empresa.logo_url,
         "credenciais_canais": empresa.credenciais_canais or {},
         "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas,
-        "ia_identidade": getattr(empresa, "ia_identidade", None),
+        "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
-        "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
-        "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
-        "ia_tom_voz": empresa.ia_tom_voz,
         "conexao_disparo_id": empresa.conexao_disparo_id,
         "disparo_delay_min": empresa.disparo_delay_min if empresa.disparo_delay_min is not None else 3,
         "disparo_delay_max": empresa.disparo_delay_max if empresa.disparo_delay_max is not None else 7,
@@ -318,11 +312,8 @@ async def get_ia_config(
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     return {
         "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
-        "ia_identidade": getattr(empresa, "ia_identidade", None),
+        "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
-        "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
-        "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
-        "ia_tom_voz": empresa.ia_tom_voz,
         "nome_agente": empresa.nome_agente,
         "mensagem_saudacao": empresa.mensagem_saudacao,
         "modelo_ia": empresa.modelo_ia,
@@ -352,16 +343,10 @@ async def put_ia_config(
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     if data.ia_instrucoes_personalizadas is not None:
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
-    if data.ia_identidade is not None:
-        empresa.ia_identidade = data.ia_identidade
+    if data.ia_personalidade is not None:
+        empresa.ia_personalidade = data.ia_personalidade
     if data.ia_regras_negocio is not None:
         empresa.ia_regras_negocio = data.ia_regras_negocio
-    if data.ia_estrategia_vendas is not None:
-        empresa.ia_estrategia_vendas = data.ia_estrategia_vendas
-    if data.ia_formatacao_whatsapp is not None:
-        empresa.ia_formatacao_whatsapp = data.ia_formatacao_whatsapp
-    if data.ia_tom_voz is not None:
-        empresa.ia_tom_voz = data.ia_tom_voz
     if data.nome_agente is not None:
         empresa.nome_agente = data.nome_agente
     if data.mensagem_saudacao is not None:
@@ -402,11 +387,8 @@ async def put_ia_config(
         await db.refresh(empresa)
         return {
             "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
-            "ia_identidade": getattr(empresa, "ia_identidade", None),
+            "ia_personalidade": getattr(empresa, "ia_personalidade", None),
             "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
-            "ia_estrategia_vendas": getattr(empresa, "ia_estrategia_vendas", None),
-            "ia_formatacao_whatsapp": getattr(empresa, "ia_formatacao_whatsapp", None),
-            "ia_tom_voz": empresa.ia_tom_voz,
             "nome_agente": empresa.nome_agente,
             "mensagem_saudacao": empresa.mensagem_saudacao,
             "modelo_ia": empresa.modelo_ia,
@@ -442,16 +424,10 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         empresa.logo_url = data.logo_url
     if data.ia_instrucoes_personalizadas is not None:
         empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
-    if data.ia_identidade is not None:
-        empresa.ia_identidade = data.ia_identidade
+    if data.ia_personalidade is not None:
+        empresa.ia_personalidade = data.ia_personalidade
     if data.ia_regras_negocio is not None:
         empresa.ia_regras_negocio = data.ia_regras_negocio
-    if data.ia_estrategia_vendas is not None:
-        empresa.ia_estrategia_vendas = data.ia_estrategia_vendas
-    if data.ia_formatacao_whatsapp is not None:
-        empresa.ia_formatacao_whatsapp = data.ia_formatacao_whatsapp
-    if data.ia_tom_voz is not None:
-        empresa.ia_tom_voz = data.ia_tom_voz
     if data.disparo_delay_min is not None:
         if data.disparo_delay_min < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="disparo_delay_min não pode ser negativo")
@@ -565,10 +541,8 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
             nome_empresa=data.nome_empresa,
             area_atuacao=data.area_atuacao,
             logo_url=data.logo_url,
-            ia_identidade=data.ia_identidade,
+            ia_personalidade=data.ia_personalidade,
             ia_regras_negocio=data.ia_regras_negocio,
-            ia_estrategia_vendas=data.ia_estrategia_vendas,
-            ia_formatacao_whatsapp=data.ia_formatacao_whatsapp,
         )
         db.add(nova_empresa)
         await db.flush() # Para obter o ID da empresa gerado

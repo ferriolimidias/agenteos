@@ -571,9 +571,9 @@ async def get_orchestrator_system_prompt(empresa_id: str | None, is_primeira_men
                     if empresa.ia_instrucoes_personalizadas:
                         context_xml += f"<instrucoes_agente>\n{empresa.ia_instrucoes_personalizadas}\n</instrucoes_agente>\n"
                     
-                    # 2. Diretrizes de Voz
-                    if empresa.ia_tom_voz:
-                        context_xml += f"<diretrizes_voz>\n{empresa.ia_tom_voz}\n</diretrizes_voz>\n"
+                    # 2. Identidade e tom
+                    if getattr(empresa, "ia_personalidade", None):
+                        context_xml += f"<identidade_tom_ia>\n{empresa.ia_personalidade}\n</identidade_tom_ia>\n"
                     
                     # 3. Contexto Institucional
                     context_inst = f"Nome da Empresa: {empresa.nome_empresa}\n"
@@ -607,7 +607,7 @@ Você é um atendente inteligente e conciso. Seu objetivo é interagir com o lea
 
 <regras_comportamento>
 1. ESTRUTURA: Use as <instrucoes_agente> como sua lógica principal de atuação.
-2. PERSONALIDADE: Siga rigorosamente o conteúdo em <diretrizes_voz>.
+2. PERSONALIDADE: Siga rigorosamente o conteúdo em <identidade_tom_ia>.
 3. CONCISÃO: Seja extremamente breve. Responda em no máximo duas ou três frases curtas.
 4. FORMATO: Responda apenas em texto puro. Jamais use markdown, negrito, ou listas.
 5. SAUDAÇÃO: Se existir uma <saudacao_obrigatoria>, você DEVE usá-la como sua primeira interação. Se NÃO existir tal tag, significa que a conversa já está em andamento ou não há saudação definida; nesse caso, vá direto ao ponto sem dizer "Olá" ou se apresentar.

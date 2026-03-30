@@ -569,11 +569,8 @@ async def node_atendente(state: AgentState):
     empresa = None
     saudacao_configurada = ""
     ia_instrucoes_personalizadas = ""
-    ia_identidade = ""
+    ia_personalidade = ""
     ia_regras_negocio = ""
-    ia_estrategia_vendas = ""
-    ia_formatacao_whatsapp = ""
-    ia_tom_voz = ""
     if empresa_id:
         try:
             empresa_uuid = uuid.UUID(str(empresa_id))
@@ -589,32 +586,23 @@ async def node_atendente(state: AgentState):
     if empresa:
         saudacao_configurada = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
         ia_instrucoes_personalizadas = str(getattr(empresa, "ia_instrucoes_personalizadas", "") or "").strip()
-        ia_identidade = str(getattr(empresa, "ia_identidade", "") or "").strip()
+        ia_personalidade = str(getattr(empresa, "ia_personalidade", "") or "").strip()
         ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
-        ia_estrategia_vendas = str(getattr(empresa, "ia_estrategia_vendas", "") or "").strip()
-        ia_formatacao_whatsapp = str(getattr(empresa, "ia_formatacao_whatsapp", "") or "").strip()
-        ia_tom_voz = str(getattr(empresa, "ia_tom_voz", "") or "").strip()
 
     if not empresa or not any([
         saudacao_configurada,
         ia_instrucoes_personalizadas,
-        ia_identidade,
+        ia_personalidade,
         ia_regras_negocio,
-        ia_estrategia_vendas,
-        ia_formatacao_whatsapp,
-        ia_tom_voz,
     ]):
         logger.error(
             "[NODE ATENDENTE] Dados da empresa vazios ou incompletos para empresa_id=%s "
-            "(saudacao=%s, instrucoes=%s, identidade=%s, regras=%s, estrategia=%s, formatacao=%s, tom_voz=%s)",
+            "(saudacao=%s, instrucoes=%s, personalidade=%s, regras=%s)",
             empresa_id,
             bool(saudacao_configurada),
             bool(ia_instrucoes_personalizadas),
-            bool(ia_identidade),
+            bool(ia_personalidade),
             bool(ia_regras_negocio),
-            bool(ia_estrategia_vendas),
-            bool(ia_formatacao_whatsapp),
-            bool(ia_tom_voz),
         )
     
     # Helper para montar bloco de contexto XML
@@ -650,21 +638,17 @@ async def node_atendente(state: AgentState):
         hora_formatada = agora.strftime("%H:%M")
         blocos.append(f"Contexto temporal: Hoje é {dia_da_semana}, {data_formatada} às {hora_formatada}.")
 
-        identidade_prompt = ia_identidade or ia_instrucoes_personalizadas
-        regras_prompt = ia_regras_negocio or ia_instrucoes_personalizadas
-        estrategia_prompt = ia_estrategia_vendas or ia_instrucoes_personalizadas
+        personalidade_prompt = ia_personalidade or "(não configurada)"
+        regras_prompt = ia_regras_negocio or "(não configuradas)"
 
-        diretrizes_base = regras_prompt or "(não configuradas)"
         blocos.append(
-            "Diretrizes de Atendimento: "
-            f"{diretrizes_base}. "
-            f"Tom de voz: {ia_tom_voz or '(não configurado)'}."
+            "Identidade e Tom de Voz da IA: "
+            f"{personalidade_prompt}."
         )
-
-        if identidade_prompt:
-            blocos.append(f"Diretriz de Identidade da Marca: {identidade_prompt}")
-        if estrategia_prompt:
-            blocos.append(f"Estratégia Comercial/Vendas: {estrategia_prompt}")
+        blocos.append(
+            "Diretrizes de Atendimento e Estratégia de Vendas: "
+            f"{regras_prompt}."
+        )
 
         formatacao_base = (
             "DIRETRIZES DE ESTRUTURAÇÃO VISUAL E RENDERIZAÇÃO (WHATSAPP):\n"
@@ -715,7 +699,7 @@ Considere o seguinte super-contexto como fonte adicional para cobrir todas as pa
 </super_contexto_especialistas>
 Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
-Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
+Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -755,7 +739,7 @@ Você está no fluxo sem especialistas selecionados para este turno.
 Responda diretamente ao cliente em uma única mensagem clara, cordial e objetiva.
 Use o histórico da conversa para manter continuidade e contexto.
 Não mencione roteamento interno, especialistas, ferramentas, APIs ou limitações técnicas internas.
-Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
+Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
