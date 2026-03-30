@@ -10,6 +10,7 @@ const initialTagForm = {
   instrucao_ia: "",
   grupo_id: "",
   disparar_conversao_ads: false,
+  acao_fechamento: false,
 };
 
 const initialGroupForm = {
@@ -110,6 +111,7 @@ export default function GestaoTags() {
       instrucao_ia: tag.instrucao_ia || "",
       grupo_id: tag.grupo_id || "",
       disparar_conversao_ads: Boolean(tag.disparar_conversao_ads),
+      acao_fechamento: Boolean(tag.acao_fechamento),
     });
     setShowModal(true);
   };
@@ -602,6 +604,37 @@ export default function GestaoTags() {
                         <span
                           className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
                             formData.disparar_conversao_ads ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">Ação de Fechamento</p>
+                        <p className="text-xs text-gray-500">
+                          Quando essa tag for aplicada, o card do lead moverá automaticamente para a coluna Fechado do CRM.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.acao_fechamento}
+                        onClick={() =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            acao_fechamento: !prev.acao_fechamento,
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          formData.acao_fechamento ? "bg-blue-600" : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                            formData.acao_fechamento ? "translate-x-6" : "translate-x-1"
                           }`}
                         />
                       </button>

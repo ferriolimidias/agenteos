@@ -259,6 +259,7 @@ class TagOfficialBase(BaseModel):
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool = False
+    acao_fechamento: bool = False
 
 
 class TagOfficialCreate(TagOfficialBase):
@@ -271,6 +272,7 @@ class TagOfficialUpdate(BaseModel):
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool | None = None
+    acao_fechamento: bool | None = None
 
 
 class TagOfficialResponse(TagOfficialBase):

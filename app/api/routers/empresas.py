@@ -716,6 +716,7 @@ class TagCRMBase(BaseModel):
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool = False
+    acao_fechamento: bool = False
 
 
 class TagCRMCreate(TagCRMBase):
@@ -728,6 +729,7 @@ class TagCRMUpdate(BaseModel):
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool | None = None
+    acao_fechamento: bool | None = None
 
 
 class TagCRMResponse(TagCRMBase):
@@ -1504,6 +1506,7 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
+            "acao_fechamento": bool(tag.acao_fechamento),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
         for tag in tags
@@ -1553,6 +1556,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
         cor=_normalizar_cor_tag(data.cor),
         instrucao_ia=(data.instrucao_ia or "").strip() or None,
         disparar_conversao_ads=bool(data.disparar_conversao_ads),
+        acao_fechamento=bool(data.acao_fechamento),
     )
     db.add(tag)
 
@@ -1566,6 +1570,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
+            "acao_fechamento": bool(tag.acao_fechamento),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -1616,6 +1621,8 @@ async def atualizar_tag_crm_oficial(
         tag.instrucao_ia = str(data.instrucao_ia).strip() or None
     if data.disparar_conversao_ads is not None:
         tag.disparar_conversao_ads = bool(data.disparar_conversao_ads)
+    if data.acao_fechamento is not None:
+        tag.acao_fechamento = bool(data.acao_fechamento)
     if data.grupo_id is not None:
         if data.grupo_id == "":
             tag.grupo_id = None
@@ -1645,6 +1652,7 @@ async def atualizar_tag_crm_oficial(
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
+            "acao_fechamento": bool(tag.acao_fechamento),
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -2127,6 +2135,8 @@ async def atualizar_lead_crm(
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
+    mover_para_fechado = False
+
     if data.etapa_id is not None:
         if data.etapa_id == "":
             lead.etapa_id = None
@@ -2157,6 +2167,8 @@ async def atualizar_lead_crm(
         if status_limpo not in {"aberto", "concluido"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status_atendimento inválido")
         lead.status_atendimento = status_limpo
+        if status_limpo == "concluido":
+            mover_para_fechado = True
     tags_para_notificar: list[TagCRM] = []
     if data.tags is not None:
         tags_atuais_norm = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
@@ -2176,10 +2188,40 @@ async def atualizar_lead_crm(
                 for tag in result_tags_disparo.scalars().all()
                 if str(tag.nome or "").strip().lower() in tags_novas_norm
             ]
+            result_tags_fechamento = await db.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == emp_uuid,
+                    TagCRM.acao_fechamento == True,
+                )
+            )
+            tags_fechamento = [
+                tag
+                for tag in result_tags_fechamento.scalars().all()
+                if str(tag.nome or "").strip().lower() in tags_novas_norm
+            ]
+            if tags_fechamento:
+                mover_para_fechado = True
     if data.dados_adicionais is not None:
         lead.dados_adicionais = data.dados_adicionais
     if data.valor_conversao is not None:
         lead.valor_conversao = float(data.valor_conversao)
+
+    if mover_para_fechado:
+        result_etapa_fechamento = await db.execute(
+            select(CRMEtapa)
+            .join(CRMFunil, CRMEtapa.funil_id == CRMFunil.id)
+            .where(
+                CRMFunil.empresa_id == emp_uuid,
+                or_(
+                    CRMEtapa.nome.ilike("%fechado%"),
+                    CRMEtapa.nome.ilike("%concluído%"),
+                    CRMEtapa.nome.ilike("%concluido%")
+                )
+            )
+        )
+        etapa_fechado = result_etapa_fechamento.scalars().first()
+        if etapa_fechado:
+            lead.etapa_id = etapa_fechado.id
 
     try:
         await db.commit()

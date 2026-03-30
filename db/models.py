@@ -387,6 +387,7 @@ class TagCRM(Base):
     cor = Column(String, nullable=False, default="#2563eb")
     instrucao_ia = Column(Text, nullable=True)
     disparar_conversao_ads = Column(Boolean, nullable=False, default=False)
+    acao_fechamento = Column(Boolean, nullable=False, default=False)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="tags_crm")
