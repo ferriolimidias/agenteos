@@ -2441,7 +2441,7 @@ async def exportar_leads_csv(empresa_id: str, db: AsyncSession = Depends(get_db)
     )
 
 
-DIAS_SEMANA_ORDENADOS = ("seg", "ter", "qua", "qui", "sex", "sab", "dom")
+DIAS_SEMANA_ORDENADOS = ("segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo")
 
 
 class AgendaConfigUpdateRequest(BaseModel):
@@ -2471,9 +2471,20 @@ def _normalizar_dias_funcionamento(
     horario_fim_legacy: Any = None,
 ) -> Dict[str, Dict[str, Any]]:
     dias_normalizados = _dias_funcionamento_base()
+    mapa_dias_curtos = {
+        "seg": "segunda",
+        "ter": "terca",
+        "qua": "quarta",
+        "qui": "quinta",
+        "sex": "sexta",
+        "sab": "sabado",
+        "dom": "domingo",
+    }
 
-    # Formato novo: {"seg": {"aberto": true, "inicio": "08:00", "fim": "18:00"}, ...}
-    if isinstance(dias_brutos, dict) and any(chave in dias_brutos for chave in DIAS_SEMANA_ORDENADOS):
+    # Formato novo: {"segunda": {"aberto": true, "inicio": "08:00", "fim": "18:00"}, ...}
+    if isinstance(dias_brutos, dict) and any(
+        chave in dias_brutos for chave in DIAS_SEMANA_ORDENADOS
+    ):
         for dia in DIAS_SEMANA_ORDENADOS:
             item = dias_brutos.get(dia) or {}
             if not isinstance(item, dict):
@@ -2488,12 +2499,36 @@ def _normalizar_dias_funcionamento(
                 dias_normalizados[dia] = {"aberto": True, "inicio": inicio.strip(), "fim": fim.strip()}
         return dias_normalizados
 
-    # Formato legado: {"dias": ["seg", "ter", ...]}
+    # Compatibilidade: formato curto legado {"seg": {...}, ...}
+    if isinstance(dias_brutos, dict) and any(chave in dias_brutos for chave in mapa_dias_curtos):
+        for curto, longo in mapa_dias_curtos.items():
+            item = dias_brutos.get(curto) or {}
+            if not isinstance(item, dict):
+                continue
+            aberto = bool(item.get("aberto", False))
+            if not aberto:
+                dias_normalizados[longo] = {"aberto": False, "inicio": None, "fim": None}
+                continue
+            inicio = item.get("inicio")
+            fim = item.get("fim")
+            if isinstance(inicio, str) and isinstance(fim, str):
+                dias_normalizados[longo] = {"aberto": True, "inicio": inicio.strip(), "fim": fim.strip()}
+        return dias_normalizados
+
+    def _format_legacy_time(t: Any, default: str) -> str:
+        if not t:
+            return default
+        if isinstance(t, str):
+            return t[:5]
+        return t.strftime("%H:%M")
+
+    # Formato legado: {"dias": ["seg", "ter", ...]} ou ["segunda", ...]
     dias_legado = dias_brutos.get("dias", []) if isinstance(dias_brutos, dict) else []
-    inicio_legado = horario_inicio_legacy.strftime("%H:%M") if horario_inicio_legacy else "08:00"
-    fim_legado = horario_fim_legacy.strftime("%H:%M") if horario_fim_legacy else "18:00"
+    inicio_legado = _format_legacy_time(horario_inicio_legacy, "08:00")
+    fim_legado = _format_legacy_time(horario_fim_legacy, "18:00")
     for dia in dias_legado:
         dia_norm = str(dia).strip().lower()
+        dia_norm = mapa_dias_curtos.get(dia_norm, dia_norm)
         if dia_norm in dias_normalizados:
             dias_normalizados[dia_norm] = {
                 "aberto": True,
@@ -2510,12 +2545,27 @@ def _validar_e_normalizar_dias_payload(dias_payload: Any) -> Dict[str, Dict[str,
             detail="agenda_config.dias_funcionamento deve ser um objeto com os dias da semana."
         )
 
+    mapa_dias_curtos = {
+        "seg": "segunda",
+        "ter": "terca",
+        "qua": "quarta",
+        "qui": "quinta",
+        "sex": "sexta",
+        "sab": "sabado",
+        "dom": "domingo",
+    }
+    if any(chave in dias_payload for chave in mapa_dias_curtos):
+        dias_payload = {
+            mapa_dias_curtos.get(chave, chave): valor
+            for chave, valor in dias_payload.items()
+        }
+
     chaves_recebidas = set(dias_payload.keys())
     chaves_esperadas = set(DIAS_SEMANA_ORDENADOS)
     if chaves_recebidas != chaves_esperadas:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="agenda_config.dias_funcionamento deve conter exatamente as chaves: seg, ter, qua, qui, sex, sab, dom."
+            detail="agenda_config.dias_funcionamento deve conter exatamente as chaves: segunda, terca, quarta, quinta, sexta, sabado, domingo."
         )
 
     resultado: Dict[str, Dict[str, Any]] = {}
@@ -2688,13 +2738,17 @@ async def atualizar_agenda(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido") from exc
 
         agenda_config = payload.agenda_config if isinstance(payload.agenda_config, dict) else {}
-        # Compatibilidade: aceita tanto agenda_config direto com seg..dom quanto
+        # Compatibilidade: aceita tanto agenda_config direto com dias quanto
         # agenda_config.dias_funcionamento com o mesmo conteúdo.
-        dias_payload = (
-            agenda_config.get("dias_funcionamento")
-            if "dias_funcionamento" in agenda_config
-            else agenda_config
-        )
+        dias_payload = agenda_config.get("dias_funcionamento") or agenda_config
+        chaves_dia_longas = set(DIAS_SEMANA_ORDENADOS)
+        chaves_dia_curtas = {"seg", "ter", "qua", "qui", "sex", "sab", "dom"}
+        if (
+            not dias_payload
+            or not isinstance(dias_payload, dict)
+            or not any(chave in dias_payload for chave in (chaves_dia_longas | chaves_dia_curtas))
+        ):
+            dias_payload = _dias_funcionamento_base()
         dias_normalizados = _validar_e_normalizar_dias_payload(dias_payload)
         excecoes_normalizadas = _validar_e_normalizar_excecoes_payload(agenda_config.get("excecoes"))
 
@@ -2730,6 +2784,8 @@ async def atualizar_agenda(
         await db.rollback()
         raise
     except Exception as e:
+        print(f"DEBUG AGENDA ERROR: {str(e)}")
+        traceback.print_exc()
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2784,6 +2840,8 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
         }
 
     except Exception as e:
+        print(f"DEBUG AGENDA ERROR: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao carregar dados da Agenda: {str(e)}"
