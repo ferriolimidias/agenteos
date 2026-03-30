@@ -326,9 +326,14 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                 async with AsyncSessionLocal() as session:
                     empresa_uuid = uuid.UUID(mensagens[0].empresa_id)
                     telefone = str(mensagens[0].identificador_origem)
+                    conexao_id_historico = str(conexao_id_dispatch or mensagens[0].conexao_id or "").strip()
                     try:
-                        conexao_uuid = uuid.UUID(mensagens[0].conexao_id) if mensagens[0].conexao_id else None
+                        conexao_uuid = uuid.UUID(conexao_id_historico) if conexao_id_historico else None
                     except (ValueError, TypeError):
+                        print(
+                            "[ENGINE] conexao_id inválido ao salvar histórico da IA; "
+                            f"valor recebido='{conexao_id_historico}'. Salvando com conexao_id=None."
+                        )
                         conexao_uuid = None
                     
                     result = await session.execute(
@@ -345,8 +350,15 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                             texto=resposta,
                             from_me=True
                         )
-                        session.add(nova_msg)
-                        await session.commit()
+                        try:
+                            session.add(nova_msg)
+                            await session.commit()
+                        except Exception as e:
+                            print(f"ERRO CRÍTICO NO BANCO AO SALVAR HISTÓRICO DA IA: {str(e)}")
+                            traceback.print_exc()
+                            await session.rollback()
+                            return
+
                         mensagem_payload = {
                             "id": str(nova_msg.id),
                             "texto": str(nova_msg.texto or ""),
