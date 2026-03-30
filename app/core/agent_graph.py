@@ -652,14 +652,15 @@ async def node_atendente(state: AgentState):
 
         formatacao_base = (
             "DIRETRIZES DE ESTRUTURAÇÃO VISUAL E RENDERIZAÇÃO (WHATSAPP):\n"
-            "- RESPIRO VISUAL OBRIGATÓRIO (DOUBLE BREAK): É terminantemente proibido enviar parágrafos colados. "
-            "Deves utilizar OBRIGATORIAMENTE DUAS QUEBRAS DE LINHA (Enter duplo) entre cada parágrafo, tópico ou "
-            "bloco de informação. O texto no telemóvel deve parecer 'arejado' e fácil de escanear.\n"
-            "- LISTAS E EMOJIS: Cada item de uma lista (módulos, benefícios, etc.) deve começar numa nova linha, "
-            "SEMPRE precedido por um emoji temático ou o caractere '•'. Deve existir um espaço duplo antes de "
-            "iniciares qualquer lista.\n"
-            "- Ênfase Visual: Use *negrito* apenas para destacar valores monetários e nomes de serviços cruciais.\n"
-            "- Emojis: Aplique emojis no início de tópicos novos para facilitar a escaneabilidade."
+            "- ESPAÇAMENTO RADICAL (MOBILE FIRST):\n"
+            "  1. TÍTULOS E BLOCOS PRINCIPAIS: Utilize OBRIGATORIAMENTE TRÊS QUEBRAS DE LINHA (Enter, Enter, Enter) "
+            "após um título ou antes de começar uma nova seção de curso.\n"
+            "  2. FRASES E PARÁGRAFOS: É terminantemente proibido enviar duas frases coladas. Utilize OBRIGATORIAMENTE "
+            "DUAS QUEBRAS DE LINHA (Enter, Enter) entre cada frase ou afirmação, mesmo que sejam curtas.\n"
+            "  3. LISTAS: Dê um espaço duplo antes de iniciar a lista. Cada item deve ocupar sua própria linha e ter "
+            "um espaço duplo após o último item da lista.\n"
+            "- OBJETIVO VISUAL: No celular, o usuário deve ver muito espaço em branco. O texto deve ser fatiado em "
+            "pequenas pílulas de informação, facilitando o 'scroll' e a leitura rápida."
         )
         blocos.append(formatacao_base)
 
@@ -702,6 +703,7 @@ Considere o seguinte super-contexto como fonte adicional para cobrir todas as pa
 Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
 A resposta DEVE estar visualmente organizada para leitura em dispositivos móveis (com respiro e escaneabilidade).
+Na síntese final, aplique OBRIGATORIAMENTE as regras de "ESPAÇAMENTO RADICAL (MOBILE FIRST)" definidas no prompt.
 Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
