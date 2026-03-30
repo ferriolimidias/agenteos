@@ -2704,6 +2704,8 @@ async def atualizar_agenda(
             config.excecoes = excecoes_normalizadas
             config.horario_inicio = None
             config.horario_fim = None
+            if "duracao_minutos" in agenda_config:
+                config.duracao_slot_minutos = int(agenda_config["duracao_minutos"])
         else:
             config = AgendaConfiguracao(
                 empresa_id=emp_uuid,
@@ -2712,6 +2714,8 @@ async def atualizar_agenda(
                 horario_inicio=None,
                 horario_fim=None,
             )
+            if "duracao_minutos" in agenda_config:
+                config.duracao_slot_minutos = int(agenda_config["duracao_minutos"])
             db.add(config)
 
         await db.commit()
@@ -2735,9 +2739,14 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
     Retorna as configurações da agenda e a lista de agendamentos futuros da empresa.
     """
     try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    try:
         # Busca config da agenda
         result_config = await db.execute(
-            select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == empresa_id)
+            select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == emp_uuid)
         )
         config = result_config.scalars().first()
 
@@ -2745,7 +2754,7 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
         # e dá load do Lead associado para mostrar o nome
         result_agendamentos = await db.execute(
             select(AgendamentoLocal)
-            .where(AgendamentoLocal.empresa_id == empresa_id)
+            .where(AgendamentoLocal.empresa_id == emp_uuid)
             .options(selectinload(AgendamentoLocal.lead))
             .order_by(AgendamentoLocal.data_hora_inicio)
         )
