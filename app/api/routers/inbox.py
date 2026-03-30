@@ -214,11 +214,8 @@ async def obter_foto_lead(empresa_id: str, telefone: str):
                 raise HTTPException(status_code=404, detail="Lead não encontrado")
 
             now = datetime.utcnow()
-            if (
-                lead.foto_url
-                and lead.foto_atualizada_em
-                and (now - lead.foto_atualizada_em) < timedelta(hours=24)
-            ):
+            # Se a foto foi atualizada nas últimas 24h, retorna do banco (seja a URL ou None)
+            if lead.foto_atualizada_em and (now - lead.foto_atualizada_em) < timedelta(hours=24):
                 return {"foto_url": lead.foto_url}
 
             conexao = await _buscar_conexao_evolution_ativa(session, empresa_uuid)
@@ -244,7 +241,7 @@ async def obter_foto_lead(empresa_id: str, telefone: str):
             endpoint_post = f"{evolution_url}/chat/fetchProfilePictureUrl/{instance_name}"
 
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
                     response_get = await client.get(
                         endpoint_get,
                         headers=headers,
@@ -271,12 +268,15 @@ async def obter_foto_lead(empresa_id: str, telefone: str):
                 print(f"[Inbox Foto] Falha ao buscar foto na Evolution: {exc}")
                 return {"foto_url": lead.foto_url or None}
 
+            # Se achou foto nova, atualiza a URL. Se não achou, mantém a velha (ou None).
             if foto_url:
                 lead.foto_url = foto_url
-                lead.foto_atualizada_em = now
-                await session.commit()
 
-            return {"foto_url": lead.foto_url or None}
+            # SEMPRE atualiza a data de checagem para não tentar de novo nas próximas 24h
+            lead.foto_atualizada_em = now
+            await session.commit()
+
+            return {"foto_url": lead.foto_url}
     except HTTPException:
         raise
     except Exception as e:
