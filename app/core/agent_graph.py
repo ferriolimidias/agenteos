@@ -4,7 +4,7 @@ import os
 import asyncio
 import logging
 import json
-from typing import TypedDict, List, Optional, Literal, Any
+from typing import TypedDict, List, Optional, Any
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field, StrictStr
 from dotenv import load_dotenv
@@ -383,12 +383,7 @@ class AgentState(TypedDict):
     resposta_final: Optional[str]
     status_conversa: Optional[str]
     lead_id: Optional[str]
-
-# 1.5. Modelos de Estruturação
-class DecisaoAtendente(BaseModel):
-    precisa_roteamento: bool = Field(description="True se a solicitação exigir buscar dados de terceiros (preços, agenda, sistema, técnicos, etc) ou repasse humano. False se for uma interação que você pode responder apenas com o histórico e seu contexto (ex: saudações, small talk).")
-    resposta: Optional[str] = Field(description="A mensagem formulada para o cliente caso não precise rotear. Nula caso precisa_roteamento seja True.")
-    status_conversa: Literal['ABERTA', 'ENCERRADA'] = Field(description="ENCERRADA se o cliente encerrou a conversa com clareza, senão ABERTA.")
+    roteamento_tentado: Optional[bool]
 
 class AnaliseRoteador(BaseModel):
     intencao: List[str] = Field(description="Lista OBRIGATÓRIA com a(s) intenção(ões) principal(is) do usuário. Deve conter o nome exato dos especialistas relevantes. Ex: ['Comercial', 'Suporte'].")
@@ -561,6 +556,8 @@ async def node_atendente(state: AgentState):
     mensagens_recentes = mensagens_estado[-MAX_MSGS_CONTEXT:]
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
+    ja_respondeu = "Assistente:" in str(historico_bd or "")
+    is_primeira_interacao = not ja_respondeu
 
     # Carrega configuração da empresa para garantir injeção de contexto no prompt.
     empresa = None
@@ -674,8 +671,6 @@ async def node_atendente(state: AgentState):
         )
         blocos.append(formatacao_base)
 
-        ja_respondeu = "Assistente:" in str(historico_bd or "")
-        is_primeira_interacao = not ja_respondeu
         if is_primeira_interacao and saudacao_configurada:
             blocos.append(
                 "Utilize a seguinte mensagem como base para sua saudação: "
@@ -696,17 +691,20 @@ async def node_atendente(state: AgentState):
 
         return "\n\n".join(blocos).strip()
 
-    # Identifica primeiro contato pelo histórico persistido no banco.
-    ja_respondeu = "Assistente:" in str(historico_bd or "")
-    is_primeiro_contato = not ja_respondeu
-    is_primeira_msg = is_primeiro_contato
-
     instrucao_primeiro_contato = ""
-    if is_primeiro_contato:
+    if is_primeira_interacao:
         instrucao_primeiro_contato = (
             'REGRA DE PRIMEIRO CONTATO: Você DEVE iniciar sua resposta obrigatoriamente usando o estilo e as informações '
             'contidas em <saudacao_configurada>. Não invente saudações genéricas como "Como posso ajudar?" '
             "se houver uma saudação personalizada disponível."
+        )
+    instrucao_saudacao_contextual = ""
+    if is_primeira_interacao:
+        instrucao_saudacao_contextual = (
+            "REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contexto, significa que esta é "
+            "a primeira resposta que o cliente vai receber. Nesse caso, você DEVE iniciar sua resposta incorporando a "
+            "essência e a simpatia dessa saudação oficial, e logo em seguida entregar os dados que o especialista "
+            "extraiu de forma natural."
         )
 
     # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
@@ -739,7 +737,7 @@ Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialist
 Responda em uma única mensagem clara e objetiva.
 Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
 {instrucao_primeiro_contato}
-REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contexto, significa que esta é a primeira resposta que o cliente vai receber. Nesse caso, você DEVE iniciar sua resposta incorporando a essência e a simpatia dessa saudação oficial, e logo em seguida entregar os dados que o especialista extraiu de forma natural.
+{instrucao_saudacao_contextual}
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -752,113 +750,46 @@ REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contex
         state["intencao"] = []
         state["especialistas_selecionados"] = []
         state["super_contexto_especialistas"] = ""
+        state["roteamento_tentado"] = False
 
         return state
 
-    # ── FASE INICIAL (Recepção e Decisão) ────────────────────────────────────────
-    print("[NODE ATENDENTE] Fase Inicial: Avaliando small-talk ou roteamento...")
-
-    bloco_xml = _bloco_xml(historico_bd, [])
-
-    prompt_decisao = f"""{_montar_system_prompt_modular(incluir_especialistas=False)}
-
-{bloco_xml}
-
-<instrucao_decisao>
-Avalie a última mensagem do cliente considerando TODO o <historico_conversa>.
-Regra principal: em caso de dúvida, classifique como precisa_roteamento=True.
-Somente use precisa_roteamento=False quando for small talk puro (cumprimento, agradecimento, despedida ou conversa social sem pedido operacional).
-Defina precisa_roteamento=True obrigatoriamente para qualquer solicitação que envolva:
-- consulta a sistemas, APIs, bancos, ferramentas, integrações ou dados externos;
-- suporte técnico, diagnóstico, status, disponibilidade, preços, prazos, agendamento ou segunda via;
-- cálculos, verificações, validações, comparações, busca de endereço/CEP, tracking, protocolo ou pedidos com campos estruturados;
-- intenção desconhecida, ambígua, incompleta, ou qualquer pedido que você não possa resolver somente com conversa.
-Quando precisa_roteamento=True, deixe 'resposta' como nula.
-É proibido responder com limitação do tipo "não consigo consultar" na fase de decisão; nesses casos, roteie.
-Se for small talk puro, use precisa_roteamento=False e forneça sua resposta em 'resposta'. ATENÇÃO VITAL: Se existir a tag <saudacao_obrigatoria> no seu contexto, você é PROIBIDO de inventar uma saudação genérica. Você DEVE usar o texto da <saudacao_obrigatoria> como a BASE exata da sua resposta. Adapte-a levemente ao contexto se o cliente tiver feito algum comentário extra, mas garanta que a essência, as perguntas e a identidade da saudação original sejam entregues ao cliente.
-Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> nas saudações e em qualquer resposta ao cliente.
-{instrucao_primeiro_contato}
-</instrucao_decisao>"""
-
-    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (DECISAO) ---\n{prompt_decisao}", flush=True)
-    mensagens_para_llm = [SystemMessage(content=prompt_decisao)] + mensagens_recentes
-
-    llm = await get_llm(empresa_id)
-    llm_json = llm.with_structured_output(DecisaoAtendente)
-    resultado = await llm_json.ainvoke(mensagens_para_llm)
-
-    state["status_conversa"] = resultado.status_conversa
-
-    ultima_mensagem = (state.get("mensagens") or [""])[-1]
-    texto_ultima = str(ultima_mensagem or "").strip().lower()
-
-    # Guarda de segurança para reduzir falso "small talk":
-    # se houver qualquer sinal de consulta operacional, ferramenta, cálculo,
-    # CEP ou intenção não social clara, força roteamento para o supervisor.
-    import re
-
-    def _eh_small_talk_puro(texto: str) -> bool:
-        if not texto:
-            return False
-        if "?" in texto:
-            return False
-        if re.search(r"\d{2,}", texto):
-            return False
-        tokens = re.findall(r"[a-zA-ZÀ-ÿ0-9_]+", texto.lower())
-        if not tokens:
-            return False
-        small_talk_vocab = {
-            "oi", "ola", "olá", "bom", "boa", "dia", "tarde", "noite",
-            "tudo", "bem", "obrigado", "obrigada", "valeu", "blz", "beleza",
-            "show", "perfeito", "entendi", "ok", "okay", "flw", "falou",
-            "tchau", "ate", "até", "mais", "vlw", "obg"
-        }
-        return len(tokens) <= 8 and all(t in small_talk_vocab for t in tokens)
-
-    marcadores_roteamento = [
-        "cep", "preco", "preço", "valor", "agenda", "agendar", "horario", "horário",
-        "disponibilidade", "suporte", "erro", "problema", "consultar", "consulta",
-        "buscar", "calcular", "calculo", "cálculo", "status", "rastreio",
-        "codigo", "código", "protocolo", "sistema", "api", "ferramenta", "integracao", "integração"
-    ]
-    resposta_modelo = (resultado.resposta or "").lower()
-    respondeu_limitacao = any(
-        trecho in resposta_modelo
-        for trecho in ["não consigo", "nao consigo", "não posso", "nao posso", "não tenho acesso", "nao tenho acesso"]
-    )
-    tem_padrao_cep = re.search(r"\b\d{5}-?\d{3}\b", texto_ultima) is not None
-    precisa_forcar_roteamento = (
-        (not _eh_small_talk_puro(texto_ultima))
-        and (
-            # Se não for small talk puro, tratar por padrão como rota para especialistas.
-            # Mantém no atendente apenas cumprimentos/agradecimentos/despedidas.
-            bool(texto_ultima)
-            or
-            any(m in texto_ultima for m in marcadores_roteamento)
-            or tem_padrao_cep
-            or respondeu_limitacao
-        )
-    )
-
-    if not resultado.precisa_roteamento and precisa_forcar_roteamento:
-        print("[NODE ATENDENTE] Guarda de segurança acionada: forçando roteamento para o Supervisor.")
-        resultado.precisa_roteamento = True
-        resultado.resposta = None
-
-    if not resultado.precisa_roteamento and resultado.resposta:
-        state["resposta_final"] = resultado.resposta
-        state["intencao"] = []
-        state["respostas_especialistas"] = []
-        state["especialistas_selecionados"] = []
-        state["super_contexto_especialistas"] = ""
-        print(f"[NODE ATENDENTE] Resolvido via Small Talk: {resultado.resposta}")
-    else:
-        print("[NODE ATENDENTE] Optou por acionar Roteador.")
+    # ── FASE INICIAL (Fluxo único via roteamento + resposta principal) ───────────
+    roteamento_tentado = bool(state.get("roteamento_tentado"))
+    if not roteamento_tentado:
+        print("[NODE ATENDENTE] Primeira passagem: encaminhando para roteamento sem responder ainda.")
+        state["roteamento_tentado"] = True
         state["resposta_final"] = None
         state["respostas_especialistas"] = []
-        state["especialistas_selecionados"] = []
         state["super_contexto_especialistas"] = ""
+        return state
 
+    print("[NODE ATENDENTE] Sem respostas de especialistas; gerando resposta final no LLM principal.")
+    bloco_xml_direto = _bloco_xml(historico_bd, [])
+    prompt_resposta_direta = f"""{_montar_system_prompt_modular(incluir_especialistas=False)}
+
+{bloco_xml_direto}
+
+<instrucao_final>
+Você está no fluxo sem especialistas selecionados para este turno.
+Responda diretamente ao cliente em uma única mensagem clara, cordial e objetiva.
+Use o histórico da conversa para manter continuidade e contexto.
+Não mencione roteamento interno, especialistas, ferramentas, APIs ou limitações técnicas internas.
+Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
+{instrucao_primeiro_contato}
+</instrucao_final>"""
+
+    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
+    mensagens_para_llm = [SystemMessage(content=prompt_resposta_direta)] + mensagens_recentes
+    llm = await get_llm(empresa_id)
+    resposta = await llm.ainvoke(mensagens_para_llm)
+
+    state["resposta_final"] = resposta.content
+    state["intencao"] = []
+    state["respostas_especialistas"] = []
+    state["especialistas_selecionados"] = []
+    state["super_contexto_especialistas"] = ""
+    state["roteamento_tentado"] = False
     return state
 
 async def node_roteador_maestro(state: AgentState):
