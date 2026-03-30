@@ -21,7 +21,7 @@ export default function Orquestrador() {
   const [submitting, setSubmitting] = useState(false);
 
   // Forms
-  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, ferramentas_ids: [] });
+  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
   const [formFerramenta, setFormFerramenta] = useState({ 
     nome_ferramenta: "", 
     descricao_ia: "",
@@ -105,7 +105,7 @@ export default function Orquestrador() {
       }
       setShowEspecialistaModal(false);
       setEditingEspecialistaId(null);
-      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, ferramentas_ids: [] });
+      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
       fetchEspecialistas();
     } catch (err) {
       alert("Erro ao salvar especialista");
@@ -131,6 +131,7 @@ export default function Orquestrador() {
       prompt_sistema: esp.prompt_sistema,
       modelo_ia: esp.modelo_ia || "gpt-4o-mini",
       usar_rag: esp.usar_rag || false,
+      usar_agenda: esp.usar_agenda || false,
       ferramentas_ids: esp.ferramentas_ids || []
     });
     setEditingEspecialistaId(esp.id);
@@ -269,7 +270,7 @@ export default function Orquestrador() {
                 <button 
                   onClick={() => {
                     setEditingEspecialistaId(null);
-                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, ferramentas_ids: [] });
+                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
                     setShowEspecialistaModal(true);
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
@@ -422,6 +423,22 @@ export default function Orquestrador() {
                   <div>
                     <p className="text-sm font-semibold text-white">Habilitar Busca em Documentos (RAG)</p>
                     <p className="text-xs text-gray-400 mt-0.5">Se marcado, o Agente pesquisará na base de conhecimento (PDF, URL, Textos) antes de responder ao cliente.</p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Agenda Nativa Toggle */}
+              <div className="pt-2">
+                <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                    checked={formEspecialista.usar_agenda}
+                    onChange={(e) => setFormEspecialista({...formEspecialista, usar_agenda: e.target.checked})}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Ativar Agendamento Nativo</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Se marcado, o especialista terá acesso às tools nativas para consultar, criar, editar e cancelar agendamentos.</p>
                   </div>
                 </label>
               </div>

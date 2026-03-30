@@ -7,6 +7,8 @@ import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 export default function Dashboard() {
   const [data, setData] = useState({
     total_leads: 0,
+    total_faturamento_funil: 0,
+    total_leads_convertidos_funil: 0,
     leads_por_etapa: [],
     aguardando_humano: 0,
     total_mensagens: 0
@@ -42,6 +44,11 @@ export default function Dashboard() {
   }
 
   const COLORS = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const formatCurrency = (value) =>
+    new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format(Number(value || 0));
 
   return (
     <div className="space-y-6">
@@ -51,8 +58,8 @@ export default function Dashboard() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[1, 2, 3].map(i => (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          {[1, 2, 3, 4].map(i => (
             <div key={i} className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-pulse">
               <div className="h-10 w-10 bg-gray-200 rounded-lg mb-4"></div>
               <div className="h-6 w-24 bg-gray-200 rounded mb-2"></div>
@@ -62,7 +69,25 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+
+            {/* Card Destaque: Faturamento do Funil */}
+            <div className="bg-emerald-50 rounded-2xl p-6 shadow-sm border border-emerald-200 flex flex-col justify-between hover:shadow-md transition-shadow">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center">
+                  <MessageSquare size={24} />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-emerald-700 mb-1">Faturamento do Funil</p>
+                <h3 className="text-3xl font-bold text-emerald-800 break-all">{formatCurrency(data.total_faturamento_funil)}</h3>
+                {Number(data.total_leads_convertidos_funil || 0) > 0 ? (
+                  <p className="mt-1 text-sm font-medium text-emerald-700">
+                    {data.total_leads_convertidos_funil} {data.total_leads_convertidos_funil === 1 ? "venda" : "vendas"}
+                  </p>
+                ) : null}
+              </div>
+            </div>
             
             {/* Card 1: Total Leads */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between hover:shadow-md transition-shadow">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, MessageSquare, Upload, X } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
@@ -31,19 +31,6 @@ export default function Crm() {
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
-
-  const { totalFaturamentoFunil, totalLeadsConvertidosFunil } = useMemo(() => {
-    let faturamento = 0;
-    let convertidos = 0;
-    for (const etapa of funil?.etapas || []) {
-      for (const lead of etapa.leads || []) {
-        const v = Number(lead.valor_conversao || 0);
-        faturamento += v;
-        if (v > 0) convertidos += 1;
-      }
-    }
-    return { totalFaturamentoFunil: faturamento, totalLeadsConvertidosFunil: convertidos };
-  }, [funil]);
 
   const fetchCrmData = async () => {
     try {
@@ -100,7 +87,6 @@ export default function Crm() {
     updateLeadInState(leadId, {
       ...updates,
       tags: res.data?.tags || updates.tags,
-      dados_adicionais: res.data?.dados_adicionais || updates.dados_adicionais,
       valor_conversao: res.data?.valor_conversao ?? updates.valor_conversao,
     });
   };
@@ -170,28 +156,14 @@ export default function Crm() {
   return (
     <div className="flex h-full flex-col space-y-6">
       <div className="flex flex-shrink-0 items-start justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
-              <Users className="text-blue-600" size={32} />
-              CRM Dinâmico
-            </h1>
-            <p className="mt-1 text-gray-500">
-              {funil ? `Funil ativo: ${funil.funil_nome}` : "Gerencie seus leads capturados pela IA."}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-              Faturamento Total do Funil
-            </p>
-            <p className="mt-1 text-lg font-bold text-emerald-800">{formatCurrency(totalFaturamentoFunil)}</p>
-            {totalLeadsConvertidosFunil > 0 ? (
-              <p className="mt-1 text-sm font-medium text-emerald-700">
-                {totalLeadsConvertidosFunil}{" "}
-                {totalLeadsConvertidosFunil === 1 ? "venda" : "vendas"} no funil
-              </p>
-            ) : null}
-          </div>
+        <div>
+          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
+            <Users className="text-blue-600" size={32} />
+            CRM Dinâmico
+          </h1>
+          <p className="mt-1 text-gray-500">
+            {funil ? `Funil ativo: ${funil.funil_nome}` : "Gerencie seus leads capturados pela IA."}
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -244,7 +216,7 @@ export default function Crm() {
                   key={etapa.id}
                   className="flex w-80 flex-col overflow-hidden rounded-2xl border border-gray-200/60 bg-gray-50/80 shadow-sm"
                 >
-                  <div className="flex cursor-move items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
+                  <div className="flex items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
                     <div className="min-w-0">
                       <h3 className="truncate font-semibold text-gray-800">{etapa.nome}</h3>
                       <p
@@ -295,7 +267,7 @@ export default function Crm() {
                           <LeadTagsEditor
                             tags={lead.tags || []}
                             compact
-                            placeholder="Nova tag + Enter"
+                            placeholder="Selecione tags oficiais"
                             onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
                             tagDefinitions={availableTags}
                           />

@@ -17,6 +17,18 @@ async def obter_estatisticas(empresa_id: str):
             )
             total_leads = result_total_leads.scalar() or 0
 
+            # Faturamento do funil (valor_conversao) e quantidade de conversões
+            result_faturamento = await session.execute(
+                select(func.coalesce(func.sum(CRMLead.valor_conversao), 0)).where(CRMLead.empresa_id == empresa_uuid)
+            )
+            total_faturamento_funil = float(result_faturamento.scalar() or 0)
+            result_convertidos = await session.execute(
+                select(func.count())
+                .select_from(CRMLead)
+                .where(CRMLead.empresa_id == empresa_uuid, CRMLead.valor_conversao > 0)
+            )
+            total_leads_convertidos_funil = int(result_convertidos.scalar() or 0)
+
             # Leads por etapa e aguardando humano
             result_etapas = await session.execute(
                 select(CRMEtapa.nome, func.count(CRMLead.id))
@@ -52,6 +64,8 @@ async def obter_estatisticas(empresa_id: str):
 
             return {
                 "total_leads": total_leads,
+                "total_faturamento_funil": total_faturamento_funil,
+                "total_leads_convertidos_funil": total_leads_convertidos_funil,
                 "leads_por_etapa": leads_por_etapa,
                 "aguardando_humano": aguardando_humano,
                 "total_mensagens": total_mensagens

@@ -4,6 +4,7 @@ import uuid
 import os
 import base64
 import re
+import unicodedata
 from datetime import datetime, timedelta
 
 from app.schemas import StandardMessage
@@ -152,6 +153,11 @@ async def save_history_and_check_pause(
     fbclid: str | None = None,
     profile_pic_url: str | None = None,
 ) -> bool:
+    def _normalize_stage_name(value: str | None) -> str:
+        texto = str(value or "").strip().lower()
+        texto = unicodedata.normalize("NFKD", texto)
+        return "".join(ch for ch in texto if not unicodedata.combining(ch))
+
     should_process = True
     async with AsyncSessionLocal() as session:
         empresa_uuid = uuid.UUID(empresa_id)
@@ -218,6 +224,28 @@ async def save_history_and_check_pause(
                     lead_alterado = True
                 if fbclid and lead.fbclid != fbclid:
                     lead.fbclid = fbclid
+                    lead_alterado = True
+                result_etapas = await session.execute(
+                    select(CRMEtapa.id, CRMEtapa.nome)
+                    .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                    .where(CRMFunil.empresa_id == empresa_uuid)
+                    .order_by(CRMEtapa.ordem.asc())
+                )
+                etapa_atendimento_id = None
+                etapa_atual_nome = None
+                for etapa_id, etapa_nome in result_etapas.all():
+                    nome_norm = _normalize_stage_name(etapa_nome)
+                    if etapa_id == lead.etapa_id:
+                        etapa_atual_nome = str(etapa_nome or "")
+                    if etapa_atendimento_id is None and (
+                        "em atendimento" in nome_norm
+                        or (nome_norm == "atendimento")
+                    ):
+                        etapa_atendimento_id = etapa_id
+                etapa_atual_norm = _normalize_stage_name(etapa_atual_nome)
+                etapa_atual_fechada = ("fechado" in etapa_atual_norm) or ("concluido" in etapa_atual_norm)
+                if etapa_atendimento_id and lead.etapa_id != etapa_atendimento_id and not etapa_atual_fechada:
+                    lead.etapa_id = etapa_atendimento_id
                     lead_alterado = True
             if not lead.etapa_id:
                 result_etapa = await session.execute(

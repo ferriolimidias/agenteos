@@ -15,7 +15,6 @@ export default function LeadDetailsModal({
     nome_contato: "",
     telefone_contato: "",
     historico_resumo: "",
-    dados_adicionais_texto: "{}",
   });
   const [valorConversao, setValorConversao] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -27,7 +26,6 @@ export default function LeadDetailsModal({
       nome_contato: lead.nome_contato || "",
       telefone_contato: lead.telefone_contato || lead.telefone || "",
       historico_resumo: lead.historico_resumo || "",
-      dados_adicionais_texto: JSON.stringify(lead.dados_adicionais || {}, null, 2),
     });
     setValorConversao(lead.valor_conversao || 0);
     setError("");
@@ -40,12 +38,10 @@ export default function LeadDetailsModal({
     try {
       setSaving(true);
       setError("");
-      const dadosAdicionais = JSON.parse(formData.dados_adicionais_texto || "{}");
       await onSaveLead?.(lead.id, {
         nome_contato: formData.nome_contato.trim(),
         telefone_contato: formData.telefone_contato.trim(),
         historico_resumo: formData.historico_resumo.trim(),
-        dados_adicionais: dadosAdicionais,
         valor_conversao: Number(valorConversao || 0),
       });
       onClose?.();
@@ -106,7 +102,7 @@ export default function LeadDetailsModal({
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags do lead</p>
                 <LeadTagsEditor
                   tags={lead.tags || []}
-                  placeholder="Adicionar tag e pressionar Enter"
+                  placeholder="Selecione tags oficiais"
                   onChange={(nextTags) => onSaveTags?.(lead.id, nextTags)}
                   tagDefinitions={availableTags}
                 />
@@ -139,15 +135,6 @@ export default function LeadDetailsModal({
                 </div>
               </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Dados adicionais (JSON)</label>
-                <textarea
-                  rows={8}
-                  value={formData.dados_adicionais_texto}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, dados_adicionais_texto: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 font-mono text-sm text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
             </div>
           </div>
           <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">

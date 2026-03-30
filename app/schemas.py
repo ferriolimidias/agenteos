@@ -143,10 +143,20 @@ class EspecialistaBase(BaseModel):
     nome: str
     descricao_missao: str | None = None
     prompt_sistema: str
+    usar_rag: bool | None = False
+    usar_agenda: bool | None = False
     ativo: bool | None = True
 
 class EspecialistaCreate(EspecialistaBase):
     pass
+
+class EspecialistaUpdate(BaseModel):
+    nome: str | None = None
+    descricao_missao: str | None = None
+    prompt_sistema: str | None = None
+    usar_rag: bool | None = None
+    usar_agenda: bool | None = None
+    ativo: bool | None = None
 
 class EspecialistaResponse(EspecialistaBase):
     id: UUID4

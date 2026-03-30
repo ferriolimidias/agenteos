@@ -20,6 +20,7 @@ class EspecialistaCreate(BaseModel):
     prompt_sistema: str
     modelo_ia: Optional[str] = "gpt-4o-mini"
     usar_rag: Optional[bool] = False
+    usar_agenda: Optional[bool] = False
     ferramentas_ids: Optional[List[str]] = Field(default_factory=list)
 
 class FerramentaCreate(BaseModel):
@@ -50,6 +51,7 @@ async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_d
             "prompt_sistema": esp.prompt_sistema,
             "modelo_ia": getattr(esp, 'modelo_ia', "gpt-4o-mini"),
             "usar_rag": getattr(esp, 'usar_rag', False),
+            "usar_agenda": getattr(esp, 'usar_agenda', False),
             "ferramentas_ids": [str(f.id) for f in esp.ferramentas] if esp.ferramentas else []
         })
     return retorno
@@ -69,6 +71,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         prompt_sistema=payload.prompt_sistema,
         modelo_ia=payload.modelo_ia,
         usar_rag=payload.usar_rag,
+        usar_agenda=payload.usar_agenda,
         ativo=True
     )
     
@@ -94,6 +97,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         "prompt_sistema": novo.prompt_sistema,
         "modelo_ia": getattr(novo, 'modelo_ia', 'gpt-4o-mini'),
         "usar_rag": novo.usar_rag,
+        "usar_agenda": novo.usar_agenda,
         "ferramentas_ids": [str(f.id) for f in novo.ferramentas] if novo.ferramentas else []
     }
 
@@ -136,6 +140,7 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     especialista.prompt_sistema = payload.prompt_sistema
     especialista.modelo_ia = payload.modelo_ia
     especialista.usar_rag = payload.usar_rag
+    especialista.usar_agenda = payload.usar_agenda
     
     
     # Atualizar ferramentas

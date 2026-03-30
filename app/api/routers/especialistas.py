@@ -23,6 +23,8 @@ async def criar_especialista(especialista: EspecialistaCreate, db: AsyncSession 
         nome=especialista.nome,
         descricao_missao=especialista.descricao_missao,
         prompt_sistema=especialista.prompt_sistema,
+        usar_rag=especialista.usar_rag,
+        usar_agenda=especialista.usar_agenda,
         ativo=especialista.ativo
     )
     router_service = SemanticRouterService(db)

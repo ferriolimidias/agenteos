@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Tag, X } from "lucide-react";
+import { Tag, X } from "lucide-react";
 
 const TAG_COLOR_VARIANTS = [
   "bg-blue-50 text-blue-700 border-blue-200",
@@ -61,32 +61,20 @@ export default function LeadTagsEditor({
   onChange,
   compact = false,
   className = "",
-  placeholder = "Buscar tags oficiais...",
+  placeholder = "Selecione tags oficiais",
   tagDefinitions = [],
 }) {
-  const [inputValue, setInputValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const datalistId = useMemo(
-    () => `lead-tags-${Math.random().toString(36).slice(2, 10)}`,
-    []
-  );
 
   const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
   const tagDefinitionsMap = useMemo(() => getTagDefinitionMap(tagDefinitions), [tagDefinitions]);
-  const filteredTagDefinitions = useMemo(() => {
-    const query = String(inputValue || "").trim().toLowerCase();
-    return (tagDefinitions || []).filter((definition) => {
-      const nome = String(definition?.nome || "").trim();
-      if (!nome) return false;
-      if (normalizedTags.some((tag) => tag.toLowerCase() === nome.toLowerCase())) return false;
-      if (!query) return true;
-      return nome.toLowerCase().includes(query);
-    });
-  }, [inputValue, normalizedTags, tagDefinitions]);
-  const suggestedTags = useMemo(
-    () => filteredTagDefinitions,
-    [filteredTagDefinitions]
+  const availableTagNames = useMemo(
+    () =>
+      (tagDefinitions || [])
+        .map((definition) => String(definition?.nome || "").trim())
+        .filter(Boolean),
+    [tagDefinitions]
   );
 
   const submitTags = async (nextTags) => {
@@ -95,7 +83,6 @@ export default function LeadTagsEditor({
       setSaving(true);
       setError("");
       await onChange(normalizeTags(nextTags));
-      setInputValue("");
     } catch (err) {
       console.error("Erro ao atualizar tags:", err);
       setError("Não foi possível salvar as tags.");
@@ -104,32 +91,21 @@ export default function LeadTagsEditor({
     }
   };
 
-  const handleAddTag = async () => {
-    const nextTag = inputValue.trim();
-    if (!nextTag) return;
-    if (tagDefinitions.length === 0) {
-      setError("Cadastre tags oficiais na Gestão de Tags para poder selecionar.");
-      return;
-    }
-    if (normalizedTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())) {
-      setInputValue("");
-      setError("");
-      return;
-    }
-    const officialMatch = tagDefinitions.find(
-      (definition) => String(definition?.nome || "").trim().toLowerCase() === nextTag.toLowerCase()
-    );
-    if (!officialMatch) {
-      setError("Tag não encontrada no catálogo oficial.");
-      return;
-    }
-    await submitTags([...normalizedTags, officialMatch.nome]);
-  };
-
   const handleRemoveTag = async (tagToRemove) => {
     await submitTags(
       normalizedTags.filter((tag) => tag.toLowerCase() !== String(tagToRemove).trim().toLowerCase())
     );
+  };
+
+  const handleToggleOfficialTag = async (tagName) => {
+    const hasTag = normalizedTags.some((tag) => tag.toLowerCase() === String(tagName).toLowerCase());
+    if (hasTag) {
+      await submitTags(
+        normalizedTags.filter((tag) => tag.toLowerCase() !== String(tagName).toLowerCase())
+      );
+      return;
+    }
+    await submitTags([...normalizedTags, tagName]);
   };
 
   return (
@@ -163,85 +139,40 @@ export default function LeadTagsEditor({
         )}
       </div>
 
-      {suggestedTags.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {suggestedTags.map((definition) => (
-            <button
-              key={definition.id || definition.nome}
-              type="button"
-              disabled={saving}
-              onClick={(e) => {
-                e.stopPropagation();
-                submitTags([...normalizedTags, definition.nome]);
-              }}
-              className="rounded-full border px-3 py-1 text-xs font-semibold transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              style={getTagInlineStyle(definition) || undefined}
-            >
-              {definition.nome}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
       {tagDefinitions.length === 0 ? (
         <p className="text-xs text-amber-600">
           Nenhuma tag oficial cadastrada. Peça ao administrador para criar tags na Gestão de Tags.
         </p>
       ) : null}
 
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Plus
-            size={14}
-            className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 ${
-              compact ? "hidden" : ""
-            }`}
-          />
-          <input
-            list={tagDefinitions.length > 0 ? datalistId : undefined}
-            value={inputValue}
-            disabled={saving}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              if (error) setError("");
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                e.stopPropagation();
-                handleAddTag();
-              }
-            }}
-            placeholder={placeholder}
-            className={`w-full rounded-xl border border-gray-200 bg-white text-gray-700 outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-500 ${
-              compact
-                ? "px-3 py-2 text-xs"
-                : "px-3 py-2.5 text-sm"
-            } ${compact ? "" : "pl-9"}`}
-          />
-          {tagDefinitions.length > 0 ? (
-            <datalist id={datalistId}>
-              {tagDefinitions.map((definition) => (
-                <option key={definition.id || definition.nome} value={definition.nome} />
-              ))}
-            </datalist>
-          ) : null}
+      {availableTagNames.length > 0 ? (
+        <div className={`rounded-xl border border-gray-200 bg-white ${compact ? "p-2" : "p-3"}`}>
+          <p className={`mb-2 text-gray-500 ${compact ? "text-[11px]" : "text-xs"}`}>{placeholder}</p>
+          <div className={`grid gap-2 ${compact ? "grid-cols-1" : "grid-cols-2"}`}>
+            {availableTagNames.map((tagName) => {
+              const checked = normalizedTags.some((tag) => tag.toLowerCase() === tagName.toLowerCase());
+              return (
+                <label
+                  key={tagName}
+                  className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-medium ${
+                    checked ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 bg-white text-gray-600"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={saving}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => handleToggleOfficialTag(tagName)}
+                    className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>{tagName}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
-        {!compact && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAddTag();
-            }}
-            disabled={saving || !inputValue.trim() || tagDefinitions.length === 0}
-            className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? "Salvando..." : "Selecionar"}
-          </button>
-        )}
-      </div>
+      ) : null}
 
       {error ? <p className="text-xs text-red-500">{error}</p> : null}
     </div>

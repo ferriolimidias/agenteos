@@ -237,6 +237,7 @@ class Especialista(Base):
     prompt_sistema = Column(Text, nullable=False)
     modelo_ia = Column(String, default="gpt-4o-mini")
     usar_rag = Column(Boolean, default=False)
+    usar_agenda = Column(Boolean, default=False)
     ativo = Column(Boolean, default=True)
     embedding = Column(Vector(1536), nullable=True)
 
