@@ -1,6 +1,7 @@
 import asyncio
 import os
 import traceback
+import uuid
 from typing import List
 from app.schemas import StandardMessage
 from app.services.websocket_manager import manager
@@ -123,6 +124,74 @@ async def get_available_models() -> List[str]:
     await redis_client.setex(cache_key, 86400, json.dumps(modelos))
     
     return modelos
+
+
+async def _salvar_historico_saida_ia(
+    *,
+    empresa_id: str,
+    telefone: str,
+    resposta: str,
+    conexao_id: str | None,
+) -> dict | None:
+    """
+    Persiste a mensagem outbound da IA em uma sessão isolada/limpa.
+    Evita reaproveitar transações potencialmente sujas do fluxo principal.
+    """
+    from db.database import AsyncSessionLocal
+    from db.models import CRMLead, MensagemHistorico
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as session:
+        empresa_uuid = uuid.UUID(empresa_id)
+        conexao_id_limpo = str(conexao_id or "").strip()
+        try:
+            conexao_uuid = uuid.UUID(conexao_id_limpo) if conexao_id_limpo else None
+        except (ValueError, TypeError):
+            print(
+                "[ENGINE] conexao_id inválido ao salvar histórico da IA; "
+                f"valor recebido='{conexao_id_limpo}'. Salvando com conexao_id=None."
+            )
+            conexao_uuid = None
+
+        result = await session.execute(
+            select(CRMLead).where(
+                CRMLead.empresa_id == empresa_uuid,
+                CRMLead.telefone_contato == telefone,
+            )
+        )
+        lead = result.scalars().first()
+        if not lead:
+            print(
+                "[ENGINE] Lead não encontrado ao salvar histórico outbound da IA. "
+                f"empresa_id={empresa_id} telefone='{telefone}'"
+            )
+            return None
+
+        nova_msg = MensagemHistorico(
+            lead_id=lead.id,
+            conexao_id=conexao_uuid,
+            texto=resposta,
+            from_me=True,
+        )
+
+        try:
+            session.add(nova_msg)
+            await session.commit()
+            await session.refresh(nova_msg)
+        except Exception as e:
+            print(f"ERRO CRÍTICO NO BANCO AO SALVAR HISTÓRICO DA IA: {str(e)}")
+            traceback.print_exc()
+            await session.rollback()
+            return None
+
+        return {
+            "id": str(nova_msg.id),
+            "texto": str(nova_msg.texto or ""),
+            "from_me": bool(nova_msg.from_me),
+            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+            "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+        }
 
 async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
     """
@@ -311,70 +380,29 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                 return
 
             try:
-                import uuid
-                from db.database import AsyncSessionLocal
-                from db.models import CRMLead, MensagemHistorico
-                from sqlalchemy import select
-                
                 # 3. Trava de Transacao do Banco (O Check Final)
                 # Re-verificar timestamp ANTES de commitar no banco
                 timestamp_finalissimo = await redis_client.get(f"last_msg_time:{mensagens[0].canal}:{mensagens[0].identificador_origem}")
                 if timestamp_inicio and timestamp_finalissimo and timestamp_inicio != timestamp_finalissimo:
                      print(f"\n[ENGINE] ATENÇÃO: Descartando commit no banco para Lead {mensagens[0].identificador_origem} - Nova mensagem chegou no último segundo (Timestamp mismatch).")
                      return
-                
-                async with AsyncSessionLocal() as session:
-                    empresa_uuid = uuid.UUID(mensagens[0].empresa_id)
-                    telefone = str(mensagens[0].identificador_origem)
-                    conexao_id_historico = str(conexao_id_dispatch or mensagens[0].conexao_id or "").strip()
-                    try:
-                        conexao_uuid = uuid.UUID(conexao_id_historico) if conexao_id_historico else None
-                    except (ValueError, TypeError):
-                        print(
-                            "[ENGINE] conexao_id inválido ao salvar histórico da IA; "
-                            f"valor recebido='{conexao_id_historico}'. Salvando com conexao_id=None."
-                        )
-                        conexao_uuid = None
-                    
-                    result = await session.execute(
-                        select(CRMLead).where(
-                            CRMLead.empresa_id == empresa_uuid, 
-                            CRMLead.telefone_contato == telefone
-                        )
-                    )
-                    lead = result.scalars().first()
-                    if lead:
-                        nova_msg = MensagemHistorico(
-                            lead_id=lead.id,
-                            conexao_id=conexao_uuid,
-                            texto=resposta,
-                            from_me=True
-                        )
-                        try:
-                            session.add(nova_msg)
-                            await session.commit()
-                        except Exception as e:
-                            print(f"ERRO CRÍTICO NO BANCO AO SALVAR HISTÓRICO DA IA: {str(e)}")
-                            traceback.print_exc()
-                            await session.rollback()
-                            return
 
-                        mensagem_payload = {
-                            "id": str(nova_msg.id),
-                            "texto": str(nova_msg.texto or ""),
-                            "from_me": bool(nova_msg.from_me),
-                            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
-                            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
-                            "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
-                        }
-                        await manager.broadcast_to_empresa(
-                            mensagens[0].empresa_id,
-                            {
-                                "tipo_evento": "nova_mensagem_outbound",
-                                "telefone": telefone,
-                                "mensagem": mensagem_payload,
-                            },
-                        )
+                telefone = str(mensagens[0].identificador_origem)
+                mensagem_payload = await _salvar_historico_saida_ia(
+                    empresa_id=mensagens[0].empresa_id,
+                    telefone=telefone,
+                    resposta=resposta,
+                    conexao_id=conexao_id_dispatch or mensagens[0].conexao_id,
+                )
+                if mensagem_payload:
+                    await manager.broadcast_to_empresa(
+                        mensagens[0].empresa_id,
+                        {
+                            "tipo_evento": "nova_mensagem_outbound",
+                            "telefone": telefone,
+                            "mensagem": mensagem_payload,
+                        },
+                    )
             except Exception as e:
                 print(f"Erro ao salvar histórico do Grafo (Webhook): {e}")
                 traceback.print_exc()
