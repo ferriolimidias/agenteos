@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List
+import uuid
 
 from db.database import get_db
 from db.models import Especialista, APIConnection, especialista_tools
-from app.schemas import EspecialistaCreate, EspecialistaResponse, EspecialistaToolLink
+from app.schemas import EspecialistaCreate, EspecialistaResponse, EspecialistaToolLink, EspecialistaUpdate
 from app.services.semantic_router import SemanticRouterService
 
 router = APIRouter(
@@ -53,6 +54,56 @@ async def listar_especialistas(db: AsyncSession = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao listar especialistas: {str(e)}"
+        )
+
+
+@router.put("/{especialista_id}", response_model=EspecialistaResponse, status_code=status.HTTP_200_OK)
+async def atualizar_especialista(
+    especialista_id: str,
+    data: EspecialistaUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Atualiza um Especialista existente.
+    """
+    try:
+        try:
+            especialista_uuid = uuid.UUID(especialista_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de especialista inválido")
+
+        result = await db.execute(select(Especialista).where(Especialista.id == especialista_uuid))
+        especialista = result.scalars().first()
+        if not especialista:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Especialista não encontrado")
+
+        payload = data.model_dump(exclude_unset=True)
+        if "nome" in payload:
+            especialista.nome = payload["nome"]
+        if "descricao_missao" in payload:
+            especialista.descricao_missao = payload["descricao_missao"]
+        if "prompt_sistema" in payload:
+            especialista.prompt_sistema = payload["prompt_sistema"]
+        if "usar_rag" in payload:
+            especialista.usar_rag = bool(payload["usar_rag"])
+        if "usar_agenda" in payload:
+            especialista.usar_agenda = bool(payload["usar_agenda"])
+        if "ativo" in payload:
+            especialista.ativo = bool(payload["ativo"])
+
+        router_service = SemanticRouterService(db)
+        await router_service.refresh_specialist_embedding(especialista)
+
+        await db.commit()
+        await db.refresh(especialista)
+        return especialista
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Erro ao atualizar especialista: {str(e)}"
         )
 
 @router.post("/vincular-ferramenta", status_code=status.HTTP_200_OK)

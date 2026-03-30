@@ -6,8 +6,9 @@ import logging
 import json
 import uuid
 import unicodedata
-from typing import TypedDict, List, Optional, Any
-from datetime import datetime, timedelta
+from functools import partial
+from typing import TypedDict, List, Optional, Any, Dict
+from datetime import datetime, timedelta, date, time as dt_time
 from zoneinfo import ZoneInfo
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field, StrictStr
@@ -77,7 +78,7 @@ from db.models import (
     AgendaConfiguracao,
     AgendamentoLocal,
 )
-from sqlalchemy import select, update
+from sqlalchemy import select, update, and_
 from sqlalchemy.orm import selectinload
 from app.core.dynamic_tools import create_dynamic_tool, _create_pydantic_model_from_json_schema
 from app.services.transferencia_service import (
@@ -91,7 +92,7 @@ from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
 from app.core.tools import tool_atualizar_tags_lead
 from app.services.websocket_manager import manager
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
 
@@ -232,179 +233,177 @@ async def _obter_janela_funcionamento(session, empresa_uuid: uuid.UUID, data_ref
     return _horario_para_datetime(data_ref, inicio_hhmm), _horario_para_datetime(data_ref, fim_hhmm), duracao
 
 
-async def consultar_disponibilidade(data: str, empresa_id: str) -> str:
-    import uuid
+def _resolver_cfg_dia(
+    dias_funcionamento: Optional[Dict[str, Any]],
+    dia_obj: date,
+) -> Optional[Dict[str, Any]]:
+    dias_func = dias_funcionamento if isinstance(dias_funcionamento, dict) else {}
+    mapa = {
+        0: ("segunda", "seg"),
+        1: ("terca", "ter"),
+        2: ("quarta", "qua"),
+        3: ("quinta", "qui"),
+        4: ("sexta", "sex"),
+        5: ("sabado", "sab"),
+        6: ("domingo", "dom"),
+    }
+    aliases = mapa.get(dia_obj.weekday(), ())
+    for chave in aliases:
+        dia_cfg = dias_func.get(chave)
+        if isinstance(dia_cfg, dict):
+            return dia_cfg
+    return None
+
+
+@tool
+async def consultar_horarios_livres(data: str, empresa_id: str) -> str:
+    """
+    Consulta a disponibilidade de horários livres em uma data específica.
+    A 'data' deve estar no formato 'YYYY-MM-DD'.
+    O 'empresa_id' deve ser injetado internamente ou passado pelo agente.
+    """
     try:
-        empresa_uuid = uuid.UUID(str(empresa_id))
-        data_base = _parse_data(data)
-    except Exception as e:
-        return f"Erro ao consultar disponibilidade: parâmetros inválidos ({e})."
+        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+        tz = ZoneInfo("America/Sao_Paulo")
 
-    inicio_dia = data_base.replace(hour=0, minute=0, second=0, microsecond=0)
-    fim_dia = inicio_dia + timedelta(days=1)
+        async with AsyncSessionLocal() as db:
+            emp_uuid = uuid.UUID(str(empresa_id))
+            result_config = await db.execute(
+                select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == emp_uuid)
+            )
+            config = result_config.scalars().first()
+            if not config:
+                return "Erro: A empresa ainda não configurou os horários de atendimento."
 
-    try:
-        async with AsyncSessionLocal() as session:
-            janela_inicio, janela_fim, duracao_slot = await _obter_janela_funcionamento(session, empresa_uuid, data_base)
-            if not janela_inicio or not janela_fim:
-                return json.dumps(
-                    {
-                        "data": data,
-                        "status": "fechado",
-                        "horarios_livres": [],
-                        "mensagem": "Empresa fechada neste dia.",
-                    },
-                    ensure_ascii=False,
-                )
+            dia_cfg = _resolver_cfg_dia(config.dias_funcionamento, data_obj)
+            if not dia_cfg:
+                return "A empresa não tem expediente neste dia da semana."
 
-            result = await session.execute(
+            ativo = bool(dia_cfg.get("ativo")) if "ativo" in dia_cfg else bool(dia_cfg.get("aberto"))
+            if not ativo:
+                return "A empresa não tem expediente neste dia da semana."
+
+            str_inicio = str(dia_cfg.get("inicio") or "08:00")
+            str_fim = str(dia_cfg.get("fim") or "18:00")
+            hora_inicio = dt_time.fromisoformat(str_inicio)
+            hora_fim = dt_time.fromisoformat(str_fim)
+            duracao_minutos = int(getattr(config, "duracao_slot_minutos", 30) or 30)
+
+            dt_inicio = datetime.combine(data_obj, hora_inicio).replace(tzinfo=tz)
+            dt_fim = datetime.combine(data_obj, hora_fim).replace(tzinfo=tz)
+
+            result_agendamentos = await db.execute(
                 select(AgendamentoLocal).where(
-                    AgendamentoLocal.empresa_id == empresa_uuid,
-                    AgendamentoLocal.data_hora_inicio >= inicio_dia,
-                    AgendamentoLocal.data_hora_inicio < fim_dia,
-                    AgendamentoLocal.status != "cancelado",
+                    and_(
+                        AgendamentoLocal.empresa_id == emp_uuid,
+                        AgendamentoLocal.status.in_(["marcado", "confirmado", "agendado"]),
+                        AgendamentoLocal.data_hora_inicio >= dt_inicio.replace(tzinfo=None),
+                        AgendamentoLocal.data_hora_fim <= dt_fim.replace(tzinfo=None),
+                    )
                 )
             )
-            agendamentos = result.scalars().all()
-            ocupados = {ag.data_hora_inicio.strftime("%H:%M") for ag in agendamentos if ag.data_hora_inicio}
+            agendamentos_ocupados = result_agendamentos.scalars().all()
 
-            livres: list[str] = []
-            cursor = janela_inicio
-            while cursor < janela_fim:
-                hhmm = cursor.strftime("%H:%M")
-                if hhmm not in ocupados:
-                    livres.append(hhmm)
-                cursor = cursor + timedelta(minutes=duracao_slot)
+            slots_livres: list[str] = []
+            slot_atual = dt_inicio
+            agora = datetime.now(tz)
+            while slot_atual + timedelta(minutes=duracao_minutos) <= dt_fim:
+                slot_fim = slot_atual + timedelta(minutes=duracao_minutos)
 
-            return json.dumps(
-                {
-                    "data": data,
-                    "status": "ok",
-                    "janela_funcionamento": {
-                        "inicio": janela_inicio.strftime("%H:%M"),
-                        "fim": janela_fim.strftime("%H:%M"),
-                    },
-                    "duracao_slot_minutos": duracao_slot,
-                    "horarios_livres": livres,
-                },
-                ensure_ascii=False,
+                conflito = False
+                for ag in agendamentos_ocupados:
+                    ag_inicio = ag.data_hora_inicio
+                    ag_fim = ag.data_hora_fim
+                    if not ag_inicio or not ag_fim:
+                        continue
+                    ag_inicio_tz = ag_inicio.replace(tzinfo=tz) if ag_inicio.tzinfo is None else ag_inicio
+                    ag_fim_tz = ag_fim.replace(tzinfo=tz) if ag_fim.tzinfo is None else ag_fim
+                    if (slot_atual < ag_fim_tz) and (slot_fim > ag_inicio_tz):
+                        conflito = True
+                        break
+
+                if not conflito and slot_atual > agora:
+                    slots_livres.append(slot_atual.strftime("%H:%M"))
+                slot_atual = slot_fim
+
+            if not slots_livres:
+                return f"Desculpe, não há horários livres no dia {data}."
+            return f"Horários livres encontrados para o dia {data}: " + ", ".join(slots_livres)
+    except Exception as e:
+        return f"Erro ao consultar horários: {str(e)}"
+
+
+@tool
+async def agendar_horario(data_hora: str, empresa_id: str, lead_id: str, cliente_nome: str) -> str:
+    """
+    Realiza um agendamento no sistema.
+    'data_hora' deve ser no formato 'YYYY-MM-DD HH:MM'.
+    'empresa_id' e 'lead_id' devem ser injetados.
+    'cliente_nome' é o nome do cliente.
+    """
+    try:
+        tz = ZoneInfo("America/Sao_Paulo")
+        dt_inicio_naive = datetime.strptime(data_hora, "%Y-%m-%d %H:%M")
+        dt_inicio = dt_inicio_naive.replace(tzinfo=tz)
+
+        async with AsyncSessionLocal() as db:
+            emp_uuid = uuid.UUID(str(empresa_id))
+            result_config = await db.execute(
+                select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == emp_uuid)
             )
-    except Exception as e:
-        return f"Erro ao consultar disponibilidade: {e}"
+            config = result_config.scalars().first()
+            duracao_minutos = int(getattr(config, "duracao_slot_minutos", 30) or 30)
+            dt_fim = dt_inicio + timedelta(minutes=duracao_minutos)
 
-
-async def criar_agendamento(data_hora: str, lead_id: str, motivo: str, empresa_id: str) -> str:
-    import uuid
-    try:
-        empresa_uuid = uuid.UUID(str(empresa_id))
-        lead_uuid = uuid.UUID(str(lead_id))
-        dt_inicio = _parse_data_hora(data_hora)
-    except Exception as e:
-        return f"Erro ao criar agendamento: parâmetros inválidos ({e})."
-
-    try:
-        async with AsyncSessionLocal() as session:
-            _, _, duracao_slot = await _obter_janela_funcionamento(session, empresa_uuid, dt_inicio)
-            dt_fim = dt_inicio + timedelta(minutes=duracao_slot)
-
-            conflito = await session.execute(
+            result_conflito = await db.execute(
                 select(AgendamentoLocal).where(
-                    AgendamentoLocal.empresa_id == empresa_uuid,
-                    AgendamentoLocal.data_hora_inicio == dt_inicio,
-                    AgendamentoLocal.status != "cancelado",
+                    and_(
+                        AgendamentoLocal.empresa_id == emp_uuid,
+                        AgendamentoLocal.status.in_(["marcado", "confirmado", "agendado"]),
+                        AgendamentoLocal.data_hora_inicio < dt_fim.replace(tzinfo=None),
+                        AgendamentoLocal.data_hora_fim > dt_inicio.replace(tzinfo=None),
+                    )
                 )
             )
-            if conflito.scalars().first():
-                return "Conflito de horário: já existe agendamento nesse horário."
+            if result_conflito.scalars().first():
+                return "Falha ao agendar: Este horário acabou de ser ocupado. Por favor, escolha outro."
 
-            ag = AgendamentoLocal(
-                empresa_id=empresa_uuid,
-                lead_id=lead_uuid,
-                data_hora_inicio=dt_inicio,
-                data_hora_fim=dt_fim,
-                status="agendado",
+            novo_agendamento = AgendamentoLocal(
+                empresa_id=emp_uuid,
+                lead_id=uuid.UUID(str(lead_id)) if lead_id else None,
+                data_hora_inicio=dt_inicio_naive,
+                data_hora_fim=dt_fim.replace(tzinfo=None),
+                status="marcado",
             )
-            session.add(ag)
-            await session.commit()
-            await session.refresh(ag)
+            db.add(novo_agendamento)
+            await db.commit()
+            await db.refresh(novo_agendamento)
             return (
-                f"Agendamento criado com sucesso. "
-                f"id={ag.id}, data_hora={ag.data_hora_inicio.isoformat()}, motivo={str(motivo or '').strip() or '(não informado)'}"
+                f"SUCESSO! Agendamento criado para {cliente_nome} no dia {data_hora}. "
+                f"O ID do agendamento é: {novo_agendamento.id}"
             )
     except Exception as e:
-        return f"Erro ao criar agendamento: {e}"
+        return f"Erro ao criar agendamento: {str(e)}"
 
 
-async def editar_agendamento(agendamento_id: str, nova_data_hora: str, empresa_id: str) -> str:
-    import uuid
+@tool
+async def cancelar_agendamento(agendamento_id: str) -> str:
+    """
+    Cancela um agendamento existente com base no seu ID.
+    """
     try:
-        empresa_uuid = uuid.UUID(str(empresa_id))
-        agendamento_uuid = uuid.UUID(str(agendamento_id))
-        novo_inicio = _parse_data_hora(nova_data_hora)
-    except Exception as e:
-        return f"Erro ao editar agendamento: parâmetros inválidos ({e})."
-
-    try:
-        async with AsyncSessionLocal() as session:
-            result_ag = await session.execute(
-                select(AgendamentoLocal).where(
-                    AgendamentoLocal.id == agendamento_uuid,
-                    AgendamentoLocal.empresa_id == empresa_uuid,
-                )
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AgendamentoLocal).where(AgendamentoLocal.id == uuid.UUID(str(agendamento_id)))
             )
-            ag = result_ag.scalars().first()
-            if not ag:
-                return "Agendamento não encontrado."
-
-            duracao = 30
-            if ag.data_hora_inicio and ag.data_hora_fim:
-                delta_min = int((ag.data_hora_fim - ag.data_hora_inicio).total_seconds() / 60)
-                duracao = max(5, delta_min)
-            novo_fim = novo_inicio + timedelta(minutes=duracao)
-
-            conflito = await session.execute(
-                select(AgendamentoLocal).where(
-                    AgendamentoLocal.empresa_id == empresa_uuid,
-                    AgendamentoLocal.id != agendamento_uuid,
-                    AgendamentoLocal.data_hora_inicio == novo_inicio,
-                    AgendamentoLocal.status != "cancelado",
-                )
-            )
-            if conflito.scalars().first():
-                return "Conflito de horário: já existe outro agendamento nesse horário."
-
-            ag.data_hora_inicio = novo_inicio
-            ag.data_hora_fim = novo_fim
-            await session.commit()
-            return f"Agendamento {agendamento_id} atualizado para {novo_inicio.isoformat()}."
-    except Exception as e:
-        return f"Erro ao editar agendamento: {e}"
-
-
-async def cancelar_agendamento(agendamento_id: str, empresa_id: str) -> str:
-    import uuid
-    try:
-        empresa_uuid = uuid.UUID(str(empresa_id))
-        agendamento_uuid = uuid.UUID(str(agendamento_id))
-    except Exception as e:
-        return f"Erro ao cancelar agendamento: parâmetros inválidos ({e})."
-
-    try:
-        async with AsyncSessionLocal() as session:
-            result_ag = await session.execute(
-                select(AgendamentoLocal).where(
-                    AgendamentoLocal.id == agendamento_uuid,
-                    AgendamentoLocal.empresa_id == empresa_uuid,
-                )
-            )
-            ag = result_ag.scalars().first()
-            if not ag:
-                return "Agendamento não encontrado."
-            ag.status = "cancelado"
-            await session.commit()
+            agendamento = result.scalars().first()
+            if not agendamento:
+                return f"Erro: Nenhum agendamento encontrado com o ID {agendamento_id}."
+            agendamento.status = "cancelado"
+            await db.commit()
             return f"Agendamento {agendamento_id} cancelado com sucesso."
     except Exception as e:
-        return f"Erro ao cancelar agendamento: {e}"
+        return f"Erro ao cancelar agendamento: {str(e)}"
 
 async def transferir_para_humano(telefone: str, empresa_id: str) -> str:
     import uuid
@@ -586,71 +585,53 @@ MAP_FUNCOES_NATIVAS = {
 }
 
 
-class ConsultarDisponibilidadeInput(BaseModel):
+class ConsultarHorariosLivresInput(BaseModel):
     data: str = Field(description="Data no formato YYYY-MM-DD.")
 
 
-class CriarAgendamentoInput(BaseModel):
+class AgendarHorarioInput(BaseModel):
     data_hora: str = Field(description="Data e hora do agendamento no formato YYYY-MM-DD HH:MM ou ISO.")
-    lead_id: str = Field(description="UUID do lead para vincular ao agendamento.")
-    motivo: str = Field(description="Motivo resumido do agendamento.")
-
-
-class EditarAgendamentoInput(BaseModel):
-    agendamento_id: str = Field(description="UUID do agendamento existente.")
-    nova_data_hora: str = Field(description="Nova data e hora no formato YYYY-MM-DD HH:MM ou ISO.")
+    cliente_nome: str = Field(description="Nome do cliente para vincular o compromisso.")
 
 
 class CancelarAgendamentoInput(BaseModel):
     agendamento_id: str = Field(description="UUID do agendamento que deve ser cancelado.")
 
 
-def criar_ferramentas_agendamento_contextual(empresa_id: str) -> list[StructuredTool]:
-    async def _consultar_disponibilidade(data: str) -> str:
-        return await consultar_disponibilidade(data=data, empresa_id=empresa_id)
+def criar_ferramentas_agendamento_contextual(empresa_id: str, lead_id: Optional[str]) -> list[StructuredTool]:
+    consulta_parcial = partial(consultar_horarios_livres.coroutine, empresa_id=empresa_id)
+    agendar_parcial = partial(agendar_horario.coroutine, empresa_id=empresa_id, lead_id=(lead_id or ""))
 
-    async def _criar_agendamento(data_hora: str, lead_id: str, motivo: str) -> str:
-        return await criar_agendamento(
-            data_hora=data_hora,
-            lead_id=lead_id,
-            motivo=motivo,
-            empresa_id=empresa_id,
-        )
+    async def _consultar(data: str) -> str:
+        return await consulta_parcial(data=data)
 
-    async def _editar_agendamento(agendamento_id: str, nova_data_hora: str) -> str:
-        return await editar_agendamento(
-            agendamento_id=agendamento_id,
-            nova_data_hora=nova_data_hora,
-            empresa_id=empresa_id,
-        )
+    async def _agendar(data_hora: str, cliente_nome: str) -> str:
+        return await agendar_parcial(data_hora=data_hora, cliente_nome=cliente_nome)
 
-    async def _cancelar_agendamento(agendamento_id: str) -> str:
-        return await cancelar_agendamento(agendamento_id=agendamento_id, empresa_id=empresa_id)
+    async def _cancelar(agendamento_id: str) -> str:
+        return await cancelar_agendamento.coroutine(agendamento_id=agendamento_id)
 
     return [
         StructuredTool(
-            name="consultar_disponibilidade",
-            description="Consulta horários livres da agenda local para uma data específica.",
-            args_schema=ConsultarDisponibilidadeInput,
-            coroutine=_consultar_disponibilidade,
+            name="consultar_horarios_livres",
+            description=(
+                "Consulta a disponibilidade de horários livres em uma data específica "
+                "na agenda da empresa."
+            ),
+            args_schema=ConsultarHorariosLivresInput,
+            coroutine=_consultar,
         ),
         StructuredTool(
-            name="criar_agendamento",
-            description="Cria um agendamento na agenda local para um lead.",
-            args_schema=CriarAgendamentoInput,
-            coroutine=_criar_agendamento,
-        ),
-        StructuredTool(
-            name="editar_agendamento",
-            description="Edita data/hora de um agendamento existente.",
-            args_schema=EditarAgendamentoInput,
-            coroutine=_editar_agendamento,
+            name="agendar_horario",
+            description="Realiza um agendamento para o lead atual na agenda da empresa.",
+            args_schema=AgendarHorarioInput,
+            coroutine=_agendar,
         ),
         StructuredTool(
             name="cancelar_agendamento",
-            description="Cancela um agendamento existente na agenda local.",
+            description="Cancela um agendamento existente com base no seu ID.",
             args_schema=CancelarAgendamentoInput,
-            coroutine=_cancelar_agendamento,
+            coroutine=_cancelar,
         ),
     ]
 
@@ -1630,7 +1611,48 @@ async def node_especialista_dinamico(state: AgentState):
                     (especialista_db and getattr(especialista_db, "usar_agenda", False)) or usar_agenda_meta
                 )
                 if usar_agenda_final and empresa_id:
-                    ferramentas_agenda = criar_ferramentas_agendamento_contextual(str(empresa_id))
+                    tool_consulta_partial = partial(
+                        consultar_horarios_livres.coroutine,
+                        empresa_id=str(empresa_id),
+                    )
+                    tool_agendar_partial = partial(
+                        agendar_horario.coroutine,
+                        empresa_id=str(empresa_id),
+                        lead_id=str(lead_id) if lead_id else "",
+                    )
+
+                    async def _tool_consultar_horarios_livres(data: str) -> str:
+                        return await tool_consulta_partial(data=data)
+
+                    async def _tool_agendar_horario(data_hora: str, cliente_nome: str) -> str:
+                        return await tool_agendar_partial(data_hora=data_hora, cliente_nome=cliente_nome)
+
+                    async def _tool_cancelar_agendamento(agendamento_id: str) -> str:
+                        return await cancelar_agendamento.coroutine(agendamento_id=agendamento_id)
+
+                    ferramentas_agenda = [
+                        StructuredTool(
+                            name="consultar_horarios_livres",
+                            description=(
+                                "Consulta a disponibilidade de horários livres em uma data específica "
+                                "na agenda da empresa."
+                            ),
+                            args_schema=ConsultarHorariosLivresInput,
+                            coroutine=_tool_consultar_horarios_livres,
+                        ),
+                        StructuredTool(
+                            name="agendar_horario",
+                            description="Realiza um agendamento para o lead atual na agenda da empresa.",
+                            args_schema=AgendarHorarioInput,
+                            coroutine=_tool_agendar_horario,
+                        ),
+                        StructuredTool(
+                            name="cancelar_agendamento",
+                            description="Cancela um agendamento existente com base no seu ID.",
+                            args_schema=CancelarAgendamentoInput,
+                            coroutine=_tool_cancelar_agendamento,
+                        ),
+                    ]
                     for tool_agenda in ferramentas_agenda:
                         nome_tool_agenda = str(getattr(tool_agenda, "name", "")).strip()
                         if not nome_tool_agenda or nome_tool_agenda in nomes_tools_registradas:
@@ -1639,9 +1661,8 @@ async def node_especialista_dinamico(state: AgentState):
                         nomes_tools_registradas.add(nome_tool_agenda)
                     descricoes_tools.extend(
                         [
-                            "- consultar_disponibilidade: consulta horários livres por data.",
-                            "- criar_agendamento: cria um compromisso para o lead.",
-                            "- editar_agendamento: altera data/hora de compromisso existente.",
+                            "- consultar_horarios_livres: consulta horários livres por data.",
+                            "- agendar_horario: cria um compromisso na agenda local.",
                             "- cancelar_agendamento: cancela compromisso existente.",
                         ]
                     )

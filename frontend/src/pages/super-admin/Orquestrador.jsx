@@ -438,7 +438,7 @@ export default function Orquestrador() {
                   />
                   <div>
                     <p className="text-sm font-semibold text-white">Ativar Agendamento Nativo</p>
-                    <p className="text-xs text-gray-400 mt-0.5">Se marcado, o especialista terá acesso às tools nativas para consultar, criar, editar e cancelar agendamentos.</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Permite que este especialista acesse e gerencie a agenda do sistema (consulte, marque e cancele horários).</p>
                   </div>
                 </label>
               </div>

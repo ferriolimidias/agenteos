@@ -143,9 +143,9 @@ class EspecialistaBase(BaseModel):
     nome: str
     descricao_missao: str | None = None
     prompt_sistema: str
-    usar_rag: bool | None = False
-    usar_agenda: bool | None = False
-    ativo: bool | None = True
+    usar_rag: bool = False
+    usar_agenda: bool = False
+    ativo: bool = True
 
 class EspecialistaCreate(EspecialistaBase):
     pass
@@ -160,6 +160,7 @@ class EspecialistaUpdate(BaseModel):
 
 class EspecialistaResponse(EspecialistaBase):
     id: UUID4
+    usar_agenda: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
