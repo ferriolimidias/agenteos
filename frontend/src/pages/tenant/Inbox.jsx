@@ -36,6 +36,9 @@ export default function Inbox() {
   const reconnectBlockedUntilRef = useRef(0);
   const socketOpenedRef = useRef(false);
   const selectedLeadTelefoneRef = useRef(null);
+  const leadsFetchInFlightRef = useRef(false);
+  const leadsFetchQueuedRef = useRef(false);
+  const leadsRefreshTimerRef = useRef(null);
 
   const user = getStoredUser();
   const activeEmpresaId = getActiveEmpresaId();
@@ -43,6 +46,12 @@ export default function Inbox() {
 
   const fetchLeads = async () => {
     if (!empresa_id) return;
+    if (leadsFetchInFlightRef.current) {
+      leadsFetchQueuedRef.current = true;
+      return;
+    }
+
+    leadsFetchInFlightRef.current = true;
     try {
       const res = await api.get(`/empresas/${empresa_id}/inbox`);
       const nextLeads = res.data || [];
@@ -54,7 +63,23 @@ export default function Inbox() {
     } catch (e) {
       console.error("Erro ao buscar leads no Inbox:", e);
       setLeads([]);
+    } finally {
+      leadsFetchInFlightRef.current = false;
+      if (leadsFetchQueuedRef.current) {
+        leadsFetchQueuedRef.current = false;
+        void fetchLeads();
+      }
     }
+  };
+
+  const scheduleFetchLeads = (delayMs = 300) => {
+    if (leadsRefreshTimerRef.current) {
+      window.clearTimeout(leadsRefreshTimerRef.current);
+    }
+    leadsRefreshTimerRef.current = window.setTimeout(() => {
+      leadsRefreshTimerRef.current = null;
+      void fetchLeads();
+    }, delayMs);
   };
 
   const fetchMessages = async (telefone) => {
@@ -135,13 +160,15 @@ export default function Inbox() {
   }, [selectedLead?.id]);
 
   useEffect(() => {
-    if (selectedLead) {
-      fetchMessages(selectedLead.telefone_contato);
-      if (!selectedLead.foto_url) {
-        fetchLeadPhoto(selectedLead);
-      }
-    }
-  }, [selectedLead, empresa_id]);
+    const telefone = selectedLead?.telefone_contato;
+    if (!empresa_id || !telefone) return;
+    fetchMessages(telefone);
+  }, [empresa_id, selectedLead?.telefone_contato]);
+
+  useEffect(() => {
+    if (!empresa_id || !selectedLead?.id || !selectedLead?.telefone_contato || selectedLead?.foto_url) return;
+    fetchLeadPhoto(selectedLead);
+  }, [empresa_id, selectedLead?.id, selectedLead?.telefone_contato, selectedLead?.foto_url]);
 
   useEffect(() => {
     selectedLeadTelefoneRef.current = selectedLead?.telefone_contato || null;
@@ -197,7 +224,7 @@ export default function Inbox() {
             });
           }
 
-          fetchLeads();
+          scheduleFetchLeads(250);
         } catch (err) {
           console.error("Erro ao processar evento websocket do Inbox:", err);
         }
@@ -248,6 +275,10 @@ export default function Inbox() {
       if (reconnectTimeoutRef.current) {
         window.clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
+      }
+      if (leadsRefreshTimerRef.current) {
+        window.clearTimeout(leadsRefreshTimerRef.current);
+        leadsRefreshTimerRef.current = null;
       }
       try {
         wsRef.current?.close();
