@@ -4,7 +4,10 @@ import os
 import asyncio
 import logging
 import json
+import unicodedata
 from typing import TypedDict, List, Optional, Any
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field, StrictStr
 from dotenv import load_dotenv
@@ -384,6 +387,9 @@ class AgentState(TypedDict):
     status_conversa: Optional[str]
     lead_id: Optional[str]
     roteamento_tentado: Optional[bool]
+    saudacao_pendente: Optional[bool]
+    saudacao_processada: Optional[bool]
+    empresa: Optional[Any]
 
 class AnaliseRoteador(BaseModel):
     intencao: List[str] = Field(description="Lista OBRIGATÓRIA com a(s) intenção(ões) principal(is) do usuário. Deve conter o nome exato dos especialistas relevantes. Ex: ['Comercial', 'Suporte'].")
@@ -542,7 +548,6 @@ async def node_capturar_nome(state: AgentState):
 async def node_atendente(state: AgentState):
     print(f"[NODE ATENDENTE] Iniciando processamento...")
     import uuid
-    from datetime import datetime
     from langchain_core.messages import SystemMessage
 
     # 1. Inicialização de Variáveis Locais (Prevenção de UnboundLocalError)
@@ -557,6 +562,7 @@ async def node_atendente(state: AgentState):
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
     ja_respondeu = "Assistente:" in str(historico_bd or "")
+    # TODO: Implementar reset de sessão por tempo (ex: 12h).
     is_primeira_interacao = not ja_respondeu
 
     # Carrega configuração da empresa para garantir injeção de contexto no prompt.
@@ -671,17 +677,6 @@ async def node_atendente(state: AgentState):
         )
         blocos.append(formatacao_base)
 
-        if is_primeira_interacao and saudacao_configurada:
-            blocos.append(
-                "PRIMEIRA INTERAÇÃO DA CONVERSA:\n"
-                "1. Retribua a saudação do usuário de forma natural (ex: espelhe o 'Bom dia').\n"
-                f"2. Entregue o conteúdo desta mensagem base: '{saudacao_configurada}'.\n"
-                "3. TRAVA DE ESCOPO: Neste turno específico, limite-se ESTRITAMENTE aos passos 1 e 2. "
-                "Não aplique nenhuma outra diretriz estrutural, não adicione tópicos extras e não formule "
-                "perguntas adicionais além das que já existirem na mensagem base. Encerre a resposta "
-                "imediatamente após a saudação."
-            )
-
         if incluir_especialistas and respostas_especialistas:
             respostas_texto = "\n".join([str(r) for r in respostas_especialistas if str(r).strip()])
             blocos.append(
@@ -691,22 +686,6 @@ async def node_atendente(state: AgentState):
             )
 
         return "\n\n".join(blocos).strip()
-
-    instrucao_primeiro_contato = ""
-    if is_primeira_interacao:
-        instrucao_primeiro_contato = (
-            'REGRA DE PRIMEIRO CONTATO: Você DEVE iniciar sua resposta obrigatoriamente usando o estilo e as informações '
-            'contidas em <saudacao_configurada>. Não invente saudações genéricas como "Como posso ajudar?" '
-            "se houver uma saudação personalizada disponível."
-        )
-    instrucao_saudacao_contextual = ""
-    if is_primeira_interacao:
-        instrucao_saudacao_contextual = (
-            "REGRA DE PRIMEIRO CONTATO: Se existir a tag <saudacao_obrigatoria> no seu contexto, significa que esta é "
-            "a primeira resposta que o cliente vai receber. Nesse caso, você DEVE iniciar sua resposta incorporando a "
-            "essência e a simpatia dessa saudação oficial, e logo em seguida entregar os dados que o especialista "
-            "extraiu de forma natural."
-        )
 
     # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
     if respostas_especialistas:
@@ -737,8 +716,6 @@ Considere o seguinte super-contexto como fonte adicional para cobrir todas as pa
 Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
 Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
-{instrucao_primeiro_contato}
-{instrucao_saudacao_contextual}
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -760,6 +737,8 @@ Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a respos
     if not roteamento_tentado:
         print("[NODE ATENDENTE] Primeira passagem: encaminhando para roteamento sem responder ainda.")
         state["roteamento_tentado"] = True
+        state["saudacao_processada"] = False
+        state["saudacao_pendente"] = False
         state["resposta_final"] = None
         state["respostas_especialistas"] = []
         state["super_contexto_especialistas"] = ""
@@ -777,7 +756,6 @@ Responda diretamente ao cliente em uma única mensagem clara, cordial e objetiva
 Use o histórico da conversa para manter continuidade e contexto.
 Não mencione roteamento interno, especialistas, ferramentas, APIs ou limitações técnicas internas.
 Você DEVE aplicar rigorosamente o tom definido em <ia_tom_voz> em toda a resposta final.
-{instrucao_primeiro_contato}
 </instrucao_final>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
@@ -810,7 +788,20 @@ async def node_roteador_maestro(state: AgentState):
         state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = []
         state["handoff_requested"] = False
+        state["saudacao_pendente"] = False
         return state
+
+    historico_bd = state.get("historico_bd", "")
+    ja_respondeu = "Assistente:" in str(historico_bd or "")
+    # TODO: Implementar reset de sessão por tempo (ex: 12h).
+    is_primeira_interacao = not ja_respondeu
+    saudacao_processada = bool(state.get("saudacao_processada"))
+    state["saudacao_pendente"] = bool(is_primeira_interacao and not saudacao_processada)
+    if state["saudacao_pendente"]:
+        intencoes = list(state.get("intencao") or [])
+        if "saudacao" not in intencoes:
+            intencoes.append("saudacao")
+        state["intencao"] = intencoes
 
     handoff_markers = (
         "humano",
@@ -848,6 +839,27 @@ async def node_roteador_maestro(state: AgentState):
             reverse=True,
         )
 
+    def _normalizar_texto(texto: str) -> str:
+        texto_normalizado = unicodedata.normalize("NFKD", texto or "")
+        return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).lower()
+
+    mensagem_normalizada = _normalizar_texto(ultima_mensagem)
+    termos_funcionamento = (
+        "horario",
+        "aberto",
+        "aberta",
+        "fechado",
+        "fechada",
+        "funciona",
+        "que horas abre",
+        "atendimento hoje",
+    )
+    if any(termo in mensagem_normalizada for termo in termos_funcionamento):
+        intencoes_atuais = list(state.get("intencao") or [])
+        if "funcionamento" not in intencoes_atuais:
+            intencoes_atuais.append("funcionamento")
+        state["intencao"] = intencoes_atuais
+
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
     nomes_especialistas = [esp.get("nome") for esp in especialistas_match]
     print(
@@ -855,11 +867,161 @@ async def node_roteador_maestro(state: AgentState):
         f"| IDs={ids_especialistas} | Nomes={nomes_especialistas}"
     )
 
-    # Sem matches: volta para o Atendente Principal (bate-papo comum).
+    # Mantém especialistas selecionados para a próxima etapa do fluxo.
     state["especialistas_selecionados"] = especialistas_match
-    state["respostas_especialistas"] = []
+    respostas_existentes = state.get("respostas_especialistas") or []
+    if not isinstance(respostas_existentes, list):
+        respostas_existentes = []
+    state["respostas_especialistas"] = respostas_existentes
     state["super_contexto_especialistas"] = ""
-    state["intencao"] = []
+    intencoes_atuais = list(state.get("intencao") or [])
+    if state.get("saudacao_pendente") and "saudacao" not in intencoes_atuais:
+        intencoes_atuais.append("saudacao")
+    state["intencao"] = intencoes_atuais
+    return state
+
+async def node_especialista_funcionamento(state: AgentState):
+    print("[NODE ESPECIALISTA FUNCIONAMENTO] Processando dúvida de horários...")
+    import uuid
+
+    empresa_obj = state.get("empresa")
+    empresa_id = state.get("empresa_id")
+    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+
+    if not empresa_obj and empresa_id:
+        try:
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            async with AsyncSessionLocal() as session:
+                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa_obj = result_empresa.scalars().first()
+        except Exception as e:
+            logger.error("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao carregar empresa %s: %s", empresa_id, e)
+            empresa_obj = None
+
+    agenda_config = getattr(empresa_obj, "agenda_config", None) if empresa_obj else None
+    agenda_config_dict = None
+
+    if isinstance(agenda_config, str):
+        try:
+            agenda_config_dict = json.loads(agenda_config)
+        except Exception:
+            agenda_config_dict = None
+    elif isinstance(agenda_config, dict):
+        agenda_config_dict = agenda_config
+    elif agenda_config is not None:
+        dias_obj = getattr(agenda_config, "dias_funcionamento", None)
+        horario_inicio_obj = getattr(agenda_config, "horario_inicio", None)
+        horario_fim_obj = getattr(agenda_config, "horario_fim", None)
+        dias_normalizados = dias_obj.get("dias", []) if isinstance(dias_obj, dict) else []
+        agenda_config_dict = {
+            "dias_funcionamento": dias_normalizados,
+            "horario_inicio": horario_inicio_obj.strftime("%H:%M") if horario_inicio_obj else None,
+            "horario_fim": horario_fim_obj.strftime("%H:%M") if horario_fim_obj else None,
+        }
+
+    respostas_existentes = state.get("respostas_especialistas") or []
+    if not isinstance(respostas_existentes, list):
+        respostas_existentes = []
+
+    if not agenda_config_dict:
+        respostas_existentes.append(
+            "Informação de Funcionamento: Os horários de funcionamento não estão configurados no momento."
+        )
+        state["respostas_especialistas"] = respostas_existentes
+        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+        return state
+
+    dias_funcionamento = agenda_config_dict.get("dias_funcionamento") if isinstance(agenda_config_dict, dict) else None
+    horario_inicio = agenda_config_dict.get("horario_inicio") if isinstance(agenda_config_dict, dict) else None
+    horario_fim = agenda_config_dict.get("horario_fim") if isinstance(agenda_config_dict, dict) else None
+
+    if isinstance(dias_funcionamento, list):
+        dias_funcionamento = ", ".join(str(d).strip() for d in dias_funcionamento if str(d).strip())
+    dias_funcionamento = str(dias_funcionamento or "não informado")
+    horario_inicio = str(horario_inicio or "não informado")
+    horario_fim = str(horario_fim or "não informado")
+
+    agora_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    dias_semana = [
+        "segunda-feira",
+        "terça-feira",
+        "quarta-feira",
+        "quinta-feira",
+        "sexta-feira",
+        "sábado",
+        "domingo",
+    ]
+    dia_semana = dias_semana[agora_br.weekday()]
+    data_hora_atual = agora_br.strftime("%d/%m/%Y às %H:%M")
+
+    prompt_sistema = (
+        "Você é o especialista em horários da empresa. "
+        f"Hoje é {dia_semana}, {data_hora_atual}. "
+        f"Os horários de funcionamento configurados são: Dias: {dias_funcionamento}, "
+        f"Abertura: {horario_inicio}, Fechamento: {horario_fim}. "
+        "O cliente fez uma pergunta sobre o funcionamento. "
+        "Responda de forma direta e cordial se estamos abertos agora, "
+        "que horas fechamos ou que horas abrimos amanhã, dependendo do que ele perguntou."
+    )
+
+    try:
+        llm = await get_llm(empresa_id)
+        resposta = await llm.ainvoke([("system", prompt_sistema), ("user", ultima_mensagem)])
+        resposta_texto = str(getattr(resposta, "content", "") or "").strip()
+    except Exception as e:
+        logger.exception("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao invocar LLM: %s", e)
+        resposta_texto = "No momento não consegui consultar os horários de funcionamento."
+
+    respostas_existentes.append("Informação de Funcionamento: " + resposta_texto)
+    state["respostas_especialistas"] = respostas_existentes
+    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+    return state
+
+async def node_especialista_saudacao(state: AgentState):
+    print("[NODE ESPECIALISTA SAUDACAO] Gerando saudação inicial dedicada...")
+    import uuid
+
+    empresa_id = state.get("empresa_id")
+    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+
+    saudacao_base_empresa = ""
+    if empresa_id:
+        try:
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            async with AsyncSessionLocal() as session:
+                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa = result_empresa.scalars().first()
+                if empresa:
+                    saudacao_base_empresa = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
+        except Exception as e:
+            logger.error("[NODE ESPECIALISTA SAUDACAO] Falha ao carregar empresa %s: %s", empresa_id, e)
+
+    hora_atual = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M")
+    prompt_saudacao = (
+        f"Agora são {hora_atual}.\n"
+        "Sua única função é gerar a frase de saudação e recepção perfeita. "
+        "Analise a mensagem do usuário. Se for de manhã, diga Bom dia, à tarde Boa tarde, "
+        "à noite Boa noite. Espelhe a cordialidade do usuário. "
+        f"Integre a mensagem base da empresa: '{saudacao_base_empresa}'. "
+        "RETORNE APENAS A SAUDAÇÃO GERADA, sem tentar responder a dúvidas "
+        "(outros especialistas farão isso)."
+    )
+
+    try:
+        llm = await get_llm(empresa_id)
+        resposta = await llm.ainvoke([("system", prompt_saudacao), ("user", ultima_mensagem)])
+        resposta_texto = str(getattr(resposta, "content", "") or "").strip()
+    except Exception as e:
+        logger.exception("[NODE ESPECIALISTA SAUDACAO] Falha ao invocar LLM: %s", e)
+        resposta_texto = saudacao_base_empresa or "Olá! Seja bem-vindo(a)."
+
+    respostas_existentes = state.get("respostas_especialistas") or []
+    if not isinstance(respostas_existentes, list):
+        respostas_existentes = []
+    respostas_existentes.append("Saudação: " + resposta_texto)
+    state["respostas_especialistas"] = respostas_existentes
+    state["saudacao_processada"] = True
+    state["saudacao_pendente"] = False
     return state
 
 async def node_especialista_dinamico(state: AgentState):
@@ -1262,6 +1424,8 @@ workflow.add_node("node_crm", node_crm)
 workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
+workflow.add_node("especialista_funcionamento", node_especialista_funcionamento)
+workflow.add_node("node_especialista_saudacao", node_especialista_saudacao)
 workflow.add_node("node_especialista_tags", node_especialista_tags)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
 
@@ -1293,10 +1457,14 @@ workflow.add_conditional_edges(
 )
 
 def router_maestro(state: AgentState):
+    if bool(state.get("saudacao_pendente")):
+        return "node_especialista_saudacao"
     intencoes = state.get("intencao") or []
     especialistas_selecionados = state.get("especialistas_selecionados") or []
     if not intencoes and not especialistas_selecionados:
         return "node_atendente"
+    if "funcionamento" in intencoes:
+        return "especialista_funcionamento"
     if "tags_crm" in intencoes:
         return "node_especialista_tags"
     if especialistas_selecionados:
@@ -1309,10 +1477,15 @@ workflow.add_conditional_edges(
     router_maestro,
     {
         "node_atendente": "node_atendente",
+        "especialista_funcionamento": "especialista_funcionamento",
+        "node_especialista_saudacao": "node_especialista_saudacao",
         "node_especialista_tags": "node_especialista_tags",
         "node_especialista_dinamico": "node_especialista_dinamico",
     }
 )
+
+workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
+workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
 
 def router_pos_tags(state: AgentState):
     especialistas_selecionados = state.get("especialistas_selecionados") or []

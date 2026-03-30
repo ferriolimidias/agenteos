@@ -3,7 +3,7 @@ import io
 import csv
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 import pdfplumber
 import traceback
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -345,6 +345,7 @@ async def put_ia_config(
     db: AsyncSession = Depends(get_db),
     _: Usuario = Depends(require_ia_config_access),
 ):
+    # Deprecated para agenda: horários de funcionamento devem ser atualizados em PUT /empresas/{empresa_id}/agenda.
     result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = result.scalars().first()
     if not empresa:
@@ -2424,6 +2425,106 @@ async def exportar_leads_csv(empresa_id: str, db: AsyncSession = Depends(get_db)
     )
 
 
+class AgendaConfigPayload(BaseModel):
+    dias_funcionamento: List[str] = Field(default_factory=list)
+    horario_inicio: str
+    horario_fim: str
+
+
+class AgendaConfigUpdateRequest(BaseModel):
+    agenda_config: AgendaConfigPayload
+
+
+def _parse_horario_hhmm(valor: str, campo: str) -> time:
+    try:
+        return datetime.strptime(str(valor).strip(), "%H:%M").time()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Campo '{campo}' deve estar no formato HH:MM."
+        ) from exc
+
+
+def _serialize_agenda_config(config: AgendaConfiguracao | None) -> dict | None:
+    if not config:
+        return None
+    dias_obj = config.dias_funcionamento if isinstance(config.dias_funcionamento, dict) else {}
+    return {
+        "dias": dias_obj.get("dias", []),
+        "inicio": config.horario_inicio.strftime("%H:%M") if config.horario_inicio else "00:00",
+        "fim": config.horario_fim.strftime("%H:%M") if config.horario_fim else "23:59",
+        "duracao_minutos": config.duracao_slot_minutos
+    }
+
+
+@router.put("/{empresa_id}/agenda", status_code=status.HTTP_200_OK)
+async def atualizar_agenda(
+    empresa_id: str,
+    payload: AgendaConfigUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upsert da configuração da agenda da empresa.
+    Persistimos em colunas separadas (AgendaConfiguracao) para leitura consistente pelo agente.
+    """
+    try:
+        try:
+            emp_uuid = uuid.UUID(empresa_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido") from exc
+
+        dias_normalizados = [
+            str(dia).strip().lower()
+            for dia in (payload.agenda_config.dias_funcionamento or [])
+            if str(dia).strip()
+        ]
+        if not dias_normalizados:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dias_funcionamento deve conter ao menos um dia."
+            )
+
+        horario_inicio = _parse_horario_hhmm(payload.agenda_config.horario_inicio, "horario_inicio")
+        horario_fim = _parse_horario_hhmm(payload.agenda_config.horario_fim, "horario_fim")
+        if horario_inicio >= horario_fim:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="horario_inicio deve ser menor que horario_fim."
+            )
+
+        result_config = await db.execute(
+            select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == emp_uuid)
+        )
+        config = result_config.scalars().first()
+
+        if config:
+            config.dias_funcionamento = {"dias": dias_normalizados}
+            config.horario_inicio = horario_inicio
+            config.horario_fim = horario_fim
+        else:
+            config = AgendaConfiguracao(
+                empresa_id=emp_uuid,
+                dias_funcionamento={"dias": dias_normalizados},
+                horario_inicio=horario_inicio,
+                horario_fim=horario_fim,
+            )
+            db.add(config)
+
+        await db.commit()
+        await db.refresh(config)
+
+        return _serialize_agenda_config(config)
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao atualizar configuração da Agenda: {str(e)}"
+        )
+
+
 @router.get("/{empresa_id}/agenda")
 async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
     """
@@ -2446,14 +2547,7 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
         )
         agendamentos_db = result_agendamentos.scalars().all()
 
-        resposta_config = None
-        if config:
-            resposta_config = {
-                "dias": config.dias_funcionamento.get("dias", []),
-                "inicio": config.horario_inicio.strftime("%H:%M") if config.horario_inicio else "00:00",
-                "fim": config.horario_fim.strftime("%H:%M") if config.horario_fim else "23:59",
-                "duracao_minutos": config.duracao_slot_minutos
-            }
+        resposta_config = _serialize_agenda_config(config)
 
         lista_agendamentos = []
         for ag in agendamentos_db:

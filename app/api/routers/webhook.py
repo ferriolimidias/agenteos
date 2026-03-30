@@ -31,6 +31,37 @@ def _normalizar_telefone_remote_jid(remote_jid: str | None) -> str:
     return re.sub(r"\D", "", sem_sufixo)
 
 
+def _extrair_profile_pic_url(payload: dict | None, data: dict | None) -> str | None:
+    candidatos = []
+    for origem in (data or {}, payload or {}):
+        if not isinstance(origem, dict):
+            continue
+        candidatos.extend(
+            [
+                origem.get("profilePicUrl"),
+                origem.get("profilePictureUrl"),
+                origem.get("pictureUrl"),
+                origem.get("photoUrl"),
+            ]
+        )
+        for chave in ("contact", "sender", "key", "data", "message"):
+            nested = origem.get(chave)
+            if isinstance(nested, dict):
+                candidatos.extend(
+                    [
+                        nested.get("profilePicUrl"),
+                        nested.get("profilePictureUrl"),
+                        nested.get("pictureUrl"),
+                        nested.get("photoUrl"),
+                    ]
+                )
+
+    for candidato in candidatos:
+        if isinstance(candidato, str) and candidato.strip():
+            return candidato.strip()
+    return None
+
+
 def _extrair_rastreio_ads_e_limpar_texto(texto: str | None) -> tuple[str, str | None, str | None]:
     texto_original = str(texto or "")
     gclid_match = re.search(r"\|gclid:([^|]+)\|", texto_original, flags=re.IGNORECASE)
@@ -119,6 +150,7 @@ async def save_history_and_check_pause(
     media_url: str | None = None,
     gclid: str | None = None,
     fbclid: str | None = None,
+    profile_pic_url: str | None = None,
 ) -> bool:
     should_process = True
     async with AsyncSessionLocal() as session:
@@ -131,114 +163,104 @@ async def save_history_and_check_pause(
             select(CRMLead).where(CRMLead.empresa_id == empresa_uuid, CRMLead.telefone_contato == telefone)
         )
         lead = result.scalars().first()
-        
-        if lead:
-            if not from_me:
-                if gclid:
-                    lead.gclid = gclid
-                if fbclid:
-                    lead.fbclid = fbclid
+        nome_contato_limpo = str(nome_contato or "").strip()
+        nome_fallback = nome_contato_limpo or telefone or "Usuário (Auto)"
+        profile_pic_limpa = str(profile_pic_url or "").strip() or None
+        agora = datetime.utcnow()
 
-            nome_contato_limpo = str(nome_contato or "").strip()
-            nome_atual = str(lead.nome_contato or "").strip()
-            if (
-                not from_me
-                and nome_contato_limpo
-                and (not nome_atual or nome_atual == "Usuário (Auto)")
-            ):
-                lead.nome_contato = nome_contato_limpo
-
-            # Salvar no histórico
-            nova_msg = MensagemHistorico(
-                lead_id=lead.id,
-                conexao_id=conexao_uuid,
-                texto=texto,
-                tipo_mensagem=tipo_mensagem,
-                media_url=media_url,
-                from_me=from_me
+        # GET OR CREATE obrigatório do Lead
+        if not lead:
+            lead = CRMLead(
+                empresa_id=empresa_uuid,
+                nome_contato=nome_fallback,
+                telefone_contato=telefone,
+                foto_url=profile_pic_limpa,
+                foto_atualizada_em=agora if profile_pic_limpa else None,
+                gclid=gclid,
+                fbclid=fbclid,
             )
-            session.add(nova_msg)
-            
-            now = datetime.utcnow()
-            status_atendimento = str(lead.status_atendimento or "").strip().lower()
-
-            # Trava de segurança: lead concluido nao deve receber resposta automatica
-            # na primeira mensagem apos reabertura.
-            if status_atendimento == "concluido":
-                should_process = False
-                if not from_me:
-                    lead.status_atendimento = "aberto"
-            
-            if from_me:
-                # Humano respondeu, pausar bot por +1h
-                lead.bot_pausado_ate = now + timedelta(hours=1)
-                should_process = False
-            else:
-                if lead.bot_pausado_ate and lead.bot_pausado_ate > now:
-                    should_process = False
-                    
+            session.add(lead)
+            await session.flush()
             await session.commit()
-            mensagem_payload = {
-                "id": str(nova_msg.id),
-                "texto": str(nova_msg.texto or ""),
-                "from_me": bool(nova_msg.from_me),
-                "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
-                "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
-                "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
-            }
-            tipo_evento = "nova_mensagem_outbound" if from_me else "nova_mensagem_inbound"
-            await manager.broadcast_to_empresa(
-                empresa_id,
-                {
-                    "tipo_evento": tipo_evento,
-                    "telefone": telefone,
-                    "mensagem": mensagem_payload,
-                },
-            )
+            await session.refresh(lead)
         else:
-            # Caso o lead ainda não exista, cria lead mínimo para não perder rastreio/Histórico.
+            nome_atual = str(lead.nome_contato or "").strip()
+            nome_atual_digitos = re.sub(r"\D", "", nome_atual)
+            telefone_digitos = re.sub(r"\D", "", str(telefone or ""))
+            nome_eh_apenas_numero = bool(nome_atual_digitos) and bool(re.fullmatch(r"[\d\+\-\(\)\s]+", nome_atual))
+            nome_eh_numero_do_contato = bool(telefone_digitos) and (nome_atual_digitos == telefone_digitos)
+            nome_precisa_atualizar = (
+                not nome_atual
+                or nome_atual == "Usuário (Auto)"
+                or nome_eh_apenas_numero
+                or nome_eh_numero_do_contato
+            )
+
+            lead_alterado = False
+            if nome_contato_limpo and nome_precisa_atualizar:
+                lead.nome_contato = nome_contato_limpo
+                lead_alterado = True
+            if profile_pic_limpa and profile_pic_limpa != str(lead.foto_url or "").strip():
+                lead.foto_url = profile_pic_limpa
+                lead.foto_atualizada_em = agora
+                lead_alterado = True
             if not from_me:
-                nome_contato_limpo = str(nome_contato or "").strip() or "Usuário (Auto)"
-                novo_lead = CRMLead(
-                    empresa_id=empresa_uuid,
-                    nome_contato=nome_contato_limpo,
-                    telefone_contato=telefone,
-                    gclid=gclid,
-                    fbclid=fbclid,
-                )
-                session.add(novo_lead)
-                await session.flush()
-                nova_msg = MensagemHistorico(
-                    lead_id=novo_lead.id,
-                    conexao_id=conexao_uuid,
-                    texto=texto,
-                    tipo_mensagem=tipo_mensagem,
-                    media_url=media_url,
-                    from_me=from_me,
-                )
-                session.add(nova_msg)
+                if gclid and lead.gclid != gclid:
+                    lead.gclid = gclid
+                    lead_alterado = True
+                if fbclid and lead.fbclid != fbclid:
+                    lead.fbclid = fbclid
+                    lead_alterado = True
+            if lead_alterado:
                 await session.commit()
 
-                mensagem_payload = {
-                    "id": str(nova_msg.id),
-                    "texto": str(nova_msg.texto or ""),
-                    "from_me": bool(nova_msg.from_me),
-                    "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
-                    "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
-                    "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
-                }
-                await manager.broadcast_to_empresa(
-                    empresa_id,
-                    {
-                        "tipo_evento": "nova_mensagem_inbound",
-                        "telefone": telefone,
-                        "mensagem": mensagem_payload,
-                    },
-                )
+        # Salvar no histórico (sempre após garantir que o lead existe)
+        nova_msg = MensagemHistorico(
+            lead_id=lead.id,
+            conexao_id=conexao_uuid,
+            texto=texto,
+            tipo_mensagem=tipo_mensagem,
+            media_url=media_url,
+            from_me=from_me
+        )
+        session.add(nova_msg)
+        
+        now = datetime.utcnow()
+        status_atendimento = str(lead.status_atendimento or "").strip().lower()
 
-            # Caso o lead ainda não exista e mensagem seja outbound, não processar bot.
-            if from_me:
+        # Trava de segurança: lead concluido nao deve receber resposta automatica
+        # na primeira mensagem apos reabertura.
+        if status_atendimento == "concluido":
+            should_process = False
+            if not from_me:
+                lead.status_atendimento = "aberto"
+        
+        if from_me:
+            # Humano respondeu, pausar bot por +1h
+            lead.bot_pausado_ate = now + timedelta(hours=1)
+            should_process = False
+        else:
+            if lead.bot_pausado_ate and lead.bot_pausado_ate > now:
                 should_process = False
+                
+        await session.commit()
+        mensagem_payload = {
+            "id": str(nova_msg.id),
+            "texto": str(nova_msg.texto or ""),
+            "from_me": bool(nova_msg.from_me),
+            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+            "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+        }
+        tipo_evento = "nova_mensagem_outbound" if from_me else "nova_mensagem_inbound"
+        await manager.broadcast_to_empresa(
+            empresa_id,
+            {
+                "tipo_evento": tipo_evento,
+                "telefone": telefone,
+                "mensagem": mensagem_payload,
+            },
+        )
                 
     return should_process
 
@@ -278,6 +300,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         key = data.get("key", {}) or {}
         message = data.get("message", {}) or {}
         push_name = str(data.get("pushName") or payload.get("pushName") or "").strip() or None
+        profile_pic_url = _extrair_profile_pic_url(payload, data)
         instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
         print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
 
@@ -335,6 +358,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         fromMe,
                         conexao_id,
                         nome_contato=push_name,
+                        profile_pic_url=profile_pic_url,
                      )
                      if should_proc:
                          msg = StandardMessage(
@@ -360,6 +384,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         nome_contato=push_name,
                         tipo_mensagem="audio",
                         media_url=None,
+                        profile_pic_url=profile_pic_url,
                      )
                      texto_transcrito = "[Áudio não pôde ser baixado]"
                  else:
@@ -372,6 +397,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         nome_contato=push_name,
                         tipo_mensagem="audio",
                         media_url=base64_data,
+                        profile_pic_url=profile_pic_url,
                      )
                      try:
                          if "," in base64_data:
@@ -403,6 +429,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                     fromMe,
                     conexao_id,
                     nome_contato=push_name,
+                    profile_pic_url=profile_pic_url,
                  )
                  if should_proc:
                      msg = StandardMessage(
@@ -440,6 +467,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             media_url=media_base64,
             gclid=gclid,
             fbclid=fbclid,
+            profile_pic_url=profile_pic_url,
         )
         
         if should_process:

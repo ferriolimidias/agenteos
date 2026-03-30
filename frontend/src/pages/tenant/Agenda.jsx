@@ -1,11 +1,31 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
-import { Calendar, Clock, Video, User, AlertCircle, CalendarDays } from "lucide-react";
+import { Calendar, Clock, Video, User, AlertCircle, CalendarDays, CheckCircle2, X } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+
+const DIAS_SEMANA = [
+  { value: "seg", label: "Segunda" },
+  { value: "ter", label: "Terça" },
+  { value: "qua", label: "Quarta" },
+  { value: "qui", label: "Quinta" },
+  { value: "sex", label: "Sexta" },
+  { value: "sab", label: "Sábado" },
+  { value: "dom", label: "Domingo" },
+];
+
+const DEFAULT_EDIT_DATA = {
+  inicio: "08:00",
+  fim: "18:00",
+  dias: ["seg", "ter", "qua", "qui", "sex"],
+};
 
 export default function Agenda() {
   const [data, setData] = useState({ config: null, agendamentos: [] });
   const [loading, setLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState(DEFAULT_EDIT_DATA);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [toast, setToast] = useState(null);
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
@@ -27,9 +47,79 @@ export default function Agenda() {
     // eslint-disable-next-line
   }, [empresaId]);
 
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
   if (!user) return <div className="p-8 text-center text-gray-500">Faça login novamente.</div>;
 
   const { config, agendamentos } = data;
+
+  const normalizeTime = (value, fallback) => {
+    if (!value) return fallback;
+    const [hour = "", minute = ""] = String(value).split(":");
+    if (!hour || !minute) return fallback;
+    return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+  };
+
+  const openEditModal = () => {
+    const nextData = {
+      inicio: normalizeTime(config?.inicio, DEFAULT_EDIT_DATA.inicio),
+      fim: normalizeTime(config?.fim, DEFAULT_EDIT_DATA.fim),
+      dias: Array.isArray(config?.dias) && config.dias.length > 0 ? config.dias : DEFAULT_EDIT_DATA.dias,
+    };
+    setEditData(nextData);
+    setIsEditing(true);
+  };
+
+  const handleToggleDay = (dia) => {
+    setEditData((prev) => {
+      const hasDay = prev.dias.includes(dia);
+      return {
+        ...prev,
+        dias: hasDay ? prev.dias.filter((item) => item !== dia) : [...prev.dias, dia],
+      };
+    });
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!empresaId) return;
+
+    if (editData.dias.length === 0) {
+      setToast({ type: "error", message: "Selecione ao menos um dia de funcionamento." });
+      return;
+    }
+
+    if (editData.inicio >= editData.fim) {
+      setToast({ type: "error", message: "O horário de início deve ser menor que o horário de fim." });
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      await api.put(`/empresas/${empresaId}/agenda`, {
+        agenda_config: {
+          dias_funcionamento: editData.dias,
+          horario_inicio: editData.inicio,
+          horario_fim: editData.fim,
+        },
+      });
+      await fetchAgenda();
+      setIsEditing(false);
+      setToast({ type: "success", message: "Preferências da agenda salvas com sucesso." });
+    } catch (err) {
+      console.error("Erro ao salvar preferências da agenda:", err);
+      setToast({
+        type: "error",
+        message: err?.response?.data?.detail || "Não foi possível salvar as preferências da agenda.",
+      });
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const formatTime = (isoString) => {
     if (!isoString) return "";
@@ -43,6 +133,31 @@ export default function Agenda() {
 
   return (
     <div className="space-y-6">
+      {toast ? (
+        <div className="fixed right-6 top-6 z-[90]">
+          <div
+            className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
+              toast.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`rounded-full p-1 ${toast.type === "success" ? "bg-emerald-100" : "bg-red-100"}`}>
+                {toast.type === "success" ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{toast.type === "success" ? "Tudo certo" : "Atenção"}</p>
+                <p className="mt-0.5 text-sm">{toast.message}</p>
+              </div>
+              <button type="button" onClick={() => setToast(null)} className="rounded-lg p-1 opacity-70 hover:opacity-100">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div>
         <h1 className="text-3xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
           <Calendar className="text-blue-600" size={32} />
@@ -108,7 +223,11 @@ export default function Agenda() {
               </div>
             )}
             
-            <button className="w-full mt-6 text-sm text-blue-600 font-medium bg-blue-50 py-2.5 rounded-lg hover:bg-blue-100 transition-colors">
+            <button
+              type="button"
+              onClick={openEditModal}
+              className="w-full mt-6 text-sm text-blue-600 font-medium bg-blue-50 py-2.5 rounded-lg hover:bg-blue-100 transition-colors"
+            >
               Editar Preferências
             </button>
           </div>
@@ -196,6 +315,96 @@ export default function Agenda() {
         </div>
 
       </div>
+
+      {isEditing ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/60 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl">
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900">Editar Preferências da Agenda</h3>
+                <p className="mt-1 text-sm text-gray-500">Defina os dias e horários em que sua empresa atende.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditing(false)}
+                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSave} className="space-y-5">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Horário de Início
+                  <input
+                    type="time"
+                    value={editData.inicio}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, inicio: e.target.value }))}
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    required
+                  />
+                </label>
+
+                <label className="text-sm font-medium text-gray-700">
+                  Horário de Fim
+                  <input
+                    type="time"
+                    value={editData.fim}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, fim: e.target.value }))}
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    required
+                  />
+                </label>
+              </div>
+
+              <div>
+                <span className="block text-sm font-medium text-gray-700 mb-2">Dias de Funcionamento</span>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {DIAS_SEMANA.map((dia) => {
+                    const checked = editData.dias.includes(dia.value);
+                    return (
+                      <label
+                        key={dia.value}
+                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
+                          checked
+                            ? "border-blue-300 bg-blue-50 text-blue-700"
+                            : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => handleToggleDay(dia.value)}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        {dia.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {savingEdit ? "Salvando..." : "Salvar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
