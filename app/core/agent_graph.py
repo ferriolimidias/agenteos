@@ -664,20 +664,13 @@ async def node_atendente(state: AgentState):
             blocos.append(f"Estratégia Comercial/Vendas: {estrategia_prompt}")
 
         formatacao_base = (
-            "DIRETRIZES DE DESIGN DE MENSAGEM (WHATSAPP):\n"
-            "- Use Emojis Temáticos: Use emojis no início de cada parágrafo ou tópico para facilitar a leitura "
-            "(ex: 🚀 para cursos, 💰 para preços, ✅ para benefícios).\n"
-            "- Estrutura de Lista: Sempre que listar módulos, bônus ou cursos, use uma lista com marcadores "
-            "(ex: '•' ou '✅').\n"
-            "- Negrito Tático: Use *asteriscos* para destacar *Nomes de Cursos*, *Valores Monetários* e o "
-            "*Call to Action* final.\n"
-            "- Hierarquia Visual:\n"
-            "  1. Comece com uma saudação empática ou uma frase de transição.\n"
-            "  2. Apresente a informação principal em blocos curtos.\n"
-            "  3. Separe assuntos diferentes (ex: descrição de curso vs. preço) usando uma quebra de linha "
-            "dupla (\\n\\n).\n"
-            "- Mensagem Final: O Call to Action (CTA) deve ser uma linha isolada no final, precedida de um "
-            "emoji de convite (ex: 📅 ou ✨)."
+            "DIRETRIZES DE ESTRUTURAÇÃO VISUAL E RENDERIZAÇÃO (WHATSAPP):\n"
+            "- Separação de Balões: Sempre que mudar de um bloco de assunto para outro, use obrigatoriamente duas "
+            "quebras de linha (\\n\\n). O sistema usa isso para separar as mensagens.\n"
+            "- Respiro Visual: Nunca gere um parágrafo com mais de 3 linhas corridas.\n"
+            "- Listas: Utilize o caractere '•' para itens de listas em vez de travessões.\n"
+            "- Ênfase Visual: Use *negrito* apenas para destacar valores monetários e nomes de serviços cruciais.\n"
+            "- Emojis: Aplique emojis no início de tópicos novos para facilitar a escaneabilidade."
         )
         blocos.append(formatacao_base)
 
