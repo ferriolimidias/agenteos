@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
-import { Calendar, Clock, Video, User, AlertCircle, CalendarDays, CheckCircle2, X } from "lucide-react";
+import { Calendar, Clock, Video, User, AlertCircle, CalendarDays, CheckCircle2, X, Plus, Trash2 } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 
 const DIAS_SEMANA = [
@@ -14,9 +14,16 @@ const DIAS_SEMANA = [
 ];
 
 const DEFAULT_EDIT_DATA = {
-  inicio: "08:00",
-  fim: "18:00",
-  dias: ["seg", "ter", "qua", "qui", "sex"],
+  dias_funcionamento: {
+    seg: { aberto: true, inicio: "08:00", fim: "18:00" },
+    ter: { aberto: true, inicio: "08:00", fim: "18:00" },
+    qua: { aberto: true, inicio: "08:00", fim: "18:00" },
+    qui: { aberto: true, inicio: "08:00", fim: "18:00" },
+    sex: { aberto: true, inicio: "08:00", fim: "18:00" },
+    sab: { aberto: true, inicio: "08:00", fim: "12:00" },
+    dom: { aberto: false, inicio: null, fim: null },
+  },
+  excecoes: [],
 };
 
 export default function Agenda() {
@@ -56,6 +63,13 @@ export default function Agenda() {
   if (!user) return <div className="p-8 text-center text-gray-500">Faça login novamente.</div>;
 
   const { config, agendamentos } = data;
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  const proximosFeriados = Array.isArray(config?.excecoes)
+    ? [...config.excecoes]
+      .filter((item) => item?.data && item.data >= hojeISO)
+      .sort((a, b) => String(a.data).localeCompare(String(b.data)))
+      .slice(0, 5)
+    : [];
 
   const normalizeTime = (value, fallback) => {
     if (!value) return fallback;
@@ -64,11 +78,46 @@ export default function Agenda() {
     return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
   };
 
+  const normalizeAgendaConfig = (rawAgenda) => {
+    const normalized = { ...DEFAULT_EDIT_DATA.dias_funcionamento };
+    if (!rawAgenda || typeof rawAgenda !== "object") return normalized;
+
+    DIAS_SEMANA.forEach(({ value }) => {
+      const item = rawAgenda[value];
+      if (!item || typeof item !== "object") return;
+      const aberto = Boolean(item.aberto);
+      if (!aberto) {
+        normalized[value] = { aberto: false, inicio: null, fim: null };
+        return;
+      }
+      normalized[value] = {
+        aberto: true,
+        inicio: normalizeTime(item.inicio, "08:00"),
+        fim: normalizeTime(item.fim, "18:00"),
+      };
+    });
+
+    return normalized;
+  };
+
+  const normalizeExcecoes = (rawExcecoes) => {
+    if (!Array.isArray(rawExcecoes)) return [];
+    return rawExcecoes.map((item) => {
+      const aberto = Boolean(item?.aberto);
+      return {
+        data: String(item?.data || ""),
+        titulo: String(item?.titulo || ""),
+        aberto,
+        inicio: aberto ? normalizeTime(item?.inicio, "08:00") : null,
+        fim: aberto ? normalizeTime(item?.fim, "18:00") : null,
+      };
+    });
+  };
+
   const openEditModal = () => {
     const nextData = {
-      inicio: normalizeTime(config?.inicio, DEFAULT_EDIT_DATA.inicio),
-      fim: normalizeTime(config?.fim, DEFAULT_EDIT_DATA.fim),
-      dias: Array.isArray(config?.dias) && config.dias.length > 0 ? config.dias : DEFAULT_EDIT_DATA.dias,
+      dias_funcionamento: normalizeAgendaConfig(config?.dias_funcionamento),
+      excecoes: normalizeExcecoes(config?.excecoes),
     };
     setEditData(nextData);
     setIsEditing(true);
@@ -76,25 +125,144 @@ export default function Agenda() {
 
   const handleToggleDay = (dia) => {
     setEditData((prev) => {
-      const hasDay = prev.dias.includes(dia);
+      const current = prev.dias_funcionamento[dia];
+      const isOpen = Boolean(current?.aberto);
       return {
         ...prev,
-        dias: hasDay ? prev.dias.filter((item) => item !== dia) : [...prev.dias, dia],
+        dias_funcionamento: {
+          ...prev.dias_funcionamento,
+          [dia]: isOpen
+            ? { aberto: false, inicio: null, fim: null }
+            : {
+              aberto: true,
+              inicio: normalizeTime(current?.inicio, "08:00"),
+              fim: normalizeTime(current?.fim, "18:00"),
+            },
+        },
       };
     });
+  };
+
+  const handleDayTimeChange = (dia, campo, valor) => {
+    setEditData((prev) => ({
+      ...prev,
+      dias_funcionamento: {
+        ...prev.dias_funcionamento,
+        [dia]: {
+          ...prev.dias_funcionamento[dia],
+          [campo]: valor,
+        },
+      },
+    }));
+  };
+
+  const handleAddExcecao = () => {
+    setEditData((prev) => ({
+      ...prev,
+      excecoes: [
+        ...(prev.excecoes || []),
+        { data: "", titulo: "", aberto: false, inicio: null, fim: null },
+      ],
+    }));
+  };
+
+  const handleRemoveExcecao = (index) => {
+    setEditData((prev) => ({
+      ...prev,
+      excecoes: (prev.excecoes || []).filter((_, idx) => idx !== index),
+    }));
+  };
+
+  const handleExcecaoChange = (index, campo, valor) => {
+    setEditData((prev) => ({
+      ...prev,
+      excecoes: (prev.excecoes || []).map((item, idx) => {
+        if (idx !== index) return item;
+        return { ...item, [campo]: valor };
+      }),
+    }));
+  };
+
+  const handleExcecaoToggleAberto = (index) => {
+    setEditData((prev) => ({
+      ...prev,
+      excecoes: (prev.excecoes || []).map((item, idx) => {
+        if (idx !== index) return item;
+        const aberto = !item.aberto;
+        return {
+          ...item,
+          aberto,
+          inicio: aberto ? normalizeTime(item.inicio, "08:00") : null,
+          fim: aberto ? normalizeTime(item.fim, "18:00") : null,
+        };
+      }),
+    }));
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
     if (!empresaId) return;
 
-    if (editData.dias.length === 0) {
+    const agendaConfig = DIAS_SEMANA.reduce((acc, { value }) => {
+      const current = editData.dias_funcionamento?.[value];
+      const aberto = Boolean(current?.aberto);
+      acc[value] = aberto
+        ? {
+          aberto: true,
+          inicio: normalizeTime(current?.inicio, "08:00"),
+          fim: normalizeTime(current?.fim, "18:00"),
+        }
+        : {
+          aberto: false,
+          inicio: null,
+          fim: null,
+        };
+      return acc;
+    }, {});
+
+    const diasAbertos = Object.values(agendaConfig).filter((dia) => dia.aberto);
+    if (diasAbertos.length === 0) {
       setToast({ type: "error", message: "Selecione ao menos um dia de funcionamento." });
       return;
     }
 
-    if (editData.inicio >= editData.fim) {
-      setToast({ type: "error", message: "O horário de início deve ser menor que o horário de fim." });
+    const diaInvalido = DIAS_SEMANA.find(({ value, label }) => {
+      const item = agendaConfig[value];
+      if (!item.aberto) return false;
+      if (!item.inicio || !item.fim) return label;
+      if (item.inicio >= item.fim) return label;
+      return false;
+    });
+    if (diaInvalido) {
+      setToast({
+        type: "error",
+        message: `O horário de "${diaInvalido.label}" está inválido (início deve ser menor que fim).`,
+      });
+      return;
+    }
+
+    const excecoesNormalizadas = (editData.excecoes || []).map((item) => {
+      const aberto = Boolean(item?.aberto);
+      return {
+        data: String(item?.data || ""),
+        titulo: String(item?.titulo || "").trim(),
+        aberto,
+        inicio: aberto ? normalizeTime(item?.inicio, "08:00") : null,
+        fim: aberto ? normalizeTime(item?.fim, "18:00") : null,
+      };
+    });
+
+    const excecaoInvalida = excecoesNormalizadas.find((item) => {
+      if (!item.data || !item.titulo) return true;
+      if (!item.aberto) return false;
+      if (!item.inicio || !item.fim) return true;
+      return item.inicio >= item.fim;
+    });
+    if (excecaoInvalida) {
+      setToast({
+        type: "error",
+        message: "Revise as exceções: data e título são obrigatórios e, quando aberto, o início deve ser menor que o fim.",
+      });
       return;
     }
 
@@ -102,9 +270,8 @@ export default function Agenda() {
     try {
       await api.put(`/empresas/${empresaId}/agenda`, {
         agenda_config: {
-          dias_funcionamento: editData.dias,
-          horario_inicio: editData.inicio,
-          horario_fim: editData.fim,
+          dias_funcionamento: agendaConfig,
+          excecoes: excecoesNormalizadas,
         },
       });
       await fetchAgenda();
@@ -189,36 +356,52 @@ export default function Agenda() {
             ) : (
               <div className="space-y-4">
                 <div>
-                  <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Dias Ativos</span>
-                  <div className="flex flex-wrap gap-2">
-                    {['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'].map(dia => (
-                      <span 
-                        key={dia} 
-                        className={`px-3 py-1 rounded-full text-xs font-medium uppercase ${config.dias?.includes(dia) ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}
-                      >
-                        {dia}
-                      </span>
-                    ))}
+                  <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Horários por Dia</span>
+                  <div className="space-y-1.5">
+                    {DIAS_SEMANA.map(({ value, label }) => {
+                      const diaConfig = config?.dias_funcionamento?.[value];
+                      const aberto = Boolean(diaConfig?.aberto);
+                      return (
+                        <div key={value} className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
+                          <span className="font-medium text-gray-700">{label}</span>
+                          <span className={aberto ? "text-blue-700 font-medium" : "text-gray-400"}>
+                            {aberto ? `${diaConfig.inicio} - ${diaConfig.fim}` : "Fechado"}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-50">
-                  <div>
-                    <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Início</span>
-                    <span className="text-lg font-medium text-gray-900">{config.inicio}</span>
-                  </div>
-                  <div>
-                    <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Fim</span>
-                    <span className="text-lg font-medium text-gray-900">{config.fim}</span>
-                  </div>
-                </div>
-                
+
                 <div className="pt-4 border-t border-gray-50">
                   <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Duração Padrão</span>
                   <span className="text-sm font-medium text-gray-900 bg-gray-100 px-3 py-1.5 rounded-lg inline-flex items-center gap-2">
                     <Clock size={14} className="text-gray-500"/>
                     {config.duracao_minutos} minutos
                   </span>
+                </div>
+
+                <div className="pt-4 border-t border-gray-50">
+                  <span className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Próximos Feriados</span>
+                  {proximosFeriados.length === 0 ? (
+                    <p className="text-sm text-gray-400">Nenhuma data especial futura cadastrada.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {proximosFeriados.map((item, idx) => (
+                        <div key={`${item.data}-${idx}`} className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
+                          <div>
+                            <p className="font-medium text-gray-800">{item.titulo}</p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(`${item.data}T00:00:00`).toLocaleDateString("pt-BR")}
+                            </p>
+                          </div>
+                          <span className={item.aberto ? "text-blue-700 font-medium" : "text-gray-400"}>
+                            {item.aberto ? `${item.inicio} - ${item.fim}` : "Fechado"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -318,7 +501,7 @@ export default function Agenda() {
 
       {isEditing ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/60 px-4">
-          <div className="w-full max-w-lg rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-3xl rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-xl font-semibold text-gray-900">Editar Preferências da Agenda</h3>
@@ -334,55 +517,129 @@ export default function Agenda() {
             </div>
 
             <form onSubmit={handleSave} className="space-y-5">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="text-sm font-medium text-gray-700">
-                  Horário de Início
-                  <input
-                    type="time"
-                    value={editData.inicio}
-                    onChange={(e) => setEditData((prev) => ({ ...prev, inicio: e.target.value }))}
-                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    required
-                  />
-                </label>
-
-                <label className="text-sm font-medium text-gray-700">
-                  Horário de Fim
-                  <input
-                    type="time"
-                    value={editData.fim}
-                    onChange={(e) => setEditData((prev) => ({ ...prev, fim: e.target.value }))}
-                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    required
-                  />
-                </label>
-              </div>
-
               <div>
-                <span className="block text-sm font-medium text-gray-700 mb-2">Dias de Funcionamento</span>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <span className="block text-sm font-medium text-gray-700 mb-2">Dias e Horários de Funcionamento</span>
+                <div className="space-y-2">
                   {DIAS_SEMANA.map((dia) => {
-                    const checked = editData.dias.includes(dia.value);
+                    const dayData = editData.dias_funcionamento?.[dia.value] || { aberto: false, inicio: null, fim: null };
+                    const checked = Boolean(dayData.aberto);
                     return (
-                      <label
-                        key={dia.value}
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
-                          checked
-                            ? "border-blue-300 bg-blue-50 text-blue-700"
-                            : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => handleToggleDay(dia.value)}
-                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        {dia.label}
-                      </label>
+                      <div key={dia.value} className="rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => handleToggleDay(dia.value)}
+                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            {dia.label}
+                          </label>
+                          <span className={`text-xs font-medium ${checked ? "text-blue-700" : "text-gray-400"}`}>
+                            {checked ? "Aberto" : "Fechado"}
+                          </span>
+                        </div>
+
+                        {checked ? (
+                          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <input
+                              type="time"
+                              value={dayData.inicio || "08:00"}
+                              onChange={(e) => handleDayTimeChange(dia.value, "inicio", e.target.value)}
+                              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              required
+                            />
+                            <input
+                              type="time"
+                              value={dayData.fim || "18:00"}
+                              onChange={(e) => handleDayTimeChange(dia.value, "fim", e.target.value)}
+                              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              required
+                            />
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
+              </div>
+
+              <div className="pt-2 border-t border-gray-100">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="block text-sm font-medium text-gray-700">Feriados e Datas Especiais</span>
+                  <button
+                    type="button"
+                    onClick={handleAddExcecao}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    <Plus size={14} />
+                    Adicionar data
+                  </button>
+                </div>
+
+                {editData.excecoes?.length ? (
+                  <div className="space-y-3">
+                    {editData.excecoes.map((item, index) => (
+                      <div key={`excecao-${index}`} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                          <input
+                            type="date"
+                            value={item.data}
+                            onChange={(e) => handleExcecaoChange(index, "data", e.target.value)}
+                            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          />
+                          <input
+                            type="text"
+                            value={item.titulo}
+                            placeholder="Título do feriado"
+                            onChange={(e) => handleExcecaoChange(index, "titulo", e.target.value)}
+                            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 md:col-span-2"
+                          />
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(item.aberto)}
+                              onChange={() => handleExcecaoToggleAberto(index)}
+                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            Aberto?
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveExcecao(index)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 size={13} />
+                            Remover
+                          </button>
+                        </div>
+
+                        {item.aberto ? (
+                          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <input
+                              type="time"
+                              value={item.inicio || "08:00"}
+                              onChange={(e) => handleExcecaoChange(index, "inicio", e.target.value)}
+                              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            />
+                            <input
+                              type="time"
+                              value={item.fim || "18:00"}
+                              onChange={(e) => handleExcecaoChange(index, "fim", e.target.value)}
+                              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400">Nenhuma exceção cadastrada.</p>
+                )}
               </div>
 
               <div className="pt-2 flex justify-end gap-2">

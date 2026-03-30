@@ -10,7 +10,7 @@ from app.schemas import StandardMessage
 from app.api.utils import handle_debouncer
 from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal
-from db.models import Empresa, CRMLead, MensagemHistorico, Conexao, TipoConexao
+from db.models import Empresa, CRMLead, CRMFunil, CRMEtapa, MensagemHistorico, Conexao, TipoConexao
 from sqlalchemy import func, select
 
 router = APIRouter(prefix="/webhook", tags=["Webhook"])
@@ -170,10 +170,18 @@ async def save_history_and_check_pause(
 
         # GET OR CREATE obrigatório do Lead
         if not lead:
+            result_etapa = await session.execute(
+                select(CRMEtapa.id)
+                .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                .where(CRMFunil.empresa_id == empresa_uuid)
+                .order_by(CRMEtapa.ordem.asc())
+            )
+            primeira_etapa_id = result_etapa.scalars().first()
             lead = CRMLead(
                 empresa_id=empresa_uuid,
                 nome_contato=nome_fallback,
                 telefone_contato=telefone,
+                etapa_id=primeira_etapa_id,
                 foto_url=profile_pic_limpa,
                 foto_atualizada_em=agora if profile_pic_limpa else None,
                 gclid=gclid,
@@ -210,6 +218,17 @@ async def save_history_and_check_pause(
                     lead_alterado = True
                 if fbclid and lead.fbclid != fbclid:
                     lead.fbclid = fbclid
+                    lead_alterado = True
+            if not lead.etapa_id:
+                result_etapa = await session.execute(
+                    select(CRMEtapa.id)
+                    .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                    .where(CRMFunil.empresa_id == empresa_uuid)
+                    .order_by(CRMEtapa.ordem.asc())
+                )
+                primeira_etapa_id = result_etapa.scalars().first()
+                if primeira_etapa_id:
+                    lead.etapa_id = primeira_etapa_id
                     lead_alterado = True
             if lead_alterado:
                 await session.commit()

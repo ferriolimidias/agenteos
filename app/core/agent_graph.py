@@ -899,50 +899,37 @@ async def node_especialista_funcionamento(state: AgentState):
             empresa_obj = None
 
     agenda_config = getattr(empresa_obj, "agenda_config", None) if empresa_obj else None
-    agenda_config_dict = None
+    dias_funcionamento_raw = None
+    excecoes_raw = []
+    horario_inicio_legacy = None
+    horario_fim_legacy = None
 
     if isinstance(agenda_config, str):
         try:
-            agenda_config_dict = json.loads(agenda_config)
+            agenda_config = json.loads(agenda_config)
         except Exception:
-            agenda_config_dict = None
-    elif isinstance(agenda_config, dict):
-        agenda_config_dict = agenda_config
+            agenda_config = None
+
+    if isinstance(agenda_config, dict):
+        dias_funcionamento_raw = agenda_config.get("dias_funcionamento", agenda_config)
+        excecoes_raw = agenda_config.get("excecoes", [])
+        horario_inicio_legacy = agenda_config.get("horario_inicio")
+        horario_fim_legacy = agenda_config.get("horario_fim")
     elif agenda_config is not None:
-        dias_obj = getattr(agenda_config, "dias_funcionamento", None)
+        dias_funcionamento_raw = getattr(agenda_config, "dias_funcionamento", None)
+        excecoes_raw = getattr(agenda_config, "excecoes", [])
         horario_inicio_obj = getattr(agenda_config, "horario_inicio", None)
         horario_fim_obj = getattr(agenda_config, "horario_fim", None)
-        dias_normalizados = dias_obj.get("dias", []) if isinstance(dias_obj, dict) else []
-        agenda_config_dict = {
-            "dias_funcionamento": dias_normalizados,
-            "horario_inicio": horario_inicio_obj.strftime("%H:%M") if horario_inicio_obj else None,
-            "horario_fim": horario_fim_obj.strftime("%H:%M") if horario_fim_obj else None,
-        }
+        horario_inicio_legacy = horario_inicio_obj.strftime("%H:%M") if horario_inicio_obj else None
+        horario_fim_legacy = horario_fim_obj.strftime("%H:%M") if horario_fim_obj else None
 
     respostas_existentes = state.get("respostas_especialistas") or []
     if not isinstance(respostas_existentes, list):
         respostas_existentes = []
 
-    if not agenda_config_dict:
-        respostas_existentes.append(
-            "Informação de Funcionamento: Os horários de funcionamento não estão configurados no momento."
-        )
-        state["respostas_especialistas"] = respostas_existentes
-        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
-        return state
-
-    dias_funcionamento = agenda_config_dict.get("dias_funcionamento") if isinstance(agenda_config_dict, dict) else None
-    horario_inicio = agenda_config_dict.get("horario_inicio") if isinstance(agenda_config_dict, dict) else None
-    horario_fim = agenda_config_dict.get("horario_fim") if isinstance(agenda_config_dict, dict) else None
-
-    if isinstance(dias_funcionamento, list):
-        dias_funcionamento = ", ".join(str(d).strip() for d in dias_funcionamento if str(d).strip())
-    dias_funcionamento = str(dias_funcionamento or "não informado")
-    horario_inicio = str(horario_inicio or "não informado")
-    horario_fim = str(horario_fim or "não informado")
-
     agora_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
-    dias_semana = [
+    data_hoje_iso = agora_br.strftime("%Y-%m-%d")
+    dias_semana_extenso = [
         "segunda-feira",
         "terça-feira",
         "quarta-feira",
@@ -951,17 +938,107 @@ async def node_especialista_funcionamento(state: AgentState):
         "sábado",
         "domingo",
     ]
-    dia_semana = dias_semana[agora_br.weekday()]
+    dias_semana_curto = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
+    dia_semana = dias_semana_extenso[agora_br.weekday()]
+    dia_semana_curto = dias_semana_curto[agora_br.weekday()]
     data_hora_atual = agora_br.strftime("%d/%m/%Y às %H:%M")
+    hora_agora = agora_br.strftime("%H:%M")
+
+    # Prioridade para exceções (feriados/datas especiais) na data atual.
+    if isinstance(excecoes_raw, list):
+        excecao_hoje = next(
+            (
+                item for item in excecoes_raw
+                if isinstance(item, dict) and str(item.get("data", "")).strip() == data_hoje_iso
+            ),
+            None
+        )
+        if excecao_hoje:
+            titulo = str(excecao_hoje.get("titulo") or "data especial").strip()
+            aberto_excecao = bool(excecao_hoje.get("aberto", False))
+            if not aberto_excecao:
+                resposta_excecao = f"Hoje é feriado ({titulo}) e a empresa está fechada."
+            else:
+                inicio_excecao = str(excecao_hoje.get("inicio") or "não informado")
+                fim_excecao = str(excecao_hoje.get("fim") or "não informado")
+                abertos_agora_excecao = bool(
+                    inicio_excecao != "não informado"
+                    and fim_excecao != "não informado"
+                    and inicio_excecao <= hora_agora <= fim_excecao
+                )
+                status_excecao = "Abertos" if abertos_agora_excecao else "Fechados"
+                resposta_excecao = (
+                    f"Hoje é {titulo} e temos um horário especial: das {inicio_excecao} às {fim_excecao}. "
+                    f"No momento estamos {status_excecao}."
+                )
+
+            respostas_existentes.append("Informação de Funcionamento: " + resposta_excecao)
+            state["respostas_especialistas"] = respostas_existentes
+            state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+            return state
+
+    if not isinstance(dias_funcionamento_raw, dict):
+        respostas_existentes.append(
+            "Informação de Funcionamento: Os horários de funcionamento não estão configurados no momento."
+        )
+        state["respostas_especialistas"] = respostas_existentes
+        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+        return state
+
+    dias_normalizados: dict[str, dict[str, Any]] = {
+        "seg": {"aberto": False, "inicio": None, "fim": None},
+        "ter": {"aberto": False, "inicio": None, "fim": None},
+        "qua": {"aberto": False, "inicio": None, "fim": None},
+        "qui": {"aberto": False, "inicio": None, "fim": None},
+        "sex": {"aberto": False, "inicio": None, "fim": None},
+        "sab": {"aberto": False, "inicio": None, "fim": None},
+        "dom": {"aberto": False, "inicio": None, "fim": None},
+    }
+
+    # Compatibilidade com formato novo (mapa por dia) e legado ({"dias": [...]})
+    if "dias" in dias_funcionamento_raw and isinstance(dias_funcionamento_raw.get("dias"), list):
+        inicio_legado = str(horario_inicio_legacy or "08:00")
+        fim_legado = str(horario_fim_legacy or "18:00")
+        for dia_legado in dias_funcionamento_raw.get("dias", []):
+            dia_key = str(dia_legado).strip().lower()
+            if dia_key in dias_normalizados:
+                dias_normalizados[dia_key] = {"aberto": True, "inicio": inicio_legado, "fim": fim_legado}
+    else:
+        for dia_key in dias_normalizados.keys():
+            item = dias_funcionamento_raw.get(dia_key)
+            if not isinstance(item, dict):
+                continue
+            aberto = bool(item.get("aberto", False))
+            if not aberto:
+                dias_normalizados[dia_key] = {"aberto": False, "inicio": None, "fim": None}
+                continue
+            inicio = item.get("inicio")
+            fim = item.get("fim")
+            if isinstance(inicio, str) and isinstance(fim, str):
+                dias_normalizados[dia_key] = {"aberto": True, "inicio": inicio, "fim": fim}
+
+    config_hoje = dias_normalizados.get(dia_semana_curto, {"aberto": False, "inicio": None, "fim": None})
+    aberto_hoje = bool(config_hoje.get("aberto"))
+    inicio_hoje = config_hoje.get("inicio")
+    fim_hoje = config_hoje.get("fim")
+
+    if not aberto_hoje:
+        frase_hoje = f"Hoje, {dia_semana}, não abrimos."
+        status_atual = "Fechados"
+    else:
+        inicio_hoje = str(inicio_hoje or "não informado")
+        fim_hoje = str(fim_hoje or "não informado")
+        abertos_agora = bool(inicio_hoje != "não informado" and fim_hoje != "não informado" and inicio_hoje <= hora_agora <= fim_hoje)
+        status_atual = "Abertos" if abertos_agora else "Fechados"
+        frase_hoje = f"Hoje, {dia_semana}, funcionamos das {inicio_hoje} às {fim_hoje}. No momento estamos {status_atual}."
 
     prompt_sistema = (
         "Você é o especialista em horários da empresa. "
         f"Hoje é {dia_semana}, {data_hora_atual}. "
-        f"Os horários de funcionamento configurados são: Dias: {dias_funcionamento}, "
-        f"Abertura: {horario_inicio}, Fechamento: {horario_fim}. "
-        "O cliente fez uma pergunta sobre o funcionamento. "
-        "Responda de forma direta e cordial se estamos abertos agora, "
-        "que horas fechamos ou que horas abrimos amanhã, dependendo do que ele perguntou."
+        f"Configuração de hoje ({dia_semana_curto}): {json.dumps(config_hoje, ensure_ascii=False)}. "
+        f"Frase-base obrigatória: {frase_hoje} "
+        "Sempre comece a resposta com essa frase-base (ou equivalente com os mesmos dados), "
+        "depois complemente de forma curta e cordial conforme a pergunta do cliente."
     )
 
     try:

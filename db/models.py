@@ -472,9 +472,11 @@ class AgendaConfiguracao(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False, unique=True)
-    dias_funcionamento = Column(JSONB, default={})  # ex: seg a sex
-    horario_inicio = Column(Time, nullable=False)
-    horario_fim = Column(Time, nullable=False)
+    dias_funcionamento = Column(JSONB, default={})  # mapa por dia (seg..dom) com aberto/inicio/fim
+    # Deprecated: mantidos para legado; a fonte de verdade passou a ser dias_funcionamento (JSONB).
+    horario_inicio = Column(Time, nullable=True)
+    horario_fim = Column(Time, nullable=True)
+    excecoes = Column(JSONB, default=list)
     duracao_slot_minutos = Column(Integer, nullable=False, default=30)
 
     empresa = relationship("Empresa", back_populates="agenda_config")

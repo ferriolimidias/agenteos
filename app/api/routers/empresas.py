@@ -3,7 +3,7 @@ import io
 import csv
 import json
 import uuid
-from datetime import datetime, time
+from datetime import datetime
 import pdfplumber
 import traceback
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2425,19 +2425,16 @@ async def exportar_leads_csv(empresa_id: str, db: AsyncSession = Depends(get_db)
     )
 
 
-class AgendaConfigPayload(BaseModel):
-    dias_funcionamento: List[str] = Field(default_factory=list)
-    horario_inicio: str
-    horario_fim: str
+DIAS_SEMANA_ORDENADOS = ("seg", "ter", "qua", "qui", "sex", "sab", "dom")
 
 
 class AgendaConfigUpdateRequest(BaseModel):
-    agenda_config: AgendaConfigPayload
+    agenda_config: Dict[str, Any]
 
 
-def _parse_horario_hhmm(valor: str, campo: str) -> time:
+def _parse_horario_hhmm(valor: str, campo: str) -> datetime:
     try:
-        return datetime.strptime(str(valor).strip(), "%H:%M").time()
+        return datetime.strptime(str(valor).strip(), "%H:%M")
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2445,14 +2442,211 @@ def _parse_horario_hhmm(valor: str, campo: str) -> time:
         ) from exc
 
 
+def _dias_funcionamento_base() -> Dict[str, Dict[str, Any]]:
+    return {
+        dia: {"aberto": False, "inicio": None, "fim": None}
+        for dia in DIAS_SEMANA_ORDENADOS
+    }
+
+
+def _normalizar_dias_funcionamento(
+    dias_brutos: Any,
+    horario_inicio_legacy: Any = None,
+    horario_fim_legacy: Any = None,
+) -> Dict[str, Dict[str, Any]]:
+    dias_normalizados = _dias_funcionamento_base()
+
+    # Formato novo: {"seg": {"aberto": true, "inicio": "08:00", "fim": "18:00"}, ...}
+    if isinstance(dias_brutos, dict) and any(chave in dias_brutos for chave in DIAS_SEMANA_ORDENADOS):
+        for dia in DIAS_SEMANA_ORDENADOS:
+            item = dias_brutos.get(dia) or {}
+            if not isinstance(item, dict):
+                continue
+            aberto = bool(item.get("aberto", False))
+            if not aberto:
+                dias_normalizados[dia] = {"aberto": False, "inicio": None, "fim": None}
+                continue
+            inicio = item.get("inicio")
+            fim = item.get("fim")
+            if isinstance(inicio, str) and isinstance(fim, str):
+                dias_normalizados[dia] = {"aberto": True, "inicio": inicio.strip(), "fim": fim.strip()}
+        return dias_normalizados
+
+    # Formato legado: {"dias": ["seg", "ter", ...]}
+    dias_legado = dias_brutos.get("dias", []) if isinstance(dias_brutos, dict) else []
+    inicio_legado = horario_inicio_legacy.strftime("%H:%M") if horario_inicio_legacy else "08:00"
+    fim_legado = horario_fim_legacy.strftime("%H:%M") if horario_fim_legacy else "18:00"
+    for dia in dias_legado:
+        dia_norm = str(dia).strip().lower()
+        if dia_norm in dias_normalizados:
+            dias_normalizados[dia_norm] = {
+                "aberto": True,
+                "inicio": inicio_legado,
+                "fim": fim_legado,
+            }
+    return dias_normalizados
+
+
+def _validar_e_normalizar_dias_payload(dias_payload: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(dias_payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="agenda_config.dias_funcionamento deve ser um objeto com os dias da semana."
+        )
+
+    chaves_recebidas = set(dias_payload.keys())
+    chaves_esperadas = set(DIAS_SEMANA_ORDENADOS)
+    if chaves_recebidas != chaves_esperadas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="agenda_config.dias_funcionamento deve conter exatamente as chaves: seg, ter, qua, qui, sex, sab, dom."
+        )
+
+    resultado: Dict[str, Dict[str, Any]] = {}
+    for dia in DIAS_SEMANA_ORDENADOS:
+        item = dias_payload.get(dia)
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.dias_funcionamento.{dia} deve ser um objeto."
+            )
+
+        aberto = item.get("aberto", None)
+        if not isinstance(aberto, bool):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.dias_funcionamento.{dia}.aberto deve ser boolean."
+            )
+
+        inicio = item.get("inicio")
+        fim = item.get("fim")
+
+        if aberto:
+            if not isinstance(inicio, str) or not isinstance(fim, str):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"agenda_config.dias_funcionamento.{dia}.inicio e agenda_config.dias_funcionamento.{dia}.fim devem ser strings HH:MM quando aberto=true."
+                )
+            dt_inicio = _parse_horario_hhmm(inicio, f"agenda_config.dias_funcionamento.{dia}.inicio")
+            dt_fim = _parse_horario_hhmm(fim, f"agenda_config.dias_funcionamento.{dia}.fim")
+            if dt_inicio >= dt_fim:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"agenda_config.dias_funcionamento.{dia}.inicio deve ser menor que agenda_config.dias_funcionamento.{dia}.fim."
+                )
+            resultado[dia] = {"aberto": True, "inicio": dt_inicio.strftime("%H:%M"), "fim": dt_fim.strftime("%H:%M")}
+            continue
+
+        # Quando fechado, o padrão aceito é null/null
+        if inicio is not None or fim is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.dias_funcionamento.{dia}.inicio e agenda_config.dias_funcionamento.{dia}.fim devem ser null quando aberto=false."
+            )
+        resultado[dia] = {"aberto": False, "inicio": None, "fim": None}
+
+    return resultado
+
+
+def _validar_e_normalizar_excecoes_payload(excecoes_payload: Any) -> List[Dict[str, Any]]:
+    if excecoes_payload is None:
+        return []
+    if not isinstance(excecoes_payload, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="agenda_config.excecoes deve ser uma lista."
+        )
+
+    excecoes_normalizadas: List[Dict[str, Any]] = []
+    for idx, item in enumerate(excecoes_payload):
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.excecoes[{idx}] deve ser um objeto."
+            )
+
+        data_str = str(item.get("data") or "").strip()
+        titulo_str = str(item.get("titulo") or "").strip()
+        aberto = item.get("aberto")
+
+        if not data_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.excecoes[{idx}].data é obrigatório."
+            )
+        try:
+            datetime.strptime(data_str, "%Y-%m-%d")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.excecoes[{idx}].data deve estar no formato YYYY-MM-DD."
+            ) from exc
+
+        if not titulo_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.excecoes[{idx}].titulo é obrigatório."
+            )
+        if not isinstance(aberto, bool):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agenda_config.excecoes[{idx}].aberto deve ser boolean."
+            )
+
+        inicio = item.get("inicio")
+        fim = item.get("fim")
+        if aberto:
+            if not isinstance(inicio, str) or not isinstance(fim, str):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"agenda_config.excecoes[{idx}].inicio e fim devem ser strings HH:MM quando aberto=true."
+                )
+            dt_inicio = _parse_horario_hhmm(inicio, f"agenda_config.excecoes[{idx}].inicio")
+            dt_fim = _parse_horario_hhmm(fim, f"agenda_config.excecoes[{idx}].fim")
+            if dt_inicio >= dt_fim:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"agenda_config.excecoes[{idx}].inicio deve ser menor que fim."
+                )
+            excecoes_normalizadas.append(
+                {
+                    "data": data_str,
+                    "titulo": titulo_str,
+                    "aberto": True,
+                    "inicio": dt_inicio.strftime("%H:%M"),
+                    "fim": dt_fim.strftime("%H:%M"),
+                }
+            )
+        else:
+            if inicio is not None or fim is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"agenda_config.excecoes[{idx}].inicio e fim devem ser null quando aberto=false."
+                )
+            excecoes_normalizadas.append(
+                {
+                    "data": data_str,
+                    "titulo": titulo_str,
+                    "aberto": False,
+                    "inicio": None,
+                    "fim": None,
+                }
+            )
+
+    return excecoes_normalizadas
+
+
 def _serialize_agenda_config(config: AgendaConfiguracao | None) -> dict | None:
     if not config:
         return None
-    dias_obj = config.dias_funcionamento if isinstance(config.dias_funcionamento, dict) else {}
+    dias_obj = _normalizar_dias_funcionamento(
+        config.dias_funcionamento,
+        horario_inicio_legacy=config.horario_inicio,
+        horario_fim_legacy=config.horario_fim,
+    )
     return {
-        "dias": dias_obj.get("dias", []),
-        "inicio": config.horario_inicio.strftime("%H:%M") if config.horario_inicio else "00:00",
-        "fim": config.horario_fim.strftime("%H:%M") if config.horario_fim else "23:59",
+        "dias_funcionamento": dias_obj,
+        "excecoes": config.excecoes if isinstance(config.excecoes, list) else [],
         "duracao_minutos": config.duracao_slot_minutos
     }
 
@@ -2464,8 +2658,8 @@ async def atualizar_agenda(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Upsert da configuração da agenda da empresa.
-    Persistimos em colunas separadas (AgendaConfiguracao) para leitura consistente pelo agente.
+    Upsert da configuração da agenda por dia da semana.
+    A fonte de verdade é o JSONB dias_funcionamento.
     """
     try:
         try:
@@ -2473,24 +2667,16 @@ async def atualizar_agenda(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido") from exc
 
-        dias_normalizados = [
-            str(dia).strip().lower()
-            for dia in (payload.agenda_config.dias_funcionamento or [])
-            if str(dia).strip()
-        ]
-        if not dias_normalizados:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="dias_funcionamento deve conter ao menos um dia."
-            )
-
-        horario_inicio = _parse_horario_hhmm(payload.agenda_config.horario_inicio, "horario_inicio")
-        horario_fim = _parse_horario_hhmm(payload.agenda_config.horario_fim, "horario_fim")
-        if horario_inicio >= horario_fim:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="horario_inicio deve ser menor que horario_fim."
-            )
+        agenda_config = payload.agenda_config if isinstance(payload.agenda_config, dict) else {}
+        # Compatibilidade: aceita tanto agenda_config direto com seg..dom quanto
+        # agenda_config.dias_funcionamento com o mesmo conteúdo.
+        dias_payload = (
+            agenda_config.get("dias_funcionamento")
+            if "dias_funcionamento" in agenda_config
+            else agenda_config
+        )
+        dias_normalizados = _validar_e_normalizar_dias_payload(dias_payload)
+        excecoes_normalizadas = _validar_e_normalizar_excecoes_payload(agenda_config.get("excecoes"))
 
         result_config = await db.execute(
             select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == emp_uuid)
@@ -2498,15 +2684,17 @@ async def atualizar_agenda(
         config = result_config.scalars().first()
 
         if config:
-            config.dias_funcionamento = {"dias": dias_normalizados}
-            config.horario_inicio = horario_inicio
-            config.horario_fim = horario_fim
+            config.dias_funcionamento = dias_normalizados
+            config.excecoes = excecoes_normalizadas
+            config.horario_inicio = None
+            config.horario_fim = None
         else:
             config = AgendaConfiguracao(
                 empresa_id=emp_uuid,
-                dias_funcionamento={"dias": dias_normalizados},
-                horario_inicio=horario_inicio,
-                horario_fim=horario_fim,
+                dias_funcionamento=dias_normalizados,
+                excecoes=excecoes_normalizadas,
+                horario_inicio=None,
+                horario_fim=None,
             )
             db.add(config)
 
