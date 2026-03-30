@@ -652,10 +652,12 @@ async def node_atendente(state: AgentState):
 
         formatacao_base = (
             "DIRETRIZES DE ESTRUTURAÇÃO VISUAL E RENDERIZAÇÃO (WHATSAPP):\n"
-            "- Separação de Balões: Sempre que mudar de um bloco de assunto para outro, use obrigatoriamente duas "
-            "quebras de linha (\\n\\n). O sistema usa isso para separar as mensagens.\n"
-            "- Respiro Visual: Nunca gere um parágrafo com mais de 3 linhas corridas.\n"
-            "- Listas: Utilize o caractere '•' para itens de listas em vez de travessões.\n"
+            "- RESPIRO VISUAL OBRIGATÓRIO (DOUBLE BREAK): É terminantemente proibido enviar parágrafos colados. "
+            "Deves utilizar OBRIGATORIAMENTE DUAS QUEBRAS DE LINHA (Enter duplo) entre cada parágrafo, tópico ou "
+            "bloco de informação. O texto no telemóvel deve parecer 'arejado' e fácil de escanear.\n"
+            "- LISTAS E EMOJIS: Cada item de uma lista (módulos, benefícios, etc.) deve começar numa nova linha, "
+            "SEMPRE precedido por um emoji temático ou o caractere '•'. Deve existir um espaço duplo antes de "
+            "iniciares qualquer lista.\n"
             "- Ênfase Visual: Use *negrito* apenas para destacar valores monetários e nomes de serviços cruciais.\n"
             "- Emojis: Aplique emojis no início de tópicos novos para facilitar a escaneabilidade."
         )
@@ -699,6 +701,7 @@ Considere o seguinte super-contexto como fonte adicional para cobrir todas as pa
 </super_contexto_especialistas>
 Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
+A resposta DEVE estar visualmente organizada para leitura em dispositivos móveis (com respiro e escaneabilidade).
 Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
