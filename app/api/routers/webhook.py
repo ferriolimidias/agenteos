@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, BackgroundTasks, Request
 from typing import Dict, Any
 import uuid
@@ -61,6 +62,19 @@ def _extrair_profile_pic_url(payload: dict | None, data: dict | None) -> str | N
         if isinstance(candidato, str) and candidato.strip():
             return candidato.strip()
     return None
+
+
+async def _atualizar_foto_lead_background(empresa_id: str, telefone: str) -> None:
+    """
+    Atualiza foto do lead em background para não bloquear o webhook.
+    A foto é secundária e não deve impactar o fluxo do agente.
+    """
+    try:
+        from app.api.routers.inbox import obter_foto_lead
+
+        await obter_foto_lead(empresa_id, telefone)
+    except Exception as exc:
+        print(f"[WEBHOOK FOTO] Falha no refresh assíncrono da foto: {exc}")
 
 
 def _extrair_rastreio_ads_e_limpar_texto(texto: str | None) -> tuple[str, str | None, str | None]:
@@ -363,6 +377,11 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             f"Empresa: {empresa_id} | Telefone: {_mask_phone(telefone)}"
         )
         empresa_uuid = uuid.UUID(empresa_id)
+
+        # Nunca bloquear o fluxo principal do webhook por causa de foto de perfil.
+        # A atualização da foto roda em paralelo e falhas são ignoradas.
+        if not fromMe:
+            asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
 
         async with AsyncSessionLocal() as session:
             conexao_id = await get_conexao_id_por_tipo(
