@@ -599,6 +599,160 @@ NÃO redija mensagem para o cliente final."""
     return state
 
 
+async def node_acao_sistema(state: AgentState):
+    """
+    Nó dedicado a ações internas de sistema.
+    Não deve gerar texto conversacional para o cliente final.
+    """
+    pendentes = list(state.get("acoes_sistema_pendentes") or [])
+    executadas = list(state.get("acoes_sistema_executadas") or [])
+    status_acoes = list(state.get("acoes_sistema_status") or [])
+
+    if not pendentes:
+        state["acoes_sistema_pendentes"] = pendentes
+        state["acoes_sistema_executadas"] = executadas
+        state["acoes_sistema_status"] = status_acoes
+        return state
+
+    empresa_id = str(state.get("empresa_id") or "").strip()
+    lead_id = str(state.get("lead_id") or "").strip()
+    conexao_id = state.get("conexao_id")
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+
+    for acao in pendentes:
+        acao_nome = str(acao or "").strip().lower()
+        if not acao_nome:
+            continue
+        if acao_nome in executadas:
+            continue
+
+        if acao_nome == "aplicar_tags":
+            try:
+                if not lead_id or not empresa_id:
+                    status_acoes.append("aplicar_tags: ignorada (lead/empresa ausentes)")
+                    executadas.append(acao_nome)
+                    continue
+
+                tags_crm_prompt = await listar_tags_crm_para_prompt(empresa_id)
+                if not tags_crm_prompt:
+                    status_acoes.append("aplicar_tags: ignorada (regras de tag ausentes)")
+                    executadas.append(acao_nome)
+                    continue
+
+                llm = await get_llm(empresa_id)
+
+                async def _tool(lead_id: str, tags: List[str]) -> str:
+                    return await tool_atualizar_tags_lead(lead_id=lead_id, tags=tags)
+
+                tool_tags = StructuredTool(
+                    name="tool_atualizar_tags_lead",
+                    description="Aplica tags oficiais do CRM ao lead atual com base nas regras de classificação.",
+                    args_schema=ToolAtualizarTagsLeadInput,
+                    coroutine=_tool,
+                )
+                llm_with_tools = llm.bind_tools([tool_tags])
+                tool_node = ToolNode([tool_tags])
+
+                prompt_tags = f"""Você é um executor de ações internas de sistema.
+Use a tool 'tool_atualizar_tags_lead' seguindo estritamente estas regras:
+{tags_crm_prompt}
+
+Lead atual: {lead_id}
+Mensagem atual do cliente: {ultima_mensagem}
+Objetivo: classificar e aplicar tags oficiais no CRM.
+Retorne apenas o resultado técnico da ação."""
+
+                msgs = [("system", prompt_tags), ("user", ultima_mensagem)]
+                resultado_tool = ""
+                for _ in range(4):
+                    resposta = await llm_with_tools.ainvoke(msgs)
+                    msgs.append(resposta)
+                    if hasattr(resposta, "tool_calls") and resposta.tool_calls:
+                        resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
+                        msgs.extend(resultado_toolnode.get("messages", []))
+                        for tool_msg in resultado_toolnode.get("messages", []):
+                            conteudo = str(getattr(tool_msg, "content", "") or "").strip()
+                            if conteudo:
+                                resultado_tool = conteudo
+                        continue
+                    resultado_tool = str(getattr(resposta, "content", "") or "").strip()
+                    break
+
+                status_acoes.append(f"aplicar_tags: ok ({resultado_tool or 'sem retorno'})")
+            except Exception as e:
+                status_acoes.append(f"aplicar_tags: erro ({str(e)})")
+            finally:
+                executadas.append(acao_nome)
+                state["intencao"] = [item for item in (state.get("intencao") or []) if item != "tags_crm"]
+
+        elif acao_nome == "transferir_atendimento":
+            try:
+                if not (empresa_id and lead_id):
+                    status_acoes.append("transferir_atendimento: erro (lead/empresa ausentes)")
+                    executadas.append(acao_nome)
+                    continue
+
+                transferencia_tool = criar_tool_transferencia_contextual(
+                    empresa_id=empresa_id,
+                    lead_id=lead_id,
+                    conexao_id=str(conexao_id) if conexao_id else None,
+                )
+                llm = await get_llm(empresa_id)
+                llm_with_tools = llm.bind_tools([transferencia_tool])
+                tool_node = ToolNode([transferencia_tool])
+                historico_global = str(state.get("historico_bd") or "").strip()
+                prompt_transferencia = (
+                    "Você é um executor técnico de sistema. "
+                    "Sua tarefa é avaliar pedido de atendimento humano e, quando aplicável, "
+                    "executar a tool action_transferir_atendimento. "
+                    "Não responda ao cliente; apenas execute a ação interna.\n"
+                    f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
+                )
+                mensagens = [("system", prompt_transferencia), ("user", ultima_mensagem)]
+                retorno_transferencia = ""
+                for _ in range(4):
+                    resposta = await llm_with_tools.ainvoke(mensagens)
+                    mensagens.append(resposta)
+                    if hasattr(resposta, "tool_calls") and resposta.tool_calls:
+                        resultado_toolnode = await tool_node.ainvoke({"messages": [resposta]})
+                        mensagens.extend(resultado_toolnode.get("messages", []))
+                        for tool_msg in resultado_toolnode.get("messages", []):
+                            conteudo = str(getattr(tool_msg, "content", "") or "").strip()
+                            if conteudo:
+                                retorno_transferencia = conteudo
+                        break
+                    retorno_transferencia = str(getattr(resposta, "content", "") or "").strip()
+
+                if not retorno_transferencia:
+                    # fallback seguro sem depender de destino estruturado
+                    retorno_transferencia = await transferir_para_humano(
+                        telefone=str(state.get("identificador_origem") or ""),
+                        empresa_id=empresa_id,
+                    )
+                status_acoes.append(f"transferir_atendimento: ok ({retorno_transferencia})")
+            except Exception as e:
+                status_acoes.append(f"transferir_atendimento: erro ({str(e)})")
+            finally:
+                executadas.append(acao_nome)
+
+        elif acao_nome == "fechar_conversa":
+            try:
+                await mover_lead_para_fechado(empresa_id, lead_id)
+                status_acoes.append("fechar_conversa: ok")
+            except Exception as e:
+                status_acoes.append(f"fechar_conversa: erro ({str(e)})")
+            finally:
+                executadas.append(acao_nome)
+        else:
+            status_acoes.append(f"{acao_nome}: ignorada (ação desconhecida)")
+            executadas.append(acao_nome)
+
+    state["acoes_sistema_pendentes"] = []
+    state["acoes_sistema_executadas"] = sorted(list({a for a in executadas if str(a).strip()}))
+    state["acoes_sistema_status"] = status_acoes
+    return state
+
+
 def criar_ferramenta_transferir_atendimento_contextual(
     lead_id: str,
     empresa_id: str,
@@ -781,6 +935,9 @@ class AgentState(TypedDict):
     especialistas_selecionados: List[EspecialistaSelecionadoState]
     super_contexto_especialistas: str
     respostas_especialistas: List[str]
+    acoes_sistema_pendentes: List[str]
+    acoes_sistema_executadas: List[str]
+    acoes_sistema_status: List[str]
     handoff_requested: bool
     resposta_final: Optional[str]
     status_conversa: Optional[str]
@@ -1062,6 +1219,11 @@ async def node_atendente(state: AgentState):
             "Diretrizes de Atendimento e Estratégia de Vendas: "
             f"{regras_prompt}."
         )
+        blocos.append(
+            "Diretriz de roteamento de sistema: Se o cliente pedir para falar com atendente humano, "
+            "ou se a conversa chegar ao fim natural (fechamento), acione o [Especialista de Sistema / Ferramenta de Roteamento] "
+            "e avise o cliente amigavelmente que a ação está sendo tomada."
+        )
 
         formatacao_base = (
             "DIRETRIZ DE FORMATAÇÃO (CRÍTICO): Você está se comunicando exclusivamente pelo WhatsApp. "
@@ -1133,11 +1295,13 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
         elif _resposta_indica_conclusao(str(getattr(resposta, "content", "") or "")):
             status_conv = "FINALIZADA"
         state["status_conversa"] = status_conv
-        if status_conv in {"HANDOFF", "FINALIZADA"}:
-            try:
-                await mover_lead_para_fechado(empresa_id, lead_id)
-            except Exception as e:
-                logger.exception("[NODE ATENDENTE] Falha ao mover lead para etapa de fechamento: %s", e)
+        pendentes = list(state.get("acoes_sistema_pendentes") or [])
+        executadas = list(state.get("acoes_sistema_executadas") or [])
+        if status_conv == "HANDOFF" and "transferir_atendimento" not in pendentes and "transferir_atendimento" not in executadas:
+            pendentes.append("transferir_atendimento")
+        if status_conv == "FINALIZADA" and "fechar_conversa" not in pendentes and "fechar_conversa" not in executadas:
+            pendentes.append("fechar_conversa")
+        state["acoes_sistema_pendentes"] = pendentes
         state["respostas_especialistas"] = []
         state["intencao"] = []
         state["especialistas_selecionados"] = []
@@ -1184,11 +1348,13 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
     elif _resposta_indica_conclusao(str(getattr(resposta, "content", "") or "")):
         status_conv = "FINALIZADA"
     state["status_conversa"] = status_conv
-    if status_conv in {"HANDOFF", "FINALIZADA"}:
-        try:
-            await mover_lead_para_fechado(empresa_id, lead_id)
-        except Exception as e:
-            logger.exception("[NODE ATENDENTE] Falha ao mover lead para etapa de fechamento: %s", e)
+    pendentes = list(state.get("acoes_sistema_pendentes") or [])
+    executadas = list(state.get("acoes_sistema_executadas") or [])
+    if status_conv == "HANDOFF" and "transferir_atendimento" not in pendentes and "transferir_atendimento" not in executadas:
+        pendentes.append("transferir_atendimento")
+    if status_conv == "FINALIZADA" and "fechar_conversa" not in pendentes and "fechar_conversa" not in executadas:
+        pendentes.append("fechar_conversa")
+    state["acoes_sistema_pendentes"] = pendentes
     state["intencao"] = []
     state["respostas_especialistas"] = []
     state["especialistas_selecionados"] = []
@@ -1725,18 +1891,6 @@ async def node_especialista_dinamico(state: AgentState):
                         "e converter a conversa em um compromisso marcado, utilizando as ferramentas de agenda fornecidas.\n"
                     )
 
-                if lead_id and empresa_id and "action_transferir_atendimento" not in nomes_tools_registradas:
-                    transferencia_tool = criar_tool_transferencia_contextual(
-                        empresa_id=str(empresa_id),
-                        lead_id=str(lead_id),
-                        conexao_id=str(conexao_id) if conexao_id else None,
-                    )
-                    tools_disponiveis.append(transferencia_tool)
-                    nomes_tools_registradas.add(transferencia_tool.name)
-                    descricoes_tools.append(
-                        "- action_transferir_atendimento: transfere o atendimento para um destino humano."
-                    )
-
                 for conexao in (especialista_db.api_connections if especialista_db else []):
                     try:
                         nova_tool = create_dynamic_tool(conexao)
@@ -2001,7 +2155,7 @@ workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("especialista_funcionamento", node_especialista_funcionamento)
 workflow.add_node("node_especialista_saudacao", node_especialista_saudacao)
-workflow.add_node("node_especialista_tags", node_especialista_tags)
+workflow.add_node("node_acao_sistema", node_acao_sistema)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
 
 workflow.set_entry_point("node_crm")
@@ -2019,6 +2173,8 @@ workflow.add_edge("node_capturar_nome", END)
 
 def router_atendente(state: AgentState):
     if state.get("resposta_final"):
+        if state.get("acoes_sistema_pendentes"):
+            return "node_acao_sistema"
         return END
     return "node_roteador_maestro"
 
@@ -2027,7 +2183,8 @@ workflow.add_conditional_edges(
     router_atendente,
     {
         END: END,
-        "node_roteador_maestro": "node_roteador_maestro"
+        "node_roteador_maestro": "node_roteador_maestro",
+        "node_acao_sistema": "node_acao_sistema",
     }
 )
 
@@ -2036,12 +2193,21 @@ def router_maestro(state: AgentState):
         return "node_especialista_saudacao"
     intencoes = state.get("intencao") or []
     especialistas_selecionados = state.get("especialistas_selecionados") or []
+    pendentes = list(state.get("acoes_sistema_pendentes") or [])
+    executadas = set(state.get("acoes_sistema_executadas") or [])
+
+    if state.get("handoff_requested") and "transferir_atendimento" not in executadas and "transferir_atendimento" not in pendentes:
+        pendentes.append("transferir_atendimento")
+    if "tags_crm" in intencoes and "aplicar_tags" not in executadas and "aplicar_tags" not in pendentes:
+        pendentes.append("aplicar_tags")
+    state["acoes_sistema_pendentes"] = pendentes
+
+    if pendentes:
+        return "node_acao_sistema"
     if not intencoes and not especialistas_selecionados:
         return "node_atendente"
     if "funcionamento" in intencoes:
         return "especialista_funcionamento"
-    if "tags_crm" in intencoes:
-        return "node_especialista_tags"
     if especialistas_selecionados:
         return "node_especialista_dinamico"
     return "node_atendente"
@@ -2054,7 +2220,7 @@ workflow.add_conditional_edges(
         "node_atendente": "node_atendente",
         "especialista_funcionamento": "especialista_funcionamento",
         "node_especialista_saudacao": "node_especialista_saudacao",
-        "node_especialista_tags": "node_especialista_tags",
+        "node_acao_sistema": "node_acao_sistema",
         "node_especialista_dinamico": "node_especialista_dinamico",
     }
 )
@@ -2062,19 +2228,18 @@ workflow.add_conditional_edges(
 workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
 workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
 
-def router_pos_tags(state: AgentState):
-    especialistas_selecionados = state.get("especialistas_selecionados") or []
-    if especialistas_selecionados:
-        return "node_especialista_dinamico"
-    return "node_atendente"
+def router_pos_acao_sistema(state: AgentState):
+    if state.get("resposta_final"):
+        return "node_atendente"
+    return "node_roteador_maestro"
 
 
 workflow.add_conditional_edges(
-    "node_especialista_tags",
-    router_pos_tags,
+    "node_acao_sistema",
+    router_pos_acao_sistema,
     {
-        "node_especialista_dinamico": "node_especialista_dinamico",
         "node_atendente": "node_atendente",
+        "node_roteador_maestro": "node_roteador_maestro",
     }
 )
 workflow.add_edge("node_especialista_dinamico", "node_atendente")

@@ -309,6 +309,9 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "especialistas_selecionados": [],
         "super_contexto_especialistas": "",
         "respostas_especialistas": [],
+        "acoes_sistema_pendentes": [],
+        "acoes_sistema_executadas": [],
+        "acoes_sistema_status": [],
         "handoff_requested": False,
         "resposta_final": None,
         "status_conversa": None
