@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import Any
 import traceback
@@ -113,22 +114,44 @@ class EvolutionProvider(BaseProvider):
         print(f"[EvolutionProvider] Headers bearer -> {headers_bearer_log}")
         print(f"[EvolutionProvider] Payload -> {payload}")
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(endpoint, headers=headers_apikey, json=payload)
-                print(f"[EvolutionProvider] Status Code -> {response.status_code}")
-                print(f"[EvolutionProvider] Response -> {response.text}")
+        last_request_error: httpx.RequestError | None = None
+        response: httpx.Response | None = None
+        for tentativa in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(endpoint, headers=headers_apikey, json=payload)
+                    print(f"[EvolutionProvider] Status Code -> {response.status_code}")
+                    print(f"[EvolutionProvider] Response -> {response.text}")
 
-                # Fallback para versões da Evolution que usam Authorization Bearer
-                if response.status_code in (400, 401):
-                    print("[EvolutionProvider] Tentando fallback com Authorization Bearer...")
-                    response = await client.post(endpoint, headers=headers_bearer, json=payload)
-                    print(f"[EvolutionProvider] Status Code (Bearer) -> {response.status_code}")
-                    print(f"[EvolutionProvider] Response (Bearer) -> {response.text}")
-        except Exception as exc:
-            print(f"[EvolutionProvider] Falha de rede ao enviar para Evolution: {exc}")
+                    # Fallback para versões da Evolution que usam Authorization Bearer
+                    if response.status_code in (400, 401):
+                        print("[EvolutionProvider] Tentando fallback com Authorization Bearer...")
+                        response = await client.post(endpoint, headers=headers_bearer, json=payload)
+                        print(f"[EvolutionProvider] Status Code (Bearer) -> {response.status_code}")
+                        print(f"[EvolutionProvider] Response (Bearer) -> {response.text}")
+
+                break
+            except httpx.RequestError as exc:
+                last_request_error = exc
+                if tentativa < 3:
+                    print(f"[EvolutionProvider] Falha temporária de rede, tentando novamente ({tentativa}/3)...")
+                    await asyncio.sleep(3)
+                    continue
+
+                print(f"[EvolutionProvider] Falha de rede ao enviar para Evolution: {exc}")
+                traceback.print_exc()
+                raise HTTPException(status_code=502, detail=f"Falha de rede com Evolution: {exc}") from exc
+
+        if response is None and last_request_error is not None:
+            print(f"[EvolutionProvider] Falha de rede ao enviar para Evolution: {last_request_error}")
             traceback.print_exc()
-            raise HTTPException(status_code=502, detail=f"Falha de rede com Evolution: {exc}") from exc
+            raise HTTPException(
+                status_code=502,
+                detail=f"Falha de rede com Evolution: {last_request_error}",
+            ) from last_request_error
+
+        if response is None:
+            raise HTTPException(status_code=502, detail="Falha inesperada ao enviar para Evolution.")
 
         if response.status_code not in (200, 201):
             print(
