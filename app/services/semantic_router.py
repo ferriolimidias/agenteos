@@ -1,15 +1,27 @@
 import os
 import logging
+import asyncio
+import time
 from typing import Any, List, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
 
 from db.models import Empresa, Especialista
+from db.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+class TermosBusca(BaseModel):
+    termos: List[str] = Field(default_factory=list)
+
+
+class EspecialistasEscolhidos(BaseModel):
+    ids: List[str] = Field(default_factory=list)
 
 
 class SemanticRouterService:
@@ -20,6 +32,31 @@ class SemanticRouterService:
             model="text-embedding-3-small",
             api_key=key,
         )
+        self.api_key = key
+
+    def _build_fast_llm(self, api_key: str | None = None) -> ChatOpenAI:
+        key = api_key or self.api_key or os.getenv("OPENAI_API_KEY")
+        try:
+            return ChatOpenAI(model="gpt-5.4-nano", temperature=0, api_key=key)
+        except Exception:
+            return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
+
+    @staticmethod
+    def _deduplicar_termos(termos: list[str], fallback: str) -> list[str]:
+        itens: list[str] = []
+        vistos: set[str] = set()
+        for termo in termos:
+            normalizado = str(termo or "").strip()
+            if not normalizado:
+                continue
+            chave = normalizado.lower()
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            itens.append(normalizado)
+        if not itens and str(fallback or "").strip():
+            itens = [str(fallback).strip()]
+        return itens[:6]
 
     @staticmethod
     def _build_routing_text(especialista: Especialista) -> str:
@@ -196,11 +233,29 @@ class SemanticRouterService:
         query_text: str,
         empresa_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        t0_total = time.perf_counter()
+        expansion_time = 0.0
+        pool_time = 0.0
+        reranking_time = 0.0
+        termos_busca: list[str] = []
+        pool_size = 0
+        ids_escolhidos_log: list[str] = []
+
         normalized_query = str(query_text or "").strip()
         if not normalized_query:
+            total_time = time.perf_counter() - t0_total
+            logger.info(
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                total_time,
+                expansion_time,
+                termos_busca,
+                pool_time,
+                pool_size,
+                reranking_time,
+                ids_escolhidos_log,
+            )
             return []
 
-        limite_certeza = 0.65
         limite_duvida = 0.45
         max_agentes_desempate = 3
         api_key_empresa = None
@@ -209,8 +264,6 @@ class SemanticRouterService:
             result_empresa = await self.db.execute(select(Empresa).where(Empresa.id == empresa_id))
             empresa = result_empresa.scalars().first()
             if empresa:
-                if getattr(empresa, "limite_certeza", None) is not None:
-                    limite_certeza = float(empresa.limite_certeza)
                 if getattr(empresa, "limite_duvida", None) is not None:
                     limite_duvida = float(empresa.limite_duvida)
                 if getattr(empresa, "max_agentes_desempate", None) is not None:
@@ -218,55 +271,177 @@ class SemanticRouterService:
                 credenciais = getattr(empresa, "credenciais_canais", {}) or {}
                 api_key_empresa = credenciais.get("openai_api_key")
 
-        if limite_duvida > limite_certeza:
-            limite_duvida = limite_certeza
+        # ETAPA 1: Query Expansion (LLM rápido + structured output)
+        t0_expansion = time.perf_counter()
+        try:
+            llm_expansao = self._build_fast_llm(api_key_empresa)
+            llm_expansao_struct = llm_expansao.with_structured_output(TermosBusca)
+            termos_resp = await llm_expansao_struct.ainvoke(
+                [
+                    (
+                        "system",
+                        "Extraia intenções principais em termos de busca independentes para roteamento semântico. "
+                        "Retorne somente no schema estruturado.",
+                    ),
+                    ("user", f"Mensagem do usuário: {normalized_query}"),
+                ]
+            )
+            termos_busca = self._deduplicar_termos(getattr(termos_resp, "termos", []) or [], normalized_query)
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha na etapa de query expansion: %s", exc)
+            termos_busca = [normalized_query]
+        finally:
+            expansion_time = time.perf_counter() - t0_expansion
 
-        candidatos = await self.get_matching_specialists_with_similarity(
-            query_text=normalized_query,
-            threshold=limite_duvida,
-            top_k=max_agentes_desempate,
-            empresa_id=empresa_id,
-        )
-        if not candidatos:
+        if not termos_busca:
+            termos_busca = [normalized_query]
+
+        # ETAPA 2: Busca semântica paralela (Candidate Pool)
+        top_por_termo = max(3, min(5, max_agentes_desempate))
+
+        async def _buscar_candidatos_por_termo(termo: str) -> list[tuple[Especialista, float]]:
+            texto = str(termo or "").strip()
+            if not texto:
+                return []
+            try:
+                query_embedding = await self.embeddings_model.aembed_query(texto)
+                similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
+                stmt = (
+                    select(Especialista, similarity_expr)
+                    .where(
+                        Especialista.ativo.is_(True),
+                        Especialista.embedding.isnot(None),
+                        similarity_expr >= limite_duvida,
+                    )
+                    .order_by(similarity_expr.desc())
+                    .limit(top_por_termo)
+                )
+                if empresa_id:
+                    stmt = stmt.where(Especialista.empresa_id == empresa_id)
+
+                # AsyncSession não é seguro para queries concorrentes; usa sessão isolada por tarefa.
+                async with AsyncSessionLocal() as session_parallel:
+                    result = await session_parallel.execute(stmt)
+                    rows = result.all()
+                return [(esp, float(sim or 0.0)) for esp, sim in rows]
+            except Exception as exc:
+                logger.warning("[SEMANTIC ROUTER] Falha na busca vetorial para termo '%s': %s", texto, exc)
+                return []
+
+        t0_pool = time.perf_counter()
+        buscas = await asyncio.gather(*[_buscar_candidatos_por_termo(t) for t in termos_busca], return_exceptions=False)
+        pool_time = time.perf_counter() - t0_pool
+        candidate_pool: dict[str, tuple[Especialista, float]] = {}
+        for resultado_termo in buscas:
+            for especialista, score in resultado_termo:
+                esp_id = str(especialista.id)
+                atual = candidate_pool.get(esp_id)
+                if (atual is None) or (score > atual[1]):
+                    candidate_pool[esp_id] = (especialista, score)
+        pool_size = len(candidate_pool)
+
+        if not candidate_pool:
+            total_time = time.perf_counter() - t0_total
+            logger.info(
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                total_time,
+                expansion_time,
+                termos_busca,
+                pool_time,
+                pool_size,
+                reranking_time,
+                ids_escolhidos_log,
+            )
             return []
 
-        automaticos: list[tuple[Especialista, float]] = []
-        duvida: list[tuple[Especialista, float]] = []
-        for especialista, similarity in candidatos:
-            if similarity >= limite_certeza:
-                automaticos.append((especialista, similarity))
-            else:
-                duvida.append((especialista, similarity))
-
-        nomes_escolhidos_llm = await self._resolver_duvidas_com_llm(
-            pergunta=normalized_query,
-            candidatos_duvida=duvida,
-            api_key=api_key_empresa,
+        candidatos_ordenados = sorted(
+            candidate_pool.values(),
+            key=lambda item: item[1],
+            reverse=True,
         )
+        candidatos_ordenados = candidatos_ordenados[: max(8, top_por_termo)]
 
+        # ETAPA 3: Seleção final (LLM reranking por IDs)
+        ids_escolhidos: list[str] = []
+        t0_reranking = time.perf_counter()
+        try:
+            llm_rerank = self._build_fast_llm(api_key_empresa)
+            llm_rerank_struct = llm_rerank.with_structured_output(EspecialistasEscolhidos)
+            payload_candidatos = [
+                {
+                    "id": str(especialista.id),
+                    "nome": str(especialista.nome),
+                    "descricao": str(getattr(especialista, "descricao_missao", "") or "").strip()
+                    or str(getattr(especialista, "descricao_roteamento", "") or "").strip()
+                    or "(sem descrição)",
+                }
+                for especialista, _score in candidatos_ordenados
+            ]
+            rerank_resp = await llm_rerank_struct.ainvoke(
+                [
+                    (
+                        "system",
+                        "Analise a mensagem do usuário e a lista de especialistas candidatos. "
+                        "Devolva APENAS os IDs dos especialistas que são estritamente necessários "
+                        "para responder à pergunta. Você pode escolher mais de um se houver múltiplos assuntos.",
+                    ),
+                    (
+                        "user",
+                        f"Mensagem original: {normalized_query}\n\nCandidatos:\n{payload_candidatos}",
+                    ),
+                ]
+            )
+            ids_escolhidos = [str(i).strip() for i in (getattr(rerank_resp, "ids", []) or []) if str(i).strip()]
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha no reranking por LLM: %s", exc)
+            ids_escolhidos = []
+        finally:
+            reranking_time = time.perf_counter() - t0_reranking
+
+        if not ids_escolhidos:
+            ids_escolhidos = [str(especialista.id) for especialista, _ in candidatos_ordenados[:top_por_termo]]
+        ids_escolhidos_log = list(ids_escolhidos)
+
+        mapa_por_id = {str(especialista.id): especialista for especialista, _ in candidatos_ordenados}
         selecionados_ordenados: list[Especialista] = []
-        ids_adicionados: set[str] = set()
+        for esp_id in ids_escolhidos:
+            especialista = mapa_por_id.get(str(esp_id))
+            if especialista:
+                selecionados_ordenados.append(especialista)
 
-        def _adicionar(especialista: Especialista) -> None:
-            esp_id = str(especialista.id)
-            if esp_id in ids_adicionados:
-                return
-            ids_adicionados.add(esp_id)
-            selecionados_ordenados.append(especialista)
+        if not selecionados_ordenados:
+            total_time = time.perf_counter() - t0_total
+            logger.info(
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                total_time,
+                expansion_time,
+                termos_busca,
+                pool_time,
+                pool_size,
+                reranking_time,
+                ids_escolhidos_log,
+            )
+            return []
 
-        for especialista, _similaridade in automaticos:
-            _adicionar(especialista)
-
-        for especialista, _similaridade in duvida:
-            if especialista.nome.lower() in nomes_escolhidos_llm:
-                _adicionar(especialista)
-
-        return [
+        resultado = [
             {
                 "id": str(especialista.id),
                 "nome": str(especialista.nome),
                 "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
                 "usar_rag": bool(getattr(especialista, "usar_rag", False)),
+                "usar_agenda": bool(getattr(especialista, "usar_agenda", False)),
             }
             for especialista in selecionados_ordenados
         ]
+        total_time = time.perf_counter() - t0_total
+        logger.info(
+            "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+            total_time,
+            expansion_time,
+            termos_busca,
+            pool_time,
+            pool_size,
+            reranking_time,
+            ids_escolhidos_log,
+        )
+        return resultado

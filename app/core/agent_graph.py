@@ -1466,6 +1466,10 @@ async def node_roteador_maestro(state: AgentState):
     state["respostas_especialistas"] = respostas_existentes
     state["super_contexto_especialistas"] = ""
     intencoes_atuais = list(state.get("intencao") or [])
+    for esp_id in ids_especialistas:
+        esp_id_str = str(esp_id or "").strip()
+        if esp_id_str and esp_id_str not in intencoes_atuais:
+            intencoes_atuais.append(esp_id_str)
     if state.get("saudacao_pendente") and "saudacao" not in intencoes_atuais:
         intencoes_atuais.append("saudacao")
     state["intencao"] = intencoes_atuais
