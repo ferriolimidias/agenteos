@@ -314,7 +314,8 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "acoes_sistema_status": [],
         "handoff_requested": False,
         "resposta_final": None,
-        "status_conversa": None
+        "status_conversa": None,
+        "especialista_respondeu_no_ciclo": False,
     }
     
     import time

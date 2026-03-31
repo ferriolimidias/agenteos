@@ -1006,6 +1006,7 @@ class AgentState(TypedDict):
     roteamento_tentado: Optional[bool]
     saudacao_pendente: Optional[bool]
     saudacao_processada: Optional[bool]
+    especialista_respondeu_no_ciclo: Optional[bool]
     empresa: Optional[Any]
 
 class AnaliseRoteador(BaseModel):
@@ -1659,6 +1660,7 @@ async def node_especialista_funcionamento(state: AgentState):
             respostas_existentes.append("Informação de Funcionamento: " + resposta_excecao)
             state["respostas_especialistas"] = respostas_existentes
             state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+            state["especialista_respondeu_no_ciclo"] = True
             return state
 
     if not isinstance(dias_funcionamento_raw, dict):
@@ -1667,6 +1669,7 @@ async def node_especialista_funcionamento(state: AgentState):
         )
         state["respostas_especialistas"] = respostas_existentes
         state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+        state["especialista_respondeu_no_ciclo"] = True
         return state
 
     dias_normalizados: dict[str, dict[str, Any]] = {
@@ -1737,6 +1740,7 @@ async def node_especialista_funcionamento(state: AgentState):
     respostas_existentes.append("Informação de Funcionamento: " + resposta_texto)
     state["respostas_especialistas"] = respostas_existentes
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+    state["especialista_respondeu_no_ciclo"] = True
     return state
 
 
@@ -1753,6 +1757,7 @@ async def node_especialista_localizacao(state: AgentState):
         respostas_existentes.append("Informação de Localização: Não foi possível identificar a empresa para consultar unidades.")
         state["respostas_especialistas"] = respostas_existentes
         state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
+        state["especialista_respondeu_no_ciclo"] = True
         return state
 
     try:
@@ -1781,6 +1786,8 @@ async def node_especialista_localizacao(state: AgentState):
     respostas_existentes.append("Informação de Localização: " + resposta_texto)
     state["respostas_especialistas"] = respostas_existentes
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
+    state["especialistas_selecionados"] = []
+    state["especialista_respondeu_no_ciclo"] = True
     return state
 
 
@@ -2327,6 +2334,9 @@ workflow.add_conditional_edges(
 )
 
 def router_maestro(state: AgentState):
+    if bool(state.get("especialista_respondeu_no_ciclo")):
+        state["especialista_respondeu_no_ciclo"] = False
+        return "node_atendente"
     if bool(state.get("saudacao_pendente")):
         return "node_especialista_saudacao"
     intencoes = state.get("intencao") or []
@@ -2366,8 +2376,8 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
-workflow.add_edge("especialista_localizacao", "node_roteador_maestro")
+workflow.add_edge("especialista_funcionamento", "node_atendente")
+workflow.add_edge("especialista_localizacao", "node_atendente")
 workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
 
 def router_pos_acao_sistema(state: AgentState):
