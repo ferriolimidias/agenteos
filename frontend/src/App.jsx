@@ -16,6 +16,7 @@ import Integracoes from "./pages/tenant/Integracoes";
 import Transferencias from "./pages/tenant/Transferencias";
 import Campanhas from "./pages/tenant/Campanhas";
 import GestaoTags from "./pages/tenant/GestaoTags";
+import Unidades from "./pages/tenant/Unidades";
 
 function App() {
   useEffect(() => {
@@ -84,6 +85,7 @@ function App() {
         <Route path="transferencias" element={<Transferencias />} />
         <Route path="campanhas" element={<Campanhas />} />
         <Route path="tags" element={<GestaoTags />} />
+        <Route path="unidades" element={<Unidades />} />
       </Route>
     </Routes>
   );
