@@ -232,6 +232,7 @@ class SemanticRouterService:
         self,
         query_text: str,
         empresa_id: Optional[str] = None,
+        recent_history_text: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         t0_total = time.perf_counter()
         expansion_time = 0.0
@@ -242,6 +243,9 @@ class SemanticRouterService:
         ids_escolhidos_log: list[str] = []
 
         normalized_query = str(query_text or "").strip()
+        normalized_history_text = str(recent_history_text or "").strip()
+        if not normalized_history_text:
+            normalized_history_text = f"Cliente: {normalized_query}"
         if not normalized_query:
             total_time = time.perf_counter() - t0_total
             logger.info(
@@ -280,10 +284,34 @@ class SemanticRouterService:
                 [
                     (
                         "system",
-                        "Extraia intenções principais em termos de busca independentes para roteamento semântico. "
-                        "Retorne somente no schema estruturado.",
+                        "Você é um especialista em extração de intenções para busca vetorial.\n"
+                        "Analise a última mensagem do usuário levando em consideração o contexto do histórico recente da conversa.\n\n"
+                        "DIRETRIZES:\n"
+                        "1. Se a mensagem do usuário for longa ou contiver uma dúvida clara, extraia os termos principais dessa mensagem.\n"
+                        "2. Se a mensagem do usuário for apenas uma confirmação curta (ex: 'Sim', 'Quero', 'Pode mandar', 'Certo'), OLHE PARA A MENSAGEM ANTERIOR DA IA. Extraia os termos cruciais daquilo que a IA ofereceu e o usuário acabou de aceitar.\n"
+                        "3. Gere apenas os termos chave essenciais para encontrar a informação em um banco de dados vetorial. Exclua pronomes, saudações e palavras vazias.\n\n"
+                        "EXEMPLOS PRÁTICOS DE ANÁLISE E SAÍDA:\n\n"
+                        "Exemplo 1 (Pergunta Direta):\n"
+                        "Histórico:\n"
+                        "IA: Como posso te ajudar hoje?\n"
+                        "Cliente: Quais os valores e horários de Pedagogia?\n"
+                        "Intenção Extraída: [\"preço pedagogia\", \"horários aulas pedagogia\"]\n\n"
+                        "Exemplo 2 (A Confirmação Curta):\n"
+                        "Histórico:\n"
+                        "IA: Temos uma condição incrível de Bolsas Parciais. Posso te mostrar?\n"
+                        "Cliente: Sim, quero ver.\n"
+                        "Intenção Extraída: [\"bolsas parciais valores\"]\n\n"
+                        "Exemplo 3 (Confirmação + Nova Dúvida):\n"
+                        "Histórico:\n"
+                        "IA: O curso tem duração de 4 anos. Quer saber sobre a matrícula?\n"
+                        "Cliente: Pode ser, e vocês têm EAD?\n"
+                        "Intenção Extraída: [\"matrícula\", \"curso EAD online\"]",
                     ),
-                    ("user", f"Mensagem do usuário: {normalized_query}"),
+                    (
+                        "user",
+                        "Histórico recente (ordem cronológica):\n"
+                        f"{normalized_history_text}",
+                    ),
                 ]
             )
             termos_busca = self._deduplicar_termos(getattr(termos_resp, "termos", []) or [], normalized_query)

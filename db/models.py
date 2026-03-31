@@ -125,6 +125,21 @@ class Empresa(Base):
     campanhas_disparo = relationship("CampanhaDisparo", back_populates="empresa", cascade="all, delete-orphan")
     destinos_transferencia = relationship("DestinosTransferencia", back_populates="empresa", cascade="all, delete-orphan")
     historicos_transferencia = relationship("HistoricoTransferencia", back_populates="empresa", cascade="all, delete-orphan")
+    unidades = relationship("EmpresaUnidade", back_populates="empresa", cascade="all, delete-orphan")
+
+
+class EmpresaUnidade(Base):
+    __tablename__ = "empresa_unidades"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome_unidade = Column(String, nullable=False)
+    endereco_completo = Column(Text, nullable=False)
+    link_google_maps = Column(String, nullable=True)
+    horario_funcionamento = Column(String, nullable=True)
+    is_matriz = Column(Boolean, nullable=False, default=False)
+
+    empresa = relationship("Empresa", back_populates="unidades")
 
 
 class TipoConexao(str, enum.Enum):

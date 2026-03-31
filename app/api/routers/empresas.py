@@ -20,6 +20,7 @@ from db.models import (
     CampanhaDisparo,
     CampanhaDisparoStatus,
     Empresa,
+    EmpresaUnidade,
     Conhecimento,
     Usuario,
     ConhecimentoRAG,
@@ -69,6 +70,31 @@ router = APIRouter(
 )
 
 SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
+
+
+class EmpresaUnidadeBase(BaseModel):
+    nome_unidade: str
+    endereco_completo: str
+    link_google_maps: Optional[str] = None
+    horario_funcionamento: Optional[str] = None
+    is_matriz: bool = False
+
+
+class EmpresaUnidadeCreate(EmpresaUnidadeBase):
+    pass
+
+
+class EmpresaUnidadeUpdate(BaseModel):
+    nome_unidade: Optional[str] = None
+    endereco_completo: Optional[str] = None
+    link_google_maps: Optional[str] = None
+    horario_funcionamento: Optional[str] = None
+    is_matriz: Optional[bool] = None
+
+
+class EmpresaUnidadeResponse(EmpresaUnidadeBase):
+    id: str
+    empresa_id: str
 
 
 def _parse_uuid_or_none(value: str | None) -> uuid.UUID | None:
@@ -259,6 +285,164 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "limite_duvida": empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45,
         "max_agentes_desempate": empresa.max_agentes_desempate if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
     }
+
+
+@router.get("/{empresa_id}/unidades", response_model=List[EmpresaUnidadeResponse], status_code=status.HTTP_200_OK)
+async def listar_unidades_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
+    empresa_uuid = _parse_uuid_or_none(empresa_id)
+    if not empresa_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
+
+    result_empresa = await db.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+    if not result_empresa.scalars().first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+
+    result = await db.execute(
+        select(EmpresaUnidade)
+        .where(EmpresaUnidade.empresa_id == empresa_uuid)
+        .order_by(EmpresaUnidade.is_matriz.desc(), EmpresaUnidade.nome_unidade.asc())
+    )
+    unidades = result.scalars().all()
+    return [
+        {
+            "id": str(unidade.id),
+            "empresa_id": str(unidade.empresa_id),
+            "nome_unidade": str(unidade.nome_unidade or ""),
+            "endereco_completo": str(unidade.endereco_completo or ""),
+            "link_google_maps": str(unidade.link_google_maps) if unidade.link_google_maps else None,
+            "horario_funcionamento": str(unidade.horario_funcionamento) if unidade.horario_funcionamento else None,
+            "is_matriz": bool(unidade.is_matriz),
+        }
+        for unidade in unidades
+    ]
+
+
+@router.post("/{empresa_id}/unidades", response_model=EmpresaUnidadeResponse, status_code=status.HTTP_201_CREATED)
+async def criar_unidade_empresa(empresa_id: str, payload: EmpresaUnidadeCreate, db: AsyncSession = Depends(get_db)):
+    empresa_uuid = _parse_uuid_or_none(empresa_id)
+    if not empresa_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
+
+    result_empresa = await db.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+    if not result_empresa.scalars().first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+
+    nome_unidade = str(payload.nome_unidade or "").strip()
+    endereco_completo = str(payload.endereco_completo or "").strip()
+    if not nome_unidade or not endereco_completo:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="nome_unidade e endereco_completo são obrigatórios",
+        )
+
+    if payload.is_matriz:
+        await db.execute(
+            update(EmpresaUnidade)
+            .where(EmpresaUnidade.empresa_id == empresa_uuid)
+            .values(is_matriz=False)
+        )
+
+    nova_unidade = EmpresaUnidade(
+        empresa_id=empresa_uuid,
+        nome_unidade=nome_unidade,
+        endereco_completo=endereco_completo,
+        link_google_maps=str(payload.link_google_maps or "").strip() or None,
+        horario_funcionamento=str(payload.horario_funcionamento or "").strip() or None,
+        is_matriz=bool(payload.is_matriz),
+    )
+    db.add(nova_unidade)
+    await db.commit()
+    await db.refresh(nova_unidade)
+    return {
+        "id": str(nova_unidade.id),
+        "empresa_id": str(nova_unidade.empresa_id),
+        "nome_unidade": str(nova_unidade.nome_unidade or ""),
+        "endereco_completo": str(nova_unidade.endereco_completo or ""),
+        "link_google_maps": str(nova_unidade.link_google_maps) if nova_unidade.link_google_maps else None,
+        "horario_funcionamento": str(nova_unidade.horario_funcionamento) if nova_unidade.horario_funcionamento else None,
+        "is_matriz": bool(nova_unidade.is_matriz),
+    }
+
+
+@router.put("/{empresa_id}/unidades/{unidade_id}", response_model=EmpresaUnidadeResponse, status_code=status.HTTP_200_OK)
+async def atualizar_unidade_empresa(
+    empresa_id: str,
+    unidade_id: str,
+    payload: EmpresaUnidadeUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    empresa_uuid = _parse_uuid_or_none(empresa_id)
+    unidade_uuid = _parse_uuid_or_none(unidade_id)
+    if not empresa_uuid or not unidade_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(EmpresaUnidade).where(
+            EmpresaUnidade.id == unidade_uuid,
+            EmpresaUnidade.empresa_id == empresa_uuid,
+        )
+    )
+    unidade = result.scalars().first()
+    if not unidade:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unidade não encontrada")
+
+    if payload.nome_unidade is not None:
+        unidade.nome_unidade = str(payload.nome_unidade).strip()
+    if payload.endereco_completo is not None:
+        unidade.endereco_completo = str(payload.endereco_completo).strip()
+    if payload.link_google_maps is not None:
+        unidade.link_google_maps = str(payload.link_google_maps).strip() or None
+    if payload.horario_funcionamento is not None:
+        unidade.horario_funcionamento = str(payload.horario_funcionamento).strip() or None
+    if payload.is_matriz is not None:
+        novo_is_matriz = bool(payload.is_matriz)
+        if novo_is_matriz:
+            await db.execute(
+                update(EmpresaUnidade)
+                .where(EmpresaUnidade.empresa_id == empresa_uuid, EmpresaUnidade.id != unidade_uuid)
+                .values(is_matriz=False)
+            )
+        unidade.is_matriz = novo_is_matriz
+
+    if not str(unidade.nome_unidade or "").strip() or not str(unidade.endereco_completo or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="nome_unidade e endereco_completo são obrigatórios",
+        )
+
+    await db.commit()
+    await db.refresh(unidade)
+    return {
+        "id": str(unidade.id),
+        "empresa_id": str(unidade.empresa_id),
+        "nome_unidade": str(unidade.nome_unidade or ""),
+        "endereco_completo": str(unidade.endereco_completo or ""),
+        "link_google_maps": str(unidade.link_google_maps) if unidade.link_google_maps else None,
+        "horario_funcionamento": str(unidade.horario_funcionamento) if unidade.horario_funcionamento else None,
+        "is_matriz": bool(unidade.is_matriz),
+    }
+
+
+@router.delete("/{empresa_id}/unidades/{unidade_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def deletar_unidade_empresa(empresa_id: str, unidade_id: str, db: AsyncSession = Depends(get_db)):
+    empresa_uuid = _parse_uuid_or_none(empresa_id)
+    unidade_uuid = _parse_uuid_or_none(unidade_id)
+    if not empresa_uuid or not unidade_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(EmpresaUnidade).where(
+            EmpresaUnidade.id == unidade_uuid,
+            EmpresaUnidade.empresa_id == empresa_uuid,
+        )
+    )
+    unidade = result.scalars().first()
+    if not unidade:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unidade não encontrada")
+
+    await db.delete(unidade)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # --- ROTAS DA IA CONFIGURATOR ---
 from fastapi import Header

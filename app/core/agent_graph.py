@@ -82,6 +82,7 @@ from db.models import (
     MensagemHistorico,
     AgendaConfiguracao,
     AgendamentoLocal,
+    EmpresaUnidade,
 )
 from sqlalchemy import select, update, and_
 from sqlalchemy.orm import selectinload
@@ -126,6 +127,36 @@ def _ultima_mensagem_cliente(state: "AgentState") -> str:
             continue
         return _strip_role_prefix(texto)
     return _strip_role_prefix(str(mensagens[-1] if mensagens else ""))
+
+
+def _ultima_mensagem_assistente(state: "AgentState") -> str:
+    mensagens = state.get("mensagens") or []
+    if not isinstance(mensagens, list):
+        return ""
+    for item in reversed(mensagens):
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        if texto.lower().startswith("assistente:"):
+            return _strip_role_prefix(texto)
+    return ""
+
+
+def _historico_curto_roteador(state: "AgentState", limite: int = 3) -> str:
+    mensagens = state.get("mensagens") or []
+    if not isinstance(mensagens, list):
+        return ""
+    itens = [str(item or "").strip() for item in mensagens if str(item or "").strip()]
+    if not itens:
+        return ""
+    ultimas = itens[-max(1, int(limite)) :]
+    linhas: list[str] = []
+    for texto in ultimas:
+        if texto.lower().startswith("assistente:"):
+            linhas.append(f"IA: {_strip_role_prefix(texto)}")
+        else:
+            linhas.append(f"Cliente: {_strip_role_prefix(texto)}")
+    return "\n".join(linhas).strip()
 
 
 def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
@@ -845,6 +876,36 @@ async def ler_dados_empresa(empresa_uuid) -> tuple:
         return "Empresa Padrão", ""
 
 
+async def get_unidades_formatadas(empresa_id: str, db) -> str:
+    empresa_uuid = uuid.UUID(str(empresa_id))
+    result = await db.execute(
+        select(EmpresaUnidade)
+        .where(EmpresaUnidade.empresa_id == empresa_uuid)
+        .order_by(EmpresaUnidade.is_matriz.desc(), EmpresaUnidade.nome_unidade.asc())
+    )
+    unidades = result.scalars().all()
+    if not unidades:
+        return "(nenhuma unidade cadastrada)"
+
+    linhas: list[str] = []
+    for idx, unidade in enumerate(unidades, start=1):
+        tipo = "Matriz" if bool(getattr(unidade, "is_matriz", False)) else "Filial"
+        nome = str(getattr(unidade, "nome_unidade", "") or f"Unidade {idx}")
+        endereco = str(getattr(unidade, "endereco_completo", "") or "não informado")
+        link_maps = str(getattr(unidade, "link_google_maps", "") or "").strip()
+        horario = str(getattr(unidade, "horario_funcionamento", "") or "").strip()
+        bloco = [
+            f"{idx}. {nome} ({tipo})",
+            f"- Endereço: {endereco}",
+        ]
+        if horario:
+            bloco.append(f"- Horário: {horario}")
+        if link_maps:
+            bloco.append(f"- Google Maps: {link_maps}")
+        linhas.append("\n".join(bloco))
+    return "\n\n".join(linhas)
+
+
 def _normalize_stage_name(value: str | None) -> str:
     texto = str(value or "").strip().lower()
     texto = unicodedata.normalize("NFKD", texto)
@@ -1224,6 +1285,12 @@ async def node_atendente(state: AgentState):
             "ou se a conversa chegar ao fim natural (fechamento), acione o [Especialista de Sistema / Ferramenta de Roteamento] "
             "e avise o cliente amigavelmente que a ação está sendo tomada."
         )
+        blocos.append(
+            "DIRETRIZ DE OBJETIVIDADE: NUNCA peça permissão para enviar uma informação ou oferta "
+            "(ex: Posso te mostrar?). Se você tem a informação (como preços, cursos ou bolsas), "
+            "ENVIE IMEDIATAMENTE. Se faltar contexto para buscar, faça a pergunta de forma direta. "
+            "Proibido usar excesso de confirmações como Perfeito, Que ótimo, seguidas."
+        )
 
         formatacao_base = (
             "DIRETRIZ DE FORMATAÇÃO (CRÍTICO): Você está se comunicando exclusivamente pelo WhatsApp. "
@@ -1404,11 +1471,13 @@ async def node_roteador_maestro(state: AgentState):
     )
     state["handoff_requested"] = any(marker in ultima_mensagem.lower() for marker in handoff_markers)
 
+    historico_curto_roteador = _historico_curto_roteador(state, limite=3)
     async with AsyncSessionLocal() as session:
         router_service = SemanticRouterService(session)
         especialistas_match = await router_service.route_multi_specialists(
             query_text=ultima_mensagem,
             empresa_id=str(empresa_uuid) if empresa_uuid else None,
+            recent_history_text=historico_curto_roteador,
         )
 
     if len(especialistas_match) > 1:
@@ -1449,6 +1518,25 @@ async def node_roteador_maestro(state: AgentState):
         intencoes_atuais = list(state.get("intencao") or [])
         if "funcionamento" not in intencoes_atuais:
             intencoes_atuais.append("funcionamento")
+        state["intencao"] = intencoes_atuais
+
+    termos_localizacao = (
+        "endereco",
+        "endereço",
+        "localizacao",
+        "localização",
+        "onde fica",
+        "filial",
+        "filiais",
+        "unidade",
+        "unidades",
+        "google maps",
+        "como chegar",
+    )
+    if any(termo in mensagem_normalizada for termo in termos_localizacao):
+        intencoes_atuais = list(state.get("intencao") or [])
+        if "localizacao" not in intencoes_atuais:
+            intencoes_atuais.append("localizacao")
         state["intencao"] = intencoes_atuais
 
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
@@ -1650,6 +1738,51 @@ async def node_especialista_funcionamento(state: AgentState):
     state["respostas_especialistas"] = respostas_existentes
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
     return state
+
+
+async def node_especialista_localizacao(state: AgentState):
+    print("[NODE ESPECIALISTA LOCALIZACAO] Processando dúvida de endereços/unidades...")
+    empresa_id = state.get("empresa_id")
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+
+    respostas_existentes = state.get("respostas_especialistas") or []
+    if not isinstance(respostas_existentes, list):
+        respostas_existentes = []
+
+    if not empresa_id:
+        respostas_existentes.append("Informação de Localização: Não foi possível identificar a empresa para consultar unidades.")
+        state["respostas_especialistas"] = respostas_existentes
+        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
+        return state
+
+    try:
+        async with AsyncSessionLocal() as session:
+            dados_unidades_formatados = await get_unidades_formatadas(empresa_id, session)
+    except Exception as e:
+        logger.exception("[NODE ESPECIALISTA LOCALIZACAO] Falha ao buscar unidades: %s", e)
+        dados_unidades_formatados = "(erro ao consultar unidades)"
+
+    prompt_sistema = (
+        "Você é o Especialista de Localização. Use EXCLUSIVAMENTE os dados abaixo para responder sobre endereços e unidades.\n"
+        "[UNIDADES DA EMPRESA]\n"
+        f"{dados_unidades_formatados}\n"
+        "[FIM DAS UNIDADES]\n"
+        "Responda de forma direta, clara e amigável, sem inventar dados."
+    )
+
+    try:
+        llm = await get_llm(empresa_id)
+        resposta = await llm.ainvoke([("system", prompt_sistema), ("user", ultima_mensagem)])
+        resposta_texto = str(getattr(resposta, "content", "") or "").strip()
+    except Exception as e:
+        logger.exception("[NODE ESPECIALISTA LOCALIZACAO] Falha ao invocar LLM: %s", e)
+        resposta_texto = "No momento não consegui consultar os endereços das unidades."
+
+    respostas_existentes.append("Informação de Localização: " + resposta_texto)
+    state["respostas_especialistas"] = respostas_existentes
+    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
+    return state
+
 
 async def node_especialista_saudacao(state: AgentState):
     print("[NODE ESPECIALISTA SAUDACAO] Gerando saudação inicial dedicada...")
@@ -2158,6 +2291,7 @@ workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("especialista_funcionamento", node_especialista_funcionamento)
+workflow.add_node("especialista_localizacao", node_especialista_localizacao)
 workflow.add_node("node_especialista_saudacao", node_especialista_saudacao)
 workflow.add_node("node_acao_sistema", node_acao_sistema)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
@@ -2212,6 +2346,8 @@ def router_maestro(state: AgentState):
         return "node_atendente"
     if "funcionamento" in intencoes:
         return "especialista_funcionamento"
+    if "localizacao" in intencoes:
+        return "especialista_localizacao"
     if especialistas_selecionados:
         return "node_especialista_dinamico"
     return "node_atendente"
@@ -2223,6 +2359,7 @@ workflow.add_conditional_edges(
     {
         "node_atendente": "node_atendente",
         "especialista_funcionamento": "especialista_funcionamento",
+        "especialista_localizacao": "especialista_localizacao",
         "node_especialista_saudacao": "node_especialista_saudacao",
         "node_acao_sistema": "node_acao_sistema",
         "node_especialista_dinamico": "node_especialista_dinamico",
@@ -2230,6 +2367,7 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
+workflow.add_edge("especialista_localizacao", "node_roteador_maestro")
 workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
 
 def router_pos_acao_sistema(state: AgentState):
