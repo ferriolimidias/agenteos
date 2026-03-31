@@ -31,6 +31,8 @@ def get_llm_model(model_name: str, api_key: str = None):
     if model_lower.startswith("o"):
         temperature = 1.0
 
+    openai_model_kwargs = {"frequency_penalty": 0.4, "presence_penalty": 0.4}
+
     if model_lower.startswith("gemini-"):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -59,12 +61,21 @@ def get_llm_model(model_name: str, api_key: str = None):
         print(f"[get_llm_model] Instanciando ChatOpenAI para '{model_lower}'")
         if model_lower.startswith("o"):
             if key:
-                return ChatOpenAI(model=model_name, api_key=key)
-            return ChatOpenAI(model=model_name)
+                return ChatOpenAI(model=model_name, api_key=key, model_kwargs=openai_model_kwargs)
+            return ChatOpenAI(model=model_name, model_kwargs=openai_model_kwargs)
         else:
             if key:
-                return ChatOpenAI(model=model_name, temperature=temperature, api_key=key)
-            return ChatOpenAI(model=model_name, temperature=temperature)
+                return ChatOpenAI(
+                    model=model_name,
+                    temperature=temperature,
+                    api_key=key,
+                    model_kwargs=openai_model_kwargs,
+                )
+            return ChatOpenAI(
+                model=model_name,
+                temperature=temperature,
+                model_kwargs=openai_model_kwargs,
+            )
     
     else:
         print(f"[get_llm_model] NENHUM prefixo conhecido encontrado para '{model_name}'. FALLBACK OBRIGATÓRIO para 'gpt-4o-mini'")
@@ -72,8 +83,17 @@ def get_llm_model(model_name: str, api_key: str = None):
         import os
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if key:
-            return ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=key)
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+            return ChatOpenAI(
+                model="gpt-4o-mini",
+                temperature=0.7,
+                api_key=key,
+                model_kwargs=openai_model_kwargs,
+            )
+        return ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            model_kwargs=openai_model_kwargs,
+        )
 
 import json
 from datetime import timedelta
@@ -229,6 +249,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
     
     # ── PONTO 1: Ingestão do histórico real do PostgreSQL ──────────────────────
     historico_bd_formatado = ""
+    mensagens_globais = list(textos)
     try:
         import uuid as _uuid
         from db.database import AsyncSessionLocal as _ASL
@@ -250,12 +271,12 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
             _lead_hist = _res_lead.scalars().first()
 
             if _lead_hist:
-                # Busca as últimas 10 mensagens, da mais antiga para a mais nova
+                # Busca as últimas 15 mensagens, da mais antiga para a mais nova
                 _res_hist = await _sess.execute(
                     _select(_MH)
                     .where(_MH.lead_id == _lead_hist.id)
                     .order_by(_MH.criado_em.desc())
-                    .limit(10)
+                    .limit(15)
                 )
                 _msgs_hist = list(reversed(_res_hist.scalars().all()))
 
@@ -265,6 +286,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                         papel = "Assistente" if _m.from_me else "Usuario"
                         linhas.append(f"{papel}: {_m.texto}")
                     historico_bd_formatado = "\n".join(linhas)
+                    mensagens_globais = list(linhas)
                     print(f"[ENGINE] Histórico PostgreSQL carregado: {len(_msgs_hist)} mensagem(ns).")
                     _conversation_debug_log(f"[ENGINE][DEBUG] Histórico formatado:\n{historico_bd_formatado}")
                 else:
@@ -280,7 +302,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "identificador_origem": mensagens[0].identificador_origem,
         "canal": mensagens[0].canal,
         "conexao_id": mensagens[0].conexao_id,
-        "mensagens": textos,
+        "mensagens": mensagens_globais,
         "historico_bd": historico_bd_formatado,
         "nome_contato": getattr(mensagens[0], "nome_contato", None),
         "intencao": [],
@@ -306,7 +328,8 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
     
     try:
         print("\n[LangGraph] Invocando Grafo...")
-        config = {"configurable": {"thread_id": mensagens[0].identificador_origem}}
+        thread_id = f"{mensagens[0].empresa_id}:{mensagens[0].canal}:{mensagens[0].identificador_origem}"
+        config = {"configurable": {"thread_id": thread_id}}
         estado_final = await graph.ainvoke(estado_inicial, config=config)
         
         _conversation_debug_log("\n--- ESTADO FINAL DA IA ---")
@@ -662,8 +685,13 @@ Você é um atendente inteligente e conciso. Seu objetivo é interagir com o lea
 1. ESTRUTURA: Use as <instrucoes_agente> como sua lógica principal de atuação.
 2. PERSONALIDADE: Siga rigorosamente o conteúdo em <identidade_tom_ia>.
 3. CONCISÃO: Seja extremamente breve. Responda em no máximo duas ou três frases curtas.
-4. FORMATO: Responda apenas em texto puro. Jamais use markdown, negrito, ou listas.
+4. DIRETRIZ DE FORMATAÇÃO (CRÍTICO): Você está se comunicando exclusivamente pelo WhatsApp. NUNCA use formatação Markdown padrão.
+   - Proibido usar ** para negrito. Use apenas um asterisco: *texto*.
+   - Proibido usar # ou ## para títulos.
+   - Para itálico, use _texto_.
+   - Mantenha os parágrafos curtos e não polua a tela com formatações excessivas.
 5. SAUDAÇÃO: Se existir uma <saudacao_obrigatoria>, você DEVE usá-la como sua primeira interação. Se NÃO existir tal tag, significa que a conversa já está em andamento ou não há saudação definida; nesse caso, vá direto ao ponto sem dizer "Olá" ou se apresentar.
+6. VARIAÇÃO: Varie seu vocabulário. Nunca repita a mesma saudação ou estrutura de frase usada nas suas mensagens anteriores.
 </regras_comportamento>
 """
     return prompt

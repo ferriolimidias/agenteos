@@ -32,6 +32,7 @@ def _conversation_debug_log(message: str, flush: bool = False) -> None:
         print(message, flush=flush)
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_core.messages import AIMessage, HumanMessage
 
 # Removido LLM global: será instanciado via get_llm
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -63,7 +64,11 @@ async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -
     except Exception as e:
         print(f"Erro instanciando modelo {modelo_ia}: {e}")
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+        return ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            model_kwargs={"frequency_penalty": 0.4, "presence_penalty": 0.4},
+        )
 
 from db.database import AsyncSessionLocal
 from db.models import (
@@ -97,6 +102,43 @@ from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_role_prefix(texto: str) -> str:
+    raw = str(texto or "").strip()
+    lower_raw = raw.lower()
+    for prefixo in ("assistente:", "usuario:", "usuário:", "cliente:"):
+        if lower_raw.startswith(prefixo):
+            return raw[len(prefixo):].strip()
+    return raw
+
+
+def _ultima_mensagem_cliente(state: "AgentState") -> str:
+    mensagens = state.get("mensagens") or []
+    if not isinstance(mensagens, list):
+        return ""
+    for item in reversed(mensagens):
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        texto_lower = texto.lower()
+        if texto_lower.startswith("assistente:"):
+            continue
+        return _strip_role_prefix(texto)
+    return _strip_role_prefix(str(mensagens[-1] if mensagens else ""))
+
+
+def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
+    saida: list[Any] = []
+    for item in mensagens:
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        if texto.lower().startswith("assistente:"):
+            saida.append(AIMessage(content=_strip_role_prefix(texto)))
+        else:
+            saida.append(HumanMessage(content=_strip_role_prefix(texto)))
+    return saida
 
 async def disparar_webhook_saida(lead_id: str):
     import uuid
@@ -468,7 +510,8 @@ class ToolAtualizarTagsLeadInput(BaseModel):
 async def node_especialista_tags(state: AgentState):
     lead_id = state.get("lead_id")
     empresa_id = state.get("empresa_id")
-    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+    historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
     tags_crm_prompt = await listar_tags_crm_para_prompt(empresa_id) if empresa_id else ""
 
     if not lead_id or not empresa_id or not tags_crm_prompt:
@@ -491,6 +534,8 @@ Use a tool 'tool_atualizar_tags_lead' seguindo estritamente estas regras:
 {tags_crm_prompt}
 
 Lead atual: {lead_id}
+HISTORICO_GLOBAL_READ_ONLY:
+{historico_global}
 
 Classifique o lead apenas com tags oficiais coerentes com a conversa.
 Retorne APENAS dados crus da operação (resultado da tool, tags aplicadas, erros).
@@ -729,7 +774,7 @@ class AgentState(TypedDict):
     identificador_origem: str
     canal: str
     conexao_id: Optional[str]
-    mensagens: list
+    mensagens: list  # Memória global única da conversa (cliente + assistente), somente a orquestradora atualiza.
     historico_bd: str          # Histórico real do PostgreSQL, formatado
     nome_contato: Optional[str]
     intencao: List[str]
@@ -891,7 +936,7 @@ async def node_capturar_nome(state: AgentState):
     print(f"[NODE CAPTURAR NOME] Gerando mensagem amigável para perguntar o nome...")
     
     prompt = "Você é um assistente virtual prestativo. O usuário iniciou a conversa, mas não sabemos o nome dele. Gere uma mensagem curta, simpática e humana pedindo o nome dele."
-    ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+    ultima_mensagem = _ultima_mensagem_cliente(state)
     
     llm = await get_llm(state.get("empresa_id"))
     resposta = await llm.ainvoke([("system", prompt), ("user", ultima_mensagem)])
@@ -1019,25 +1064,28 @@ async def node_atendente(state: AgentState):
         )
 
         formatacao_base = (
-            "DIRETRIZES DE ESTRUTURAÇÃO VISUAL E RENDERIZAÇÃO (WHATSAPP):\n"
-            "- ESPAÇAMENTO RADICAL (MOBILE FIRST):\n"
-            "  1. TÍTULOS E BLOCOS PRINCIPAIS: Utilize OBRIGATORIAMENTE TRÊS QUEBRAS DE LINHA (Enter, Enter, Enter) "
-            "após um título ou antes de começar uma nova seção de curso.\n"
-            "  2. FRASES E PARÁGRAFOS: É terminantemente proibido enviar duas frases coladas. Utilize OBRIGATORIAMENTE "
-            "DUAS QUEBRAS DE LINHA (Enter, Enter) entre cada frase ou afirmação, mesmo que sejam curtas.\n"
-            "  3. LISTAS: Dê um espaço duplo antes de iniciar a lista. Cada item deve ocupar sua própria linha e ter "
-            "um espaço duplo após o último item da lista.\n"
-            "- OBJETIVO VISUAL: No celular, o usuário deve ver muito espaço em branco. O texto deve ser fatiado em "
-            "pequenas pílulas de informação, facilitando o 'scroll' e a leitura rápida."
+            "DIRETRIZ DE FORMATAÇÃO (CRÍTICO): Você está se comunicando exclusivamente pelo WhatsApp. "
+            "NUNCA use formatação Markdown padrão.\n"
+            "- Proibido usar ** para negrito. Use apenas um asterisco: *texto*.\n"
+            "- Proibido usar # ou ## para títulos.\n"
+            "- Para itálico, use _texto_.\n"
+            "- Mantenha os parágrafos curtos e não polua a tela com formatações excessivas."
         )
         blocos.append(formatacao_base)
+        blocos.append(
+            "Varie seu vocabulário. Nunca repita a mesma saudação ou estrutura de frase usada nas suas mensagens anteriores."
+        )
 
         if incluir_especialistas and respostas_especialistas:
             respostas_texto = "\n".join([str(r) for r in respostas_especialistas if str(r).strip()])
             blocos.append(
-                "Baseie sua resposta RIGOROSAMENTE nas seguintes informações técnicas resolvidas pelos especialistas: "
-                f"{respostas_texto}. "
-                "Sintetize todas as informações em uma única resposta fluida e natural, sem dizer que consultou especialistas."
+                "[INFORMAÇÕES DE CONSULTA OBTIDAS PELO ESPECIALISTA]\n"
+                f"{respostas_texto}\n"
+                "[FIM DAS INFORMAÇÕES DE CONSULTA]\n\n"
+                "REGRA: As informações acima são apenas para sua consulta. "
+                "Você DEVE manter sua Persona e Diretrizes Primárias. "
+                "Use os dados acima para formular sua resposta com suas próprias palavras, "
+                "mantendo o tom de voz amigável e conversacional."
             )
 
         return "\n\n".join(blocos).strip()
@@ -1045,8 +1093,6 @@ async def node_atendente(state: AgentState):
     # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
     if respostas_especialistas:
         print(f"[NODE ATENDENTE] Fase de Síntese: Consolidando {len(respostas_especialistas)} resposta(s)...")
-
-        bloco_xml = _bloco_xml(historico_bd, respostas_especialistas)
 
         bloco_xml_sintese = _bloco_xml(historico_bd, respostas_especialistas)
 
@@ -1071,12 +1117,12 @@ Considere o seguinte super-contexto como fonte adicional para cobrir todas as pa
 Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
 Responda em uma única mensagem clara e objetiva.
 A resposta DEVE estar visualmente organizada para leitura em dispositivos móveis (com respiro e escaneabilidade).
-Na síntese final, aplique OBRIGATORIAMENTE as regras de "ESPAÇAMENTO RADICAL (MOBILE FIRST)" definidas no prompt.
+Na síntese final, aplique OBRIGATORIAMENTE a DIRETRIZ DE FORMATAÇÃO (CRÍTICO) definida no prompt.
 Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
-        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + mensagens_recentes
+        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + _to_chat_messages(mensagens_recentes)
         llm = await get_llm(empresa_id)
         resposta = await llm.ainvoke(mensagens_para_llm)
 
@@ -1127,7 +1173,7 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
 </instrucao_final>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
-    mensagens_para_llm = [SystemMessage(content=prompt_resposta_direta)] + mensagens_recentes
+    mensagens_para_llm = [SystemMessage(content=prompt_resposta_direta)] + _to_chat_messages(mensagens_recentes)
     llm = await get_llm(empresa_id)
     resposta = await llm.ainvoke(mensagens_para_llm)
 
@@ -1160,7 +1206,7 @@ async def node_roteador_maestro(state: AgentState):
     except (ValueError, TypeError):
         empresa_uuid = None
 
-    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+    ultima_mensagem = _ultima_mensagem_cliente(state)
     if not ultima_mensagem:
         state["intencao"] = []
         state["especialistas_selecionados"] = []
@@ -1265,7 +1311,8 @@ async def node_especialista_funcionamento(state: AgentState):
 
     empresa_obj = state.get("empresa")
     empresa_id = state.get("empresa_id")
-    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+    historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
     if not empresa_obj and empresa_id:
         try:
@@ -1415,6 +1462,7 @@ async def node_especialista_funcionamento(state: AgentState):
         "Você é o especialista em horários da empresa. "
         f"Hoje é {dia_semana}, {data_hora_atual}. "
         f"Configuração de hoje ({dia_semana_curto}): {json.dumps(config_hoje, ensure_ascii=False)}. "
+        f"HISTORICO_GLOBAL_READ_ONLY: {historico_global}. "
         f"Frase-base obrigatória: {frase_hoje} "
         "Sempre comece a resposta com essa frase-base (ou equivalente com os mesmos dados), "
         "depois complemente de forma curta e cordial conforme a pergunta do cliente."
@@ -1438,7 +1486,8 @@ async def node_especialista_saudacao(state: AgentState):
     import uuid
 
     empresa_id = state.get("empresa_id")
-    ultima_mensagem = str(state["mensagens"][-1] if state.get("mensagens") else "").strip()
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+    historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
     saudacao_base_empresa = ""
     if empresa_id:
@@ -1459,6 +1508,7 @@ async def node_especialista_saudacao(state: AgentState):
         "Analise a mensagem do usuário. Se for de manhã, diga Bom dia, à tarde Boa tarde, "
         "à noite Boa noite. Espelhe a cordialidade do usuário. "
         f"Integre a mensagem base da empresa: '{saudacao_base_empresa}'. "
+        f"Considere este histórico global apenas como leitura para contextualizar: {historico_global}. "
         "RETORNE APENAS A SAUDAÇÃO GERADA, sem tentar responder a dúvidas "
         "(outros especialistas farão isso)."
     )
@@ -1510,7 +1560,8 @@ async def node_especialista_dinamico(state: AgentState):
             return state
 
         print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
-        ultima_mensagem = state["mensagens"][-1] if state["mensagens"] else ""
+        ultima_mensagem = _ultima_mensagem_cliente(state)
+        historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
         import uuid
         empresa_id = state.get("empresa_id")
@@ -1565,6 +1616,9 @@ async def node_especialista_dinamico(state: AgentState):
                 "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
                 "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
                 "NÃO redija mensagens para o cliente final.\n"
+                "Você recebe o histórico global APENAS para leitura e contexto. "
+                "NÃO altere memória e não assuma persona de atendimento final.\n"
+                f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
             )
 
             # ETAPA 1: montar tools sem I/O de banco no construtor das ferramentas.
@@ -2025,13 +2079,11 @@ workflow.add_conditional_edges(
 )
 workflow.add_edge("node_especialista_dinamico", "node_atendente")
 
-from langgraph.checkpoint.memory import MemorySaver
-memory = MemorySaver()
+# Compilar sem checkpointer persistente:
+# a memória global da conversa vem exclusivamente do histórico consolidado no estado.
+graph = workflow.compile()
 
-# Compilar com Checkpointer
-graph = workflow.compile(checkpointer=memory)
-
-async def _buscar_historico_lead_para_followup(canal: str, identificador_origem: str, empresa_id: str, limite: int = 5) -> tuple[str, str | None]:
+async def _buscar_historico_lead_para_followup(canal: str, identificador_origem: str, empresa_id: str, limite: int = 15) -> tuple[str, str | None]:
     """Busca as últimas N mensagens do lead no Postgres e as formata para injeção no prompt."""
     try:
         import uuid as _uuid
