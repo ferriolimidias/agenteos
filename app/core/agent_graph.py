@@ -96,7 +96,11 @@ from app.services.ferramentas_service import (
 )
 from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
-from app.core.tools import tool_atualizar_tags_lead
+from app.core.tools import (
+    tool_atualizar_tags_lead,
+    tool_aplicar_tag_dinamica,
+    tool_transferir_para_humano,
+)
 from app.services.websocket_manager import manager
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt import create_react_agent, ToolNode
@@ -191,6 +195,12 @@ def _remover_especialista_do_estado(state: "AgentState", *chaves: str) -> None:
             continue
         filtrados.append(item)
     state["especialistas_selecionados"] = filtrados
+
+
+def _marcar_bot_pausado_se_necessario(state: "AgentState", retorno_tool: str) -> None:
+    conteudo = str(retorno_tool or "").strip()
+    if "SISTEMA_BOT_PAUSADO" in conteudo:
+        state["bot_foi_pausado"] = True
 
 
 def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
@@ -572,6 +582,17 @@ class ToolAtualizarTagsLeadInput(BaseModel):
     tags: List[str] = Field(description="Lista de tags oficiais que devem ser aplicadas ao lead.")
 
 
+class ToolAplicarTagDinamicaInput(BaseModel):
+    nome_da_tag: str = Field(description="Nome exato da tag oficial que deve ser aplicada no lead atual.")
+
+
+class ToolTransferirParaHumanoInput(BaseModel):
+    motivo: Optional[str] = Field(
+        default=None,
+        description="Resumo curto do motivo para pausar o bot e transferir para humano.",
+    )
+
+
 async def node_especialista_tags(state: AgentState):
     lead_id = state.get("lead_id")
     empresa_id = state.get("empresa_id")
@@ -739,6 +760,7 @@ Retorne apenas o resultado técnico da ação."""
                             conteudo = str(getattr(tool_msg, "content", "") or "").strip()
                             if conteudo:
                                 resultado_tool = conteudo
+                                _marcar_bot_pausado_se_necessario(state, conteudo)
                         continue
                     resultado_tool = str(getattr(resposta, "content", "") or "").strip()
                     break
@@ -785,6 +807,7 @@ Retorne apenas o resultado técnico da ação."""
                             conteudo = str(getattr(tool_msg, "content", "") or "").strip()
                             if conteudo:
                                 retorno_transferencia = conteudo
+                                _marcar_bot_pausado_se_necessario(state, conteudo)
                         break
                     retorno_transferencia = str(getattr(resposta, "content", "") or "").strip()
 
@@ -794,6 +817,7 @@ Retorne apenas o resultado técnico da ação."""
                         telefone=str(state.get("identificador_origem") or ""),
                         empresa_id=empresa_id,
                     )
+                _marcar_bot_pausado_se_necessario(state, retorno_transferencia)
                 status_acoes.append(f"transferir_atendimento: ok ({retorno_transferencia})")
             except Exception as e:
                 status_acoes.append(f"transferir_atendimento: erro ({str(e)})")
@@ -846,6 +870,8 @@ MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
     "transferir_para_humano": transferir_para_humano,
+    "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
+    "tool_transferir_para_humano": tool_transferir_para_humano.coroutine,
 }
 
 
@@ -1041,6 +1067,7 @@ class AgentState(TypedDict):
     saudacao_pendente: Optional[bool]
     saudacao_processada: Optional[bool]
     especialista_respondeu_no_ciclo: Optional[bool]
+    bot_foi_pausado: Optional[bool]
     empresa: Optional[Any]
 
 class AnaliseRoteador(BaseModel):
@@ -2073,6 +2100,55 @@ async def node_especialista_dinamico(state: AgentState):
                         "e converter a conversa em um compromisso marcado, utilizando as ferramentas de agenda fornecidas.\n"
                     )
 
+                # Fallback temporário para testes: injeta as novas tools em todos os especialistas dinâmicos.
+                if lead_id and empresa_id:
+                    async def _tool_aplicar_tag_dinamica_contextual(nome_da_tag: str) -> str:
+                        return await tool_aplicar_tag_dinamica.coroutine(
+                            lead_id=str(lead_id),
+                            empresa_id=str(empresa_id),
+                            nome_da_tag=nome_da_tag,
+                        )
+
+                    async def _tool_transferir_para_humano_contextual(motivo: Optional[str] = None) -> str:
+                        return await tool_transferir_para_humano.coroutine(
+                            lead_id=str(lead_id),
+                            empresa_id=str(empresa_id),
+                            motivo=motivo,
+                        )
+
+                    ferramentas_contextuais = [
+                        StructuredTool(
+                            name="tool_aplicar_tag_dinamica",
+                            description=(
+                                "Aplica uma tag oficial existente ao lead atual; "
+                                "use o nome exato da tag."
+                            ),
+                            args_schema=ToolAplicarTagDinamicaInput,
+                            coroutine=_tool_aplicar_tag_dinamica_contextual,
+                        ),
+                        StructuredTool(
+                            name="tool_transferir_para_humano",
+                            description=(
+                                "Pausa o bot no lead atual e transfere o atendimento para humano. "
+                                "Quando usada, o fluxo do bot deve encerrar neste turno."
+                            ),
+                            args_schema=ToolTransferirParaHumanoInput,
+                            coroutine=_tool_transferir_para_humano_contextual,
+                        ),
+                    ]
+                    for tool_ctx in ferramentas_contextuais:
+                        nome_tool_ctx = str(getattr(tool_ctx, "name", "")).strip()
+                        if not nome_tool_ctx or nome_tool_ctx in nomes_tools_registradas:
+                            continue
+                        tools_disponiveis.append(tool_ctx)
+                        nomes_tools_registradas.add(nome_tool_ctx)
+                    descricoes_tools.extend(
+                        [
+                            "- tool_aplicar_tag_dinamica: aplica uma tag oficial ao lead atual.",
+                            "- tool_transferir_para_humano: pausa o bot e transfere para atendimento humano.",
+                        ]
+                    )
+
                 for conexao in (especialista_db.api_connections if especialista_db else []):
                     try:
                         nova_tool = create_dynamic_tool(conexao)
@@ -2260,6 +2336,7 @@ async def node_especialista_dinamico(state: AgentState):
                             conteudo_tool = str(getattr(tool_msg, "content", "") or "").strip()
                             if conteudo_tool:
                                 dados_crus_partes.append(conteudo_tool)
+                                _marcar_bot_pausado_se_necessario(state, conteudo_tool)
                                 if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
                                     erros_extracao.append(conteudo_tool)
                         continue
@@ -2444,6 +2521,8 @@ workflow.add_edge("especialista_localizacao", "node_atendente")
 workflow.add_edge("node_especialista_saudacao", "node_atendente")
 
 def router_pos_acao_sistema(state: AgentState):
+    if state.get("bot_foi_pausado"):
+        return END
     if state.get("resposta_final"):
         return "node_atendente"
     return "node_roteador_maestro"
@@ -2453,11 +2532,25 @@ workflow.add_conditional_edges(
     "node_acao_sistema",
     router_pos_acao_sistema,
     {
+        END: END,
         "node_atendente": "node_atendente",
         "node_roteador_maestro": "node_roteador_maestro",
     }
 )
-workflow.add_edge("node_especialista_dinamico", "node_atendente")
+def router_pos_especialista_dinamico(state: AgentState):
+    if state.get("bot_foi_pausado"):
+        return END
+    return "node_atendente"
+
+
+workflow.add_conditional_edges(
+    "node_especialista_dinamico",
+    router_pos_especialista_dinamico,
+    {
+        END: END,
+        "node_atendente": "node_atendente",
+    }
+)
 
 # Compilar sem checkpointer persistente:
 # a memória global da conversa vem exclusivamente do histórico consolidado no estado.
