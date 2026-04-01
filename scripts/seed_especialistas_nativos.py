@@ -42,15 +42,18 @@ ESPECIALISTAS_NATIVOS = {
     },
     "especialista_localizacao": {
         "descricao_missao": (
-            "Responder dúvidas sobre endereço, unidade e como chegar."
+            "Fornecer o endereço completo, ponto de referência e enviar o link do Google Maps (mapa) para ajudar o cliente a chegar à unidade."
         ),
         "descricao_roteamento": (
-            "endereço, onde fica, mapa, google maps, matriz, filial, ponto de referência, "
-            "como chegar, referências do local, fica perto de onde, rua, avenida, bairro, cidade"
+            "endereço, onde fica, mapa, link do maps, google maps, matriz, filial, ponto de referência, "
+            "como chegar, me manda o mapa, referências do local, fica perto de onde, rua, avenida, bairro, cidade, "
+            "localização novamente, endereço de novo, gps, rota, manda a localização"
         ),
         "prompt_sistema": (
-            "Você é o especialista de localização. Informe endereço, referências e "
-            "formas de chegada com objetividade."
+            "Você é o especialista de localização. REGRAS OBRIGATÓRIAS: 1. NUNCA peça permissão para enviar o endereço ou o link, "
+            "envie imediatamente. 2. Use o PONTO DE REFERÊNCIA cadastrado como guia principal. 3. Se houver um link de mapa disponível "
+            "no contexto, forneça-o. 4. NUNCA invente ou gere links falsos (como '/0'). Se não houver link no contexto, envie apenas o "
+            "endereço em texto."
         ),
     },
     "especialista_funcionamento": {

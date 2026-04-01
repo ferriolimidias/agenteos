@@ -1436,6 +1436,7 @@ Você está no fluxo sem especialistas selecionados para este turno.
 Responda diretamente ao cliente em uma única mensagem clara, cordial e objetiva.
 Use o histórico da conversa para manter continuidade e contexto.
 Não mencione roteamento interno, especialistas, ferramentas, APIs ou limitações técnicas internas.
+REGRA DE SEGURANÇA: NUNCA invente ou crie links de Google Maps ou URLs falsas (como '/0'). Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.
 Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
 </instrucao_final>"""
 
@@ -1961,6 +1962,8 @@ async def node_especialista_dinamico(state: AgentState):
                 "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
                 "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
                 "NÃO redija mensagens para o cliente final.\n"
+                "REGRA DE SEGURANÇA: NUNCA invente ou crie links de Google Maps ou URLs falsas (como '/0'). "
+                "Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.\n"
                 "Você recebe o histórico global APENAS para leitura e contexto. "
                 "NÃO altere memória e não assuma persona de atendimento final.\n"
                 f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
