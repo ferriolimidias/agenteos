@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -11,13 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from db.models import Empresa, Especialista
-from db.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
-
-
-class TermosBusca(BaseModel):
-    termos: List[str] = Field(default_factory=list)
 
 
 class EspecialistasEscolhidos(BaseModel):
@@ -34,34 +28,99 @@ class SemanticRouterService:
         )
         self.api_key = key
 
-    def _build_fast_llm(self, api_key: str | None = None) -> ChatOpenAI:
+    def _build_fast_llm(
+        self,
+        api_key: str | None = None,
+        model_name: str | None = None,
+    ) -> ChatOpenAI:
         key = api_key or self.api_key or os.getenv("OPENAI_API_KEY")
         try:
-            return ChatOpenAI(model="gpt-5.4-nano", temperature=0, api_key=key)
+            return ChatOpenAI(model=(model_name or "gpt-5.4-nano"), temperature=0, api_key=key)
         except Exception:
-            return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
+            try:
+                return ChatOpenAI(model="gpt-5.4-nano", temperature=0, api_key=key)
+            except Exception:
+                return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
 
-    @staticmethod
-    def _deduplicar_termos(termos: list[str], fallback: str) -> list[str]:
-        itens: list[str] = []
-        vistos: set[str] = set()
-        for termo in termos:
-            normalizado = str(termo or "").strip()
-            if not normalizado:
-                continue
-            chave = normalizado.lower()
-            if chave in vistos:
-                continue
-            vistos.add(chave)
-            itens.append(normalizado)
-        if not itens and str(fallback or "").strip():
-            itens = [str(fallback).strip()]
-        return itens[:6]
-
-    @staticmethod
     def _build_routing_text(especialista: Especialista) -> str:
         # Unificacao: roteamento semantico deve depender apenas da missao do especialista.
         return (especialista.descricao_missao or "").strip()
+
+    @staticmethod
+    def _agrupar_turnos(mensagens: list[dict[str, str]]) -> list[dict[str, str]]:
+        turnos: list[dict[str, str]] = []
+        for mensagem in mensagens:
+            role = str(mensagem.get("role") or "").strip().lower()
+            content = str(mensagem.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            if turnos and turnos[-1]["role"] == role:
+                turnos[-1]["content"] = f"{turnos[-1]['content']}\n{content}".strip()
+                continue
+            turnos.append({"role": role, "content": content})
+        return turnos
+
+    @staticmethod
+    def _normalizar_historico_para_mensagens(recent_history_text: str) -> list[dict[str, str]]:
+        mensagens: list[dict[str, str]] = []
+        for linha_raw in str(recent_history_text or "").splitlines():
+            linha = str(linha_raw or "").strip()
+            if not linha:
+                continue
+            lower = linha.lower()
+            if lower.startswith("ia:") or lower.startswith("assistente:"):
+                content = linha.split(":", 1)[1].strip() if ":" in linha else linha
+                mensagens.append({"role": "assistant", "content": content})
+            elif lower.startswith("cliente:") or lower.startswith("usuario:") or lower.startswith("usuário:"):
+                content = linha.split(":", 1)[1].strip() if ":" in linha else linha
+                mensagens.append({"role": "user", "content": content})
+            elif mensagens:
+                mensagens[-1]["content"] = f"{mensagens[-1]['content']}\n{linha}".strip()
+            else:
+                mensagens.append({"role": "user", "content": linha})
+        return mensagens
+
+    async def _expandir_query_com_llm(
+        self,
+        mensagem_atual: str,
+        recent_history_text: str,
+        api_key: str | None = None,
+        model_name: str | None = None,
+    ) -> str:
+        mensagens = self._normalizar_historico_para_mensagens(recent_history_text)
+        if not mensagens and str(mensagem_atual or "").strip():
+            mensagens = [{"role": "user", "content": str(mensagem_atual).strip()}]
+
+        turnos_consolidados = self._agrupar_turnos(mensagens)
+        ultimos_turnos = turnos_consolidados[-3:]
+
+        linhas_contexto: list[str] = []
+        for turno in ultimos_turnos:
+            role = turno.get("role")
+            prefixo = "Cliente" if role == "user" else "IA"
+            linhas_contexto.append(f"{prefixo}: {str(turno.get('content') or '').strip()}")
+        contexto_turnos = "\n".join(linhas_contexto).strip()
+
+        system_prompt = (
+            "Você é um especialista em expansão semântica para busca vetorial.\n"
+            "Analise o contexto EXCLUSIVAMENTE dos últimos turnos da conversa acima. "
+            f"A resposta final do usuário foi: '{mensagem_atual}'.\n"
+            "Entenda a intenção real do usuário (mesmo que ele tenha digitado apenas um número de menu, como '1' ou '2', ou uma frase muito curta).\n"
+            "Sua tarefa: GERE exatamente 10 palavras-chave ou termos curtos que sejam ALTAMENTE RELACIONADOS ao departamento, setor ou assunto que o usuário deseja acessar. "
+            "Amplie o vocabulário para facilitar a busca no banco de dados.\n"
+            "Exemplo: Se o usuário quer o setor financeiro, gere: 'financeiro, pagamentos, boleto, mensalidade, fatura, cobrança, dinheiro, pix, atraso, negociar'.\n"
+            "Retorne APENAS os 10 termos separados por vírgula. Absolutamente nenhum outro texto."
+        )
+
+        llm_expansao = self._build_fast_llm(api_key=api_key, model_name=model_name)
+        resposta = await llm_expansao.ainvoke(
+            [
+                ("system", system_prompt),
+                ("user", f"Últimos turnos consolidados:\n{contexto_turnos}"),
+            ]
+        )
+        termos_expandidos = str(getattr(resposta, "content", "") or "").strip()
+        return ",".join([t.strip() for t in termos_expandidos.split(",") if t.strip()])
 
     async def generate_embedding_for_specialist(self, especialista: Especialista) -> list[float] | None:
         routing_text = self._build_routing_text(especialista)
@@ -239,8 +298,6 @@ class SemanticRouterService:
         expansion_time = 0.0
         pool_time = 0.0
         reranking_time = 0.0
-        termos_busca: list[str] = []
-        termos_gerados_log: list[str] = []
         termos_consulta_log: list[str] = []
         pool_size = 0
         ids_escolhidos_log: list[str] = []
@@ -252,10 +309,9 @@ class SemanticRouterService:
         if not normalized_query:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs) | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_gerados_log,
                 termos_consulta_log,
                 pool_time,
                 pool_size,
@@ -267,6 +323,7 @@ class SemanticRouterService:
         limite_duvida = 0.45
         max_agentes_desempate = 3
         api_key_empresa = None
+        modelo_roteador_empresa = "gpt-5.4-nano"
 
         if empresa_id:
             result_empresa = await self.db.execute(select(Empresa).where(Empresa.id == empresa_id))
@@ -278,117 +335,65 @@ class SemanticRouterService:
                     max_agentes_desempate = max(1, int(empresa.max_agentes_desempate))
                 credenciais = getattr(empresa, "credenciais_canais", {}) or {}
                 api_key_empresa = credenciais.get("openai_api_key")
+                modelo_roteador_empresa = str(getattr(empresa, "modelo_roteador", "") or "").strip() or "gpt-5.4-nano"
 
-        # ETAPA 1: Query Expansion (LLM rápido + structured output)
+        # ETAPA 1: Query Expansion contextual por turnos (LLM rápido)
         t0_expansion = time.perf_counter()
+        query_vetorial = normalized_query
         try:
-            llm_expansao = self._build_fast_llm(api_key_empresa)
-            llm_expansao_struct = llm_expansao.with_structured_output(TermosBusca)
-            termos_resp = await llm_expansao_struct.ainvoke(
-                [
-                    (
-                        "system",
-                        "Sua tarefa é gerar termos de busca otimizados (keywords e frases curtas) para recuperar especialistas "
-                        "em um banco de dados vetorial.\n"
-                        "Analise o histórico recente e a última mensagem do usuário para extrair necessidades explícitas e implícitas.\n\n"
-                        "DIRETRIZES:\n"
-                        "1. Se a mensagem do usuário for longa ou contiver uma dúvida clara, extraia os termos principais dessa mensagem.\n"
-                        "2. Se a mensagem do usuário for apenas uma confirmação curta (ex: 'Sim', 'Quero', 'Pode mandar', 'Certo'), OLHE PARA A MENSAGEM ANTERIOR DA IA. Extraia os termos cruciais daquilo que a IA ofereceu e o usuário acabou de aceitar.\n"
-                        "3. Se o usuário pedir localização ou referências, inclua termos como: endereço, ponto de referência, como chegar.\n"
-                        "4. Se o usuário apenas saudar, inclua termos como: saudação, início de conversa.\n"
-                        "5. Gere apenas termos-chave essenciais para recuperação vetorial. Não classifique em categorias, não use rótulos de intenção e não explique o resultado.\n"
-                        "6. Retorne somente a lista de termos no campo 'termos'.\n\n"
-                        "EXEMPLOS PRÁTICOS DE ANÁLISE E SAÍDA:\n\n"
-                        "Exemplo 1 (Pergunta Direta):\n"
-                        "Histórico:\n"
-                        "IA: Como posso te ajudar hoje?\n"
-                        "Cliente: Quais os valores e horários de Pedagogia?\n"
-                        "Termos de Busca: [\"preço pedagogia\", \"horários aulas pedagogia\"]\n\n"
-                        "Exemplo 2 (A Confirmação Curta):\n"
-                        "Histórico:\n"
-                        "IA: Temos uma condição incrível de Bolsas Parciais. Posso te mostrar?\n"
-                        "Cliente: Sim, quero ver.\n"
-                        "Termos de Busca: [\"bolsas parciais valores\"]\n\n"
-                        "Exemplo 3 (Confirmação + Nova Dúvida):\n"
-                        "Histórico:\n"
-                        "IA: O curso tem duração de 4 anos. Quer saber sobre a matrícula?\n"
-                        "Cliente: Pode ser, e vocês têm EAD?\n"
-                        "Termos de Busca: [\"matrícula\", \"curso EAD online\"]",
-                    ),
-                    (
-                        "user",
-                        "Histórico recente (ordem cronológica):\n"
-                        f"{normalized_history_text}",
-                    ),
-                ]
+            query_vetorial = await self._expandir_query_com_llm(
+                mensagem_atual=normalized_query,
+                recent_history_text=normalized_history_text,
+                api_key=api_key_empresa,
+                model_name=modelo_roteador_empresa,
             )
-            termos_gerados_log = self._deduplicar_termos(
-                getattr(termos_resp, "termos", []) or [],
-                normalized_query,
-            )
-            termos_busca = list(termos_gerados_log)
         except Exception as exc:
-            logger.warning("[SEMANTIC ROUTER] Falha na etapa de query expansion: %s", exc)
-            termos_gerados_log = []
-            termos_busca = [normalized_query]
+            logger.warning("[SEMANTIC ROUTER] Falha na etapa de query expansion contextual: %s", exc)
+            query_vetorial = normalized_query
         finally:
             expansion_time = time.perf_counter() - t0_expansion
+        query_vetorial = str(query_vetorial or "").strip() or normalized_query
+        print(
+            f"[ROTEADOR - QUERY EXPANSION] Original: '{normalized_query}' | "
+            f"Termos Expandidos: '{query_vetorial}'"
+        )
+        termos_consulta_log = [query_vetorial]
 
-        if not termos_busca:
-            termos_busca = [normalized_query]
-        termos_consulta_log = list(termos_busca)
-
-        # ETAPA 2: Busca semântica paralela (Candidate Pool)
+        # ETAPA 2: Busca semântica vetorial usando EXATAMENTE a query expandida
         top_por_termo = max(3, min(5, max_agentes_desempate))
-
-        async def _buscar_candidatos_por_termo(termo: str) -> list[tuple[Especialista, float]]:
-            texto = str(termo or "").strip()
-            if not texto:
-                return []
-            try:
-                query_embedding = await self.embeddings_model.aembed_query(texto)
-                similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
-                stmt = (
-                    select(Especialista, similarity_expr)
-                    .where(
-                        Especialista.ativo.is_(True),
-                        Especialista.embedding.isnot(None),
-                        similarity_expr >= limite_duvida,
-                    )
-                    .order_by(similarity_expr.desc())
-                    .limit(top_por_termo)
-                )
-                if empresa_id:
-                    stmt = stmt.where(Especialista.empresa_id == empresa_id)
-
-                # AsyncSession não é seguro para queries concorrentes; usa sessão isolada por tarefa.
-                async with AsyncSessionLocal() as session_parallel:
-                    result = await session_parallel.execute(stmt)
-                    rows = result.all()
-                return [(esp, float(sim or 0.0)) for esp, sim in rows]
-            except Exception as exc:
-                logger.warning("[SEMANTIC ROUTER] Falha na busca vetorial para termo '%s': %s", texto, exc)
-                return []
-
         t0_pool = time.perf_counter()
-        buscas = await asyncio.gather(*[_buscar_candidatos_por_termo(t) for t in termos_busca], return_exceptions=False)
-        pool_time = time.perf_counter() - t0_pool
-        candidate_pool: dict[str, tuple[Especialista, float]] = {}
-        for resultado_termo in buscas:
-            for especialista, score in resultado_termo:
-                esp_id = str(especialista.id)
-                atual = candidate_pool.get(esp_id)
-                if (atual is None) or (score > atual[1]):
-                    candidate_pool[esp_id] = (especialista, score)
-        pool_size = len(candidate_pool)
+        try:
+            query_embedding = await self.embeddings_model.aembed_query(query_vetorial)
+            similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
+            stmt = (
+                select(Especialista, similarity_expr)
+                .where(
+                    Especialista.ativo.is_(True),
+                    Especialista.embedding.isnot(None),
+                    similarity_expr >= limite_duvida,
+                )
+                .order_by(similarity_expr.desc())
+                .limit(max(8, top_por_termo))
+            )
+            if empresa_id:
+                stmt = stmt.where(Especialista.empresa_id == empresa_id)
+            result = await self.db.execute(stmt)
+            rows = result.all()
+            candidate_pool = {str(esp.id): (esp, float(sim or 0.0)) for esp, sim in rows}
+            pool_size = len(candidate_pool)
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha na busca vetorial: %s", exc)
+            candidate_pool = {}
+            pool_size = 0
+        finally:
+            pool_time = time.perf_counter() - t0_pool
 
         if not candidate_pool:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs) | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_gerados_log,
                 termos_consulta_log,
                 pool_time,
                 pool_size,
@@ -430,7 +435,10 @@ class SemanticRouterService:
                     ),
                     (
                         "user",
-                        f"Mensagem original: {normalized_query}\n\nCandidatos:\n{payload_candidatos}",
+                        "Historico recente da conversa:\n"
+                        f"{normalized_history_text}\n\n"
+                        f"Mensagem final do usuario: {normalized_query}\n\n"
+                        f"Candidatos:\n{payload_candidatos}",
                     ),
                 ]
             )
@@ -455,10 +463,9 @@ class SemanticRouterService:
         if not selecionados_ordenados:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs) | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_gerados_log,
                 termos_consulta_log,
                 pool_time,
                 pool_size,
@@ -479,10 +486,9 @@ class SemanticRouterService:
         ]
         total_time = time.perf_counter() - t0_total
         logger.info(
-            "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+            "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs) | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
             total_time,
             expansion_time,
-            termos_gerados_log,
             termos_consulta_log,
             pool_time,
             pool_size,

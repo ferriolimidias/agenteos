@@ -118,9 +118,20 @@ def _strip_role_prefix(texto: str) -> str:
     return raw
 
 
+def _mensagens_estado(state: "AgentState") -> list[Any]:
+    # Compatibilidade: fluxo legado usa `mensagens`, alguns pontos podem usar `messages`.
+    mensagens = state.get("mensagens")
+    if isinstance(mensagens, list):
+        return mensagens
+    messages = state.get("messages")
+    if isinstance(messages, list):
+        return messages
+    return []
+
+
 def _ultima_mensagem_cliente(state: "AgentState") -> str:
-    mensagens = state.get("mensagens") or []
-    if not isinstance(mensagens, list):
+    mensagens = _mensagens_estado(state)
+    if not mensagens:
         return ""
     for item in reversed(mensagens):
         texto = str(item or "").strip()
@@ -134,8 +145,8 @@ def _ultima_mensagem_cliente(state: "AgentState") -> str:
 
 
 def _ultima_mensagem_assistente(state: "AgentState") -> str:
-    mensagens = state.get("mensagens") or []
-    if not isinstance(mensagens, list):
+    mensagens = _mensagens_estado(state)
+    if not mensagens:
         return ""
     for item in reversed(mensagens):
         texto = str(item or "").strip()
@@ -147,8 +158,8 @@ def _ultima_mensagem_assistente(state: "AgentState") -> str:
 
 
 def _historico_curto_roteador(state: "AgentState", limite: int = 3) -> str:
-    mensagens = state.get("mensagens") or []
-    if not isinstance(mensagens, list):
+    mensagens = _mensagens_estado(state)
+    if not mensagens:
         return ""
     itens = [str(item or "").strip() for item in mensagens if str(item or "").strip()]
     if not itens:
@@ -1524,7 +1535,7 @@ async def node_roteador_maestro(state: AgentState):
     )
     state["handoff_requested"] = any(marker in ultima_mensagem.lower() for marker in handoff_markers)
 
-    historico_curto_roteador = _historico_curto_roteador(state, limite=3)
+    historico_curto_roteador = _historico_curto_roteador(state, limite=4)
     async with AsyncSessionLocal() as session:
         router_service = SemanticRouterService(session)
         especialistas_match = await router_service.route_multi_specialists(
