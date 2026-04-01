@@ -145,8 +145,9 @@ class SemanticRouterService:
         async def _expandir_consulta(texto_original: str) -> list[str]:
             prompt = (
                 f"O usuário perguntou: '{texto_original}'. "
-                "Extraia e retorne apenas 3 ou 4 variações de termos técnicos ou palavras-chave que representem "
-                "a intenção dessa pergunta para uma busca semântica em um banco de especialistas. "
+                "Sua tarefa é gerar termos de busca otimizados (keywords e frases curtas) para recuperar especialistas "
+                "em um banco de dados vetorial. "
+                "Retorne apenas 3 ou 4 termos curtos, separados por vírgula, sem explicações adicionais. "
                 "Retorne apenas os termos separados por vírgula."
             )
             try:
@@ -239,6 +240,8 @@ class SemanticRouterService:
         pool_time = 0.0
         reranking_time = 0.0
         termos_busca: list[str] = []
+        termos_gerados_log: list[str] = []
+        termos_consulta_log: list[str] = []
         pool_size = 0
         ids_escolhidos_log: list[str] = []
 
@@ -249,10 +252,11 @@ class SemanticRouterService:
         if not normalized_query:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_busca,
+                termos_gerados_log,
+                termos_consulta_log,
                 pool_time,
                 pool_size,
                 reranking_time,
@@ -284,28 +288,32 @@ class SemanticRouterService:
                 [
                     (
                         "system",
-                        "Você é um especialista em extração de intenções para busca vetorial.\n"
-                        "Analise a última mensagem do usuário levando em consideração o contexto do histórico recente da conversa.\n\n"
+                        "Sua tarefa é gerar termos de busca otimizados (keywords e frases curtas) para recuperar especialistas "
+                        "em um banco de dados vetorial.\n"
+                        "Analise o histórico recente e a última mensagem do usuário para extrair necessidades explícitas e implícitas.\n\n"
                         "DIRETRIZES:\n"
                         "1. Se a mensagem do usuário for longa ou contiver uma dúvida clara, extraia os termos principais dessa mensagem.\n"
                         "2. Se a mensagem do usuário for apenas uma confirmação curta (ex: 'Sim', 'Quero', 'Pode mandar', 'Certo'), OLHE PARA A MENSAGEM ANTERIOR DA IA. Extraia os termos cruciais daquilo que a IA ofereceu e o usuário acabou de aceitar.\n"
-                        "3. Gere apenas os termos chave essenciais para encontrar a informação em um banco de dados vetorial. Exclua pronomes, saudações e palavras vazias.\n\n"
+                        "3. Se o usuário pedir localização ou referências, inclua termos como: endereço, ponto de referência, como chegar.\n"
+                        "4. Se o usuário apenas saudar, inclua termos como: saudação, início de conversa.\n"
+                        "5. Gere apenas termos-chave essenciais para recuperação vetorial. Não classifique em categorias, não use rótulos de intenção e não explique o resultado.\n"
+                        "6. Retorne somente a lista de termos no campo 'termos'.\n\n"
                         "EXEMPLOS PRÁTICOS DE ANÁLISE E SAÍDA:\n\n"
                         "Exemplo 1 (Pergunta Direta):\n"
                         "Histórico:\n"
                         "IA: Como posso te ajudar hoje?\n"
                         "Cliente: Quais os valores e horários de Pedagogia?\n"
-                        "Intenção Extraída: [\"preço pedagogia\", \"horários aulas pedagogia\"]\n\n"
+                        "Termos de Busca: [\"preço pedagogia\", \"horários aulas pedagogia\"]\n\n"
                         "Exemplo 2 (A Confirmação Curta):\n"
                         "Histórico:\n"
                         "IA: Temos uma condição incrível de Bolsas Parciais. Posso te mostrar?\n"
                         "Cliente: Sim, quero ver.\n"
-                        "Intenção Extraída: [\"bolsas parciais valores\"]\n\n"
+                        "Termos de Busca: [\"bolsas parciais valores\"]\n\n"
                         "Exemplo 3 (Confirmação + Nova Dúvida):\n"
                         "Histórico:\n"
                         "IA: O curso tem duração de 4 anos. Quer saber sobre a matrícula?\n"
                         "Cliente: Pode ser, e vocês têm EAD?\n"
-                        "Intenção Extraída: [\"matrícula\", \"curso EAD online\"]",
+                        "Termos de Busca: [\"matrícula\", \"curso EAD online\"]",
                     ),
                     (
                         "user",
@@ -314,15 +322,21 @@ class SemanticRouterService:
                     ),
                 ]
             )
-            termos_busca = self._deduplicar_termos(getattr(termos_resp, "termos", []) or [], normalized_query)
+            termos_gerados_log = self._deduplicar_termos(
+                getattr(termos_resp, "termos", []) or [],
+                normalized_query,
+            )
+            termos_busca = list(termos_gerados_log)
         except Exception as exc:
             logger.warning("[SEMANTIC ROUTER] Falha na etapa de query expansion: %s", exc)
+            termos_gerados_log = []
             termos_busca = [normalized_query]
         finally:
             expansion_time = time.perf_counter() - t0_expansion
 
         if not termos_busca:
             termos_busca = [normalized_query]
+        termos_consulta_log = list(termos_busca)
 
         # ETAPA 2: Busca semântica paralela (Candidate Pool)
         top_por_termo = max(3, min(5, max_agentes_desempate))
@@ -371,10 +385,11 @@ class SemanticRouterService:
         if not candidate_pool:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_busca,
+                termos_gerados_log,
+                termos_consulta_log,
                 pool_time,
                 pool_size,
                 reranking_time,
@@ -440,10 +455,11 @@ class SemanticRouterService:
         if not selecionados_ordenados:
             total_time = time.perf_counter() - t0_total
             logger.info(
-                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+                "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
                 total_time,
                 expansion_time,
-                termos_busca,
+                termos_gerados_log,
+                termos_consulta_log,
                 pool_time,
                 pool_size,
                 reranking_time,
@@ -463,10 +479,11 @@ class SemanticRouterService:
         ]
         total_time = time.perf_counter() - t0_total
         logger.info(
-            "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): %s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
+            "[ROUTER TELEMETRY] Total: %.3fs | Expansion (%.3fs): gerados=%s | QueryVetorial=%s | Pool (%.3fs): %d candidatos | Reranking (%.3fs): %s",
             total_time,
             expansion_time,
-            termos_busca,
+            termos_gerados_log,
+            termos_consulta_log,
             pool_time,
             pool_size,
             reranking_time,

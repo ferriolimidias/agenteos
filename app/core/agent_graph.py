@@ -159,6 +159,40 @@ def _historico_curto_roteador(state: "AgentState", limite: int = 3) -> str:
     return "\n".join(linhas).strip()
 
 
+def _normalizar_chave_especialista(valor: str) -> str:
+    texto_normalizado = unicodedata.normalize("NFKD", str(valor or ""))
+    return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).strip().lower()
+
+
+def _remover_especialista_do_estado(state: "AgentState", *chaves: str) -> None:
+    alvos = {_normalizar_chave_especialista(chave) for chave in chaves if str(chave or "").strip()}
+    if not alvos:
+        return
+
+    identificados = state.get("especialistas_identificados") or []
+    if not isinstance(identificados, list):
+        identificados = []
+    state["especialistas_identificados"] = [
+        item
+        for item in identificados
+        if _normalizar_chave_especialista(str(item or "")) not in alvos
+    ]
+
+    selecionados = state.get("especialistas_selecionados") or []
+    if not isinstance(selecionados, list):
+        selecionados = []
+    filtrados: list[dict[str, Any]] = []
+    for item in selecionados:
+        if not isinstance(item, dict):
+            continue
+        item_id = _normalizar_chave_especialista(str(item.get("id") or ""))
+        item_nome = _normalizar_chave_especialista(str(item.get("nome") or ""))
+        if item_id in alvos or item_nome in alvos:
+            continue
+        filtrados.append(item)
+    state["especialistas_selecionados"] = filtrados
+
+
 def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
     saida: list[Any] = []
     for item in mensagens:
@@ -626,7 +660,7 @@ NÃO redija mensagem para o cliente final."""
     state["respostas_especialistas"].append(
         f"[ESPECIALISTA: tags_crm] {json.dumps(extracao.model_dump(), ensure_ascii=False)}"
     )
-    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "tags_crm"]
+    _remover_especialista_do_estado(state, "tags_crm")
     return state
 
 
@@ -714,7 +748,7 @@ Retorne apenas o resultado técnico da ação."""
                 status_acoes.append(f"aplicar_tags: erro ({str(e)})")
             finally:
                 executadas.append(acao_nome)
-                state["intencao"] = [item for item in (state.get("intencao") or []) if item != "tags_crm"]
+                _remover_especialista_do_estado(state, "tags_crm")
 
         elif acao_nome == "transferir_atendimento":
             try:
@@ -992,7 +1026,7 @@ class AgentState(TypedDict):
     mensagens: list  # Memória global única da conversa (cliente + assistente), somente a orquestradora atualiza.
     historico_bd: str          # Histórico real do PostgreSQL, formatado
     nome_contato: Optional[str]
-    intencao: List[str]
+    especialistas_identificados: List[str]
     especialistas_selecionados: List[EspecialistaSelecionadoState]
     super_contexto_especialistas: str
     respostas_especialistas: List[str]
@@ -1010,7 +1044,7 @@ class AgentState(TypedDict):
     empresa: Optional[Any]
 
 class AnaliseRoteador(BaseModel):
-    intencao: List[str] = Field(description="Lista OBRIGATÓRIA com a(s) intenção(ões) principal(is) do usuário. Deve conter o nome exato dos especialistas relevantes. Ex: ['Comercial', 'Suporte'].")
+    termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
     handoff_requested: bool = Field(description="True se o usuário pediu explicitamente para falar com humano ou atendente.")
 
 
@@ -1372,7 +1406,7 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
             pendentes.append("fechar_conversa")
         state["acoes_sistema_pendentes"] = pendentes
         state["respostas_especialistas"] = []
-        state["intencao"] = []
+        state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
         state["super_contexto_especialistas"] = ""
         state["roteamento_tentado"] = False
@@ -1424,7 +1458,7 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
     if status_conv == "FINALIZADA" and "fechar_conversa" not in pendentes and "fechar_conversa" not in executadas:
         pendentes.append("fechar_conversa")
     state["acoes_sistema_pendentes"] = pendentes
-    state["intencao"] = []
+    state["especialistas_identificados"] = []
     state["respostas_especialistas"] = []
     state["especialistas_selecionados"] = []
     state["super_contexto_especialistas"] = ""
@@ -1443,25 +1477,14 @@ async def node_roteador_maestro(state: AgentState):
 
     ultima_mensagem = _ultima_mensagem_cliente(state)
     if not ultima_mensagem:
-        state["intencao"] = []
+        state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
         state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = []
         state["handoff_requested"] = False
         state["saudacao_pendente"] = False
         return state
-
-    historico_bd = state.get("historico_bd", "")
-    ja_respondeu = "Assistente:" in str(historico_bd or "")
-    # TODO: Implementar reset de sessão por tempo (ex: 12h).
-    is_primeira_interacao = not ja_respondeu
-    saudacao_processada = bool(state.get("saudacao_processada"))
-    state["saudacao_pendente"] = bool(is_primeira_interacao and not saudacao_processada)
-    if state["saudacao_pendente"]:
-        intencoes = list(state.get("intencao") or [])
-        if "saudacao" not in intencoes:
-            intencoes.append("saudacao")
-        state["intencao"] = intencoes
+    state["saudacao_pendente"] = False
 
     handoff_markers = (
         "humano",
@@ -1501,51 +1524,26 @@ async def node_roteador_maestro(state: AgentState):
             reverse=True,
         )
 
-    def _normalizar_texto(texto: str) -> str:
-        texto_normalizado = unicodedata.normalize("NFKD", texto or "")
-        return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).lower()
-
-    mensagem_normalizada = _normalizar_texto(ultima_mensagem)
-    termos_funcionamento = (
-        "horario",
-        "aberto",
-        "aberta",
-        "fechado",
-        "fechada",
-        "funciona",
-        "que horas abre",
-        "atendimento hoje",
-    )
-    if any(termo in mensagem_normalizada for termo in termos_funcionamento):
-        intencoes_atuais = list(state.get("intencao") or [])
-        if "funcionamento" not in intencoes_atuais:
-            intencoes_atuais.append("funcionamento")
-        state["intencao"] = intencoes_atuais
-
-    termos_localizacao = (
-        "endereco",
-        "endereço",
-        "localizacao",
-        "localização",
-        "onde fica",
-        "filial",
-        "filiais",
-        "unidade",
-        "unidades",
-        "google maps",
-        "como chegar",
-    )
-    if any(termo in mensagem_normalizada for termo in termos_localizacao):
-        intencoes_atuais = list(state.get("intencao") or [])
-        if "localizacao" not in intencoes_atuais:
-            intencoes_atuais.append("localizacao")
-        state["intencao"] = intencoes_atuais
-
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
     nomes_especialistas = [esp.get("nome") for esp in especialistas_match]
+    especialistas_identificados: list[str] = []
+    vistos: set[str] = set()
+    for esp in especialistas_match:
+        if not isinstance(esp, dict):
+            continue
+        for chave in (esp.get("id"), esp.get("nome")):
+            valor = str(chave or "").strip()
+            if not valor:
+                continue
+            normalizado = _normalizar_chave_especialista(valor)
+            if normalizado in vistos:
+                continue
+            vistos.add(normalizado)
+            especialistas_identificados.append(valor)
     print(
         f"[NODE ROTEADOR] Matches: {len(ids_especialistas)} "
-        f"| IDs={ids_especialistas} | Nomes={nomes_especialistas}"
+        f"| IDs={ids_especialistas} | Nomes={nomes_especialistas} "
+        f"| Identificados={especialistas_identificados}"
     )
 
     # Mantém especialistas selecionados para a próxima etapa do fluxo.
@@ -1555,14 +1553,7 @@ async def node_roteador_maestro(state: AgentState):
         respostas_existentes = []
     state["respostas_especialistas"] = respostas_existentes
     state["super_contexto_especialistas"] = ""
-    intencoes_atuais = list(state.get("intencao") or [])
-    for esp_id in ids_especialistas:
-        esp_id_str = str(esp_id or "").strip()
-        if esp_id_str and esp_id_str not in intencoes_atuais:
-            intencoes_atuais.append(esp_id_str)
-    if state.get("saudacao_pendente") and "saudacao" not in intencoes_atuais:
-        intencoes_atuais.append("saudacao")
-    state["intencao"] = intencoes_atuais
+    state["especialistas_identificados"] = especialistas_identificados
     return state
 
 async def node_especialista_funcionamento(state: AgentState):
@@ -1667,7 +1658,7 @@ async def node_especialista_funcionamento(state: AgentState):
                 f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
             )
             state["respostas_especialistas"] = respostas_existentes
-            state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+            _remover_especialista_do_estado(state, "funcionamento", "especialista_funcionamento")
             state["especialista_respondeu_no_ciclo"] = True
             return state
 
@@ -1682,7 +1673,7 @@ async def node_especialista_funcionamento(state: AgentState):
             f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
         )
         state["respostas_especialistas"] = respostas_existentes
-        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+        _remover_especialista_do_estado(state, "funcionamento", "especialista_funcionamento")
         state["especialista_respondeu_no_ciclo"] = True
         return state
 
@@ -1760,7 +1751,7 @@ async def node_especialista_funcionamento(state: AgentState):
         f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
     )
     state["respostas_especialistas"] = respostas_existentes
-    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
+    _remover_especialista_do_estado(state, "funcionamento", "especialista_funcionamento")
     state["especialista_respondeu_no_ciclo"] = True
     return state
 
@@ -1785,7 +1776,7 @@ async def node_especialista_localizacao(state: AgentState):
             f"[ESPECIALISTA: especialista_localizacao] {json.dumps(extracao, ensure_ascii=False)}"
         )
         state["respostas_especialistas"] = respostas_existentes
-        state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
+        _remover_especialista_do_estado(state, "localizacao", "especialista_localizacao")
         state["especialista_respondeu_no_ciclo"] = True
         return state
 
@@ -1821,8 +1812,7 @@ async def node_especialista_localizacao(state: AgentState):
         f"[ESPECIALISTA: especialista_localizacao] {json.dumps(extracao, ensure_ascii=False)}"
     )
     state["respostas_especialistas"] = respostas_existentes
-    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
-    state["especialistas_selecionados"] = []
+    _remover_especialista_do_estado(state, "localizacao", "especialista_localizacao")
     state["especialista_respondeu_no_ciclo"] = True
     return state
 
@@ -1879,7 +1869,7 @@ async def node_especialista_saudacao(state: AgentState):
         f"[ESPECIALISTA: especialista_saudacao] {json.dumps(extracao, ensure_ascii=False)}"
     )
     state["respostas_especialistas"] = respostas_existentes
-    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "saudacao"]
+    _remover_especialista_do_estado(state, "saudacao", "especialista_saudacao")
     state["saudacao_processada"] = True
     state["saudacao_pendente"] = False
     state["especialista_respondeu_no_ciclo"] = True
@@ -1892,12 +1882,12 @@ async def node_especialista_dinamico(state: AgentState):
             especialistas_selecionados = []
 
         if not especialistas_selecionados:
-            intencoes_legadas = state.get("intencao", [])
-            if not isinstance(intencoes_legadas, list):
-                intencoes_legadas = [intencoes_legadas] if intencoes_legadas else []
+            especialistas_refs = state.get("especialistas_identificados", [])
+            if not isinstance(especialistas_refs, list):
+                especialistas_refs = [especialistas_refs] if especialistas_refs else []
             especialistas_selecionados = [
                 {"id": str(item), "nome": str(item), "prompt_sistema": "", "usar_rag": False, "usar_agenda": False}
-                for item in intencoes_legadas
+                for item in especialistas_refs
                 if str(item or "").strip()
             ]
 
@@ -2382,26 +2372,51 @@ def router_maestro(state: AgentState):
     if bool(state.get("especialista_respondeu_no_ciclo")):
         state["especialista_respondeu_no_ciclo"] = False
         return "node_atendente"
-    if bool(state.get("saudacao_pendente")):
-        return "node_especialista_saudacao"
-    intencoes = state.get("intencao") or []
+
+    especialistas_identificados = state.get("especialistas_identificados") or []
+    if not isinstance(especialistas_identificados, list):
+        especialistas_identificados = [especialistas_identificados] if especialistas_identificados else []
     especialistas_selecionados = state.get("especialistas_selecionados") or []
+    if not isinstance(especialistas_selecionados, list):
+        especialistas_selecionados = []
+
+    if not especialistas_identificados and especialistas_selecionados:
+        sintetizados: list[str] = []
+        vistos: set[str] = set()
+        for item in especialistas_selecionados:
+            if not isinstance(item, dict):
+                continue
+            for chave in (item.get("id"), item.get("nome")):
+                valor = str(chave or "").strip()
+                if not valor:
+                    continue
+                normalizado = _normalizar_chave_especialista(valor)
+                if normalizado in vistos:
+                    continue
+                vistos.add(normalizado)
+                sintetizados.append(valor)
+        especialistas_identificados = sintetizados
+        state["especialistas_identificados"] = sintetizados
+
+    especialistas_norm = {_normalizar_chave_especialista(str(item or "")) for item in especialistas_identificados}
     pendentes = list(state.get("acoes_sistema_pendentes") or [])
     executadas = set(state.get("acoes_sistema_executadas") or [])
 
     if state.get("handoff_requested") and "transferir_atendimento" not in executadas and "transferir_atendimento" not in pendentes:
         pendentes.append("transferir_atendimento")
-    if "tags_crm" in intencoes and "aplicar_tags" not in executadas and "aplicar_tags" not in pendentes:
+    if "tags_crm" in especialistas_norm and "aplicar_tags" not in executadas and "aplicar_tags" not in pendentes:
         pendentes.append("aplicar_tags")
     state["acoes_sistema_pendentes"] = pendentes
 
     if pendentes:
         return "node_acao_sistema"
-    if not intencoes and not especialistas_selecionados:
+    if not especialistas_identificados and not especialistas_selecionados:
         return "node_atendente"
-    if "funcionamento" in intencoes:
+    if "especialista_saudacao" in especialistas_norm:
+        return "node_especialista_saudacao"
+    if "especialista_funcionamento" in especialistas_norm:
         return "especialista_funcionamento"
-    if "localizacao" in intencoes:
+    if "especialista_localizacao" in especialistas_norm:
         return "especialista_localizacao"
     if especialistas_selecionados:
         return "node_especialista_dinamico"
