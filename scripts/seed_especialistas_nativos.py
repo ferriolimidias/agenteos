@@ -5,10 +5,25 @@ import sys
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy import select
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Adiciona o diretório pai e a pasta 'app' ao sistema de busca do Python
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(base_dir)
+sys.path.append(os.path.join(base_dir, "app"))
 
-from app.db.database import AsyncSessionLocal
-from app.db.models import Empresa, Especialista
+# Tenta importar com e sem o prefixo 'app.' para garantir compatibilidade com o Docker
+try:
+    from app.db.database import AsyncSessionLocal
+    from app.db.models import Empresa, Especialista
+    print("ℹ️  Importado via app.db")
+except ImportError:
+    try:
+        from db.database import AsyncSessionLocal
+        from db.models import Empresa, Especialista
+        print("ℹ️  Importado via db direto")
+    except ImportError as e:
+        print(f"❌ Erro crítico de importação: {e}")
+        print(f"Caminhos verificados: {sys.path}")
+        sys.exit(1)
 
 
 ESPECIALISTAS_NATIVOS = {
