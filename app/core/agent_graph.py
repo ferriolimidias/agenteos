@@ -1340,6 +1340,7 @@ Quando houver pontos complementares, conecte-os com transições naturais para o
 Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou roteamento.
 Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
 Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
+REGRA ABSOLUTA DE INTEGRIDADE DE DADOS: NUNCA altere, reescreva, tente 'desencurtar' ou invente links (URLs). Se os dados em formato JSON dos especialistas contiverem um link (como links do Google Maps, sites, etc.), você DEVE copiar e colar o link EXATAMENTE como foi fornecido nos dados crus. A alteração de URLs causará falha crítica no sistema.
 Considere o seguinte super-contexto como fonte adicional para cobrir todas as partes da pergunta do usuário:
 <super_contexto_especialistas>
 {super_contexto_especialistas or '(sem super-contexto consolidado)'}
