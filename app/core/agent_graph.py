@@ -1657,15 +1657,28 @@ async def node_especialista_funcionamento(state: AgentState):
                     f"No momento estamos {status_excecao}."
                 )
 
-            respostas_existentes.append("Informação de Funcionamento: " + resposta_excecao)
+            extracao = {
+                "dados": resposta_excecao,
+                "fontes": ["especialista_nativo"],
+                "erros": [],
+            }
+            respostas_existentes.append(
+                f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
+            )
             state["respostas_especialistas"] = respostas_existentes
             state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
             state["especialista_respondeu_no_ciclo"] = True
             return state
 
     if not isinstance(dias_funcionamento_raw, dict):
+        resposta_texto = "Os horários de funcionamento não estão configurados no momento."
+        extracao = {
+            "dados": resposta_texto,
+            "fontes": ["especialista_nativo"],
+            "erros": [],
+        }
         respostas_existentes.append(
-            "Informação de Funcionamento: Os horários de funcionamento não estão configurados no momento."
+            f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
         )
         state["respostas_especialistas"] = respostas_existentes
         state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
@@ -1737,7 +1750,14 @@ async def node_especialista_funcionamento(state: AgentState):
         logger.exception("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao invocar LLM: %s", e)
         resposta_texto = "No momento não consegui consultar os horários de funcionamento."
 
-    respostas_existentes.append("Informação de Funcionamento: " + resposta_texto)
+    extracao = {
+        "dados": resposta_texto,
+        "fontes": ["especialista_nativo"],
+        "erros": [],
+    }
+    respostas_existentes.append(
+        f"[ESPECIALISTA: especialista_funcionamento] {json.dumps(extracao, ensure_ascii=False)}"
+    )
     state["respostas_especialistas"] = respostas_existentes
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "funcionamento"]
     state["especialista_respondeu_no_ciclo"] = True
@@ -1754,7 +1774,15 @@ async def node_especialista_localizacao(state: AgentState):
         respostas_existentes = []
 
     if not empresa_id:
-        respostas_existentes.append("Informação de Localização: Não foi possível identificar a empresa para consultar unidades.")
+        resposta_texto = "Não foi possível identificar a empresa para consultar unidades."
+        extracao = {
+            "dados": resposta_texto,
+            "fontes": ["especialista_nativo"],
+            "erros": [],
+        }
+        respostas_existentes.append(
+            f"[ESPECIALISTA: especialista_localizacao] {json.dumps(extracao, ensure_ascii=False)}"
+        )
         state["respostas_especialistas"] = respostas_existentes
         state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
         state["especialista_respondeu_no_ciclo"] = True
@@ -1783,7 +1811,14 @@ async def node_especialista_localizacao(state: AgentState):
         logger.exception("[NODE ESPECIALISTA LOCALIZACAO] Falha ao invocar LLM: %s", e)
         resposta_texto = "No momento não consegui consultar os endereços das unidades."
 
-    respostas_existentes.append("Informação de Localização: " + resposta_texto)
+    extracao = {
+        "dados": resposta_texto,
+        "fontes": ["especialista_nativo"],
+        "erros": [],
+    }
+    respostas_existentes.append(
+        f"[ESPECIALISTA: especialista_localizacao] {json.dumps(extracao, ensure_ascii=False)}"
+    )
     state["respostas_especialistas"] = respostas_existentes
     state["intencao"] = [item for item in (state.get("intencao") or []) if item != "localizacao"]
     state["especialistas_selecionados"] = []
@@ -1834,10 +1869,19 @@ async def node_especialista_saudacao(state: AgentState):
     respostas_existentes = state.get("respostas_especialistas") or []
     if not isinstance(respostas_existentes, list):
         respostas_existentes = []
-    respostas_existentes.append("Saudação: " + resposta_texto)
+    extracao = {
+        "dados": resposta_texto,
+        "fontes": ["especialista_nativo"],
+        "erros": [],
+    }
+    respostas_existentes.append(
+        f"[ESPECIALISTA: especialista_saudacao] {json.dumps(extracao, ensure_ascii=False)}"
+    )
     state["respostas_especialistas"] = respostas_existentes
+    state["intencao"] = [item for item in (state.get("intencao") or []) if item != "saudacao"]
     state["saudacao_processada"] = True
     state["saudacao_pendente"] = False
+    state["especialista_respondeu_no_ciclo"] = True
     return state
 
 async def node_especialista_dinamico(state: AgentState):
@@ -2378,7 +2422,7 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("especialista_funcionamento", "node_atendente")
 workflow.add_edge("especialista_localizacao", "node_atendente")
-workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
+workflow.add_edge("node_especialista_saudacao", "node_atendente")
 
 def router_pos_acao_sistema(state: AgentState):
     if state.get("resposta_final"):
