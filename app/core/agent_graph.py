@@ -4,6 +4,7 @@ import os
 import asyncio
 import logging
 import json
+import re
 import uuid
 import unicodedata
 from functools import partial
@@ -171,6 +172,36 @@ def _historico_curto_roteador(state: "AgentState", limite: int = 3) -> str:
             linhas.append(f"IA: {_strip_role_prefix(texto)}")
         else:
             linhas.append(f"Cliente: {_strip_role_prefix(texto)}")
+    return "\n".join(linhas).strip()
+
+
+def _turnos_consolidados_roteador(state: "AgentState", limite_turnos: int = 3) -> str:
+    mensagens = _mensagens_estado(state)
+    if not mensagens:
+        return ""
+
+    turnos: list[dict[str, str]] = []
+    for item in mensagens:
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        role = "assistant" if texto.lower().startswith("assistente:") else "user"
+        conteudo = _strip_role_prefix(texto)
+        if not conteudo:
+            continue
+        if turnos and turnos[-1]["role"] == role:
+            turnos[-1]["content"] = f"{turnos[-1]['content']}\n{conteudo}".strip()
+            continue
+        turnos.append({"role": role, "content": conteudo})
+
+    if not turnos:
+        return ""
+
+    ultimos = turnos[-max(1, int(limite_turnos)) :]
+    linhas: list[str] = []
+    for turno in ultimos:
+        prefixo = "IA" if turno["role"] == "assistant" else "Cliente"
+        linhas.append(f"{prefixo}: {turno['content']}")
     return "\n".join(linhas).strip()
 
 
@@ -1065,6 +1096,7 @@ class AgentState(TypedDict):
     nome_contato: Optional[str]
     especialistas_identificados: List[str]
     especialistas_selecionados: List[EspecialistaSelecionadoState]
+    fila_agentes: List[str]
     super_contexto_especialistas: str
     respostas_especialistas: List[str]
     acoes_sistema_pendentes: List[str]
@@ -1446,6 +1478,7 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
         state["respostas_especialistas"] = []
         state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
+        state["fila_agentes"] = []
         state["super_contexto_especialistas"] = ""
         state["roteamento_tentado"] = False
 
@@ -1500,6 +1533,7 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
     state["especialistas_identificados"] = []
     state["respostas_especialistas"] = []
     state["especialistas_selecionados"] = []
+    state["fila_agentes"] = []
     state["super_contexto_especialistas"] = ""
     state["roteamento_tentado"] = False
     return state
@@ -1507,6 +1541,11 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
 async def node_roteador_maestro(state: AgentState):
     print("[NODE ROTEADOR] Roteamento semântico via embeddings...")
     import uuid
+
+    # Se já existem contribuições no ciclo, o roteador atua apenas como controlador da fila.
+    respostas_no_ciclo = state.get("respostas_especialistas") or []
+    if isinstance(respostas_no_ciclo, list) and respostas_no_ciclo:
+        return state
 
     empresa_id = state.get("empresa_id")
     try:
@@ -1518,6 +1557,7 @@ async def node_roteador_maestro(state: AgentState):
     if not ultima_mensagem:
         state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
+        state["fila_agentes"] = []
         state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = []
         state["handoff_requested"] = False
@@ -1536,31 +1576,105 @@ async def node_roteador_maestro(state: AgentState):
     state["handoff_requested"] = any(marker in ultima_mensagem.lower() for marker in handoff_markers)
 
     historico_curto_roteador = _historico_curto_roteador(state, limite=4)
+    historico_turnos_maestro = _turnos_consolidados_roteador(state, limite_turnos=3)
+
+    def _parse_ids_json(raw: str) -> list[str]:
+        texto = str(raw or "").strip()
+        if not texto:
+            return []
+
+        tentativas = [texto, texto.replace("'", '"')]
+        trecho_lista = re.search(r"\[[\s\S]*\]", texto)
+        if trecho_lista:
+            trecho = trecho_lista.group(0).strip()
+            tentativas.extend([trecho, trecho.replace("'", '"')])
+
+        for candidato in tentativas:
+            try:
+                data = json.loads(candidato)
+                if isinstance(data, list):
+                    return [str(item).strip() for item in data if str(item).strip()]
+            except Exception:
+                continue
+        return []
+
     async with AsyncSessionLocal() as session:
         router_service = SemanticRouterService(session)
-        especialistas_match = await router_service.route_multi_specialists(
+        roteamento = await router_service.get_top_specialists_contextual(
             query_text=ultima_mensagem,
             empresa_id=str(empresa_uuid) if empresa_uuid else None,
             recent_history_text=historico_curto_roteador,
+            top_k=5,
         )
+        termos_expandidos = str(roteamento.get("termos_expandidos") or "").strip()
+        candidatos = roteamento.get("candidatos") or []
+        if not isinstance(candidatos, list):
+            candidatos = []
 
-    if len(especialistas_match) > 1:
-        def _score_similaridade(item: dict) -> float:
-            for chave in ("score", "similaridade", "similarity", "similarity_score"):
-                valor = item.get(chave)
-                if isinstance(valor, (int, float)):
-                    return float(valor)
-                try:
-                    return float(valor)
-                except (TypeError, ValueError):
-                    continue
-            return float("-inf")
+        nomes_candidatos = [str(item.get("nome") or "").strip() for item in candidatos if isinstance(item, dict)]
+        candidatos_payload = [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "nome": str(item.get("nome") or "").strip(),
+                "missao": str(item.get("descricao_missao") or "").strip(),
+            }
+            for item in candidatos
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
 
-        # Mantém todos os especialistas acima do threshold e apenas ordena por relevância.
-        especialistas_match = sorted(
-            especialistas_match,
-            key=_score_similaridade,
-            reverse=True,
+        ids_selecionados_maestro: list[str] = []
+        if candidatos_payload:
+            api_key_empresa = None
+            if empresa_uuid:
+                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa = result_empresa.scalars().first()
+                if empresa:
+                    credenciais = getattr(empresa, "credenciais_canais", {}) or {}
+                    api_key_empresa = credenciais.get("openai_api_key")
+
+            llm_maestro = ChatOpenAI(
+                model="gpt-5.4-nano",
+                temperature=0,
+                api_key=api_key_empresa or os.getenv("OPENAI_API_KEY"),
+            )
+            prompt_decisao = (
+                "Você é o Maestro do AgenteOS. "
+                f"Analise o histórico e a intenção expandida: '{termos_expandidos}'.\n"
+                "Sua missão é selecionar, dentre os candidatos abaixo, quais devem ser acionados para responder ao usuário.\n"
+                "REGRAS:\n"
+                "- Você pode selecionar MAIS DE UM especialista se a dúvida for mista.\n"
+                "- Dê prioridade absoluta a especialistas de 'Triagem' ou 'Financeiro/Pedagógico' se o contexto indicar uma escolha de menu.\n"
+                "- Se nenhum candidato for realmente relevante, retorne uma lista vazia.\n"
+                "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
+            )
+            entrada_decisao = (
+                "ULTIMOS_3_TURNOS_CONSOLIDADOS:\n"
+                f"{historico_turnos_maestro or '(sem histórico)'}\n\n"
+                f"TERMOS_EXPANDIDOS: {termos_expandidos or ultima_mensagem}\n\n"
+                f"CANDIDATOS_TOP5 (Nome + Missão):\n{json.dumps(candidatos_payload, ensure_ascii=False)}"
+            )
+
+            try:
+                resposta_maestro = await llm_maestro.ainvoke(
+                    [("system", prompt_decisao), ("user", entrada_decisao)]
+                )
+                ids_selecionados_maestro = _parse_ids_json(getattr(resposta_maestro, "content", ""))
+            except Exception as exc:
+                logger.warning("[MAESTRO] Falha na decisão contextual por LLM: %s", exc)
+                ids_selecionados_maestro = []
+
+        candidatos_por_id = {
+            str(item.get("id") or "").strip(): item
+            for item in candidatos
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        ids_validos = [esp_id for esp_id in ids_selecionados_maestro if esp_id in candidatos_por_id]
+
+        especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_validos if esp_id in candidatos_por_id]
+        nomes_selecionados = [str(item.get("nome") or "").strip() for item in especialistas_match if isinstance(item, dict)]
+        print(
+            f"[MAESTRO - DECISÃO CONTEXTUAL] Candidatos: {nomes_candidatos} | "
+            f"Selecionados por Memória: {nomes_selecionados}"
         )
 
     ids_especialistas = [esp.get("id") for esp in especialistas_match]
@@ -1593,6 +1707,7 @@ async def node_roteador_maestro(state: AgentState):
     state["respostas_especialistas"] = respostas_existentes
     state["super_contexto_especialistas"] = ""
     state["especialistas_identificados"] = especialistas_identificados
+    state["fila_agentes"] = list(especialistas_identificados)
     return state
 
 async def node_especialista_funcionamento(state: AgentState):
@@ -2460,16 +2575,15 @@ workflow.add_conditional_edges(
 )
 
 def router_maestro(state: AgentState):
-    if bool(state.get("especialista_respondeu_no_ciclo")):
-        state["especialista_respondeu_no_ciclo"] = False
-        return "node_atendente"
-
     especialistas_identificados = state.get("especialistas_identificados") or []
     if not isinstance(especialistas_identificados, list):
         especialistas_identificados = [especialistas_identificados] if especialistas_identificados else []
     especialistas_selecionados = state.get("especialistas_selecionados") or []
     if not isinstance(especialistas_selecionados, list):
         especialistas_selecionados = []
+    fila_agentes = state.get("fila_agentes") or []
+    if not isinstance(fila_agentes, list):
+        fila_agentes = []
 
     if not especialistas_identificados and especialistas_selecionados:
         sintetizados: list[str] = []
@@ -2501,17 +2615,45 @@ def router_maestro(state: AgentState):
 
     if pendentes:
         return "node_acao_sistema"
-    if not especialistas_identificados and not especialistas_selecionados:
+    if not fila_agentes:
+        state["fila_agentes"] = []
         return "node_atendente"
-    if "especialista_saudacao" in especialistas_norm:
+
+    agente_atual = str(fila_agentes.pop(0) or "").strip()
+    state["fila_agentes"] = fila_agentes
+    print("--- [CONTROLE DE FILA] ---")
+    print(f"Agente atual sendo despachado: {agente_atual}")
+    print(f"Agentes restantes na fila: {state['fila_agentes']}")
+    print("--------------------------")
+    if not agente_atual:
+        return "node_atendente"
+
+    atual_norm = _normalizar_chave_especialista(agente_atual)
+    metadado_atual = None
+    for item in especialistas_selecionados:
+        if not isinstance(item, dict):
+            continue
+        item_id = _normalizar_chave_especialista(str(item.get("id") or ""))
+        item_nome = _normalizar_chave_especialista(str(item.get("nome") or ""))
+        if atual_norm and atual_norm in {item_id, item_nome}:
+            metadado_atual = item
+            break
+
+    nome_ref = _normalizar_chave_especialista(
+        str((metadado_atual or {}).get("nome") or agente_atual)
+    )
+
+    if nome_ref == "especialista_saudacao":
         return "node_especialista_saudacao"
-    if "especialista_funcionamento" in especialistas_norm:
+    if nome_ref == "especialista_funcionamento":
         return "especialista_funcionamento"
-    if "especialista_localizacao" in especialistas_norm:
+    if nome_ref == "especialista_localizacao":
         return "especialista_localizacao"
-    if especialistas_selecionados:
-        return "node_especialista_dinamico"
-    return "node_atendente"
+
+    # Processa apenas o especialista atual neste passo da fila.
+    if isinstance(metadado_atual, dict):
+        state["especialistas_selecionados"] = [metadado_atual]
+    return "node_especialista_dinamico"
 
 
 workflow.add_conditional_edges(
@@ -2527,9 +2669,9 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("especialista_funcionamento", "node_atendente")
-workflow.add_edge("especialista_localizacao", "node_atendente")
-workflow.add_edge("node_especialista_saudacao", "node_atendente")
+workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
+workflow.add_edge("especialista_localizacao", "node_roteador_maestro")
+workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
 
 def router_pos_acao_sistema(state: AgentState):
     if state.get("bot_foi_pausado"):
@@ -2551,7 +2693,7 @@ workflow.add_conditional_edges(
 def router_pos_especialista_dinamico(state: AgentState):
     if state.get("bot_foi_pausado"):
         return END
-    return "node_atendente"
+    return "node_roteador_maestro"
 
 
 workflow.add_conditional_edges(
@@ -2559,7 +2701,7 @@ workflow.add_conditional_edges(
     router_pos_especialista_dinamico,
     {
         END: END,
-        "node_atendente": "node_atendente",
+        "node_roteador_maestro": "node_roteador_maestro",
     }
 )
 

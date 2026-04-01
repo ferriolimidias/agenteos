@@ -288,6 +288,93 @@ class SemanticRouterService:
             logger.warning("[SEMANTIC ROUTER] Falha no desempate por LLM: %s", exc)
             return set()
 
+    async def get_top_specialists_contextual(
+        self,
+        query_text: str,
+        empresa_id: Optional[str] = None,
+        recent_history_text: Optional[str] = None,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        normalized_query = str(query_text or "").strip()
+        normalized_history_text = str(recent_history_text or "").strip()
+        if not normalized_history_text:
+            normalized_history_text = f"Cliente: {normalized_query}"
+
+        if not normalized_query:
+            return {"termos_expandidos": "", "candidatos": []}
+
+        limite_duvida = 0.45
+        api_key_empresa = None
+        modelo_roteador_empresa = "gpt-5.4-nano"
+
+        if empresa_id:
+            result_empresa = await self.db.execute(select(Empresa).where(Empresa.id == empresa_id))
+            empresa = result_empresa.scalars().first()
+            if empresa:
+                if getattr(empresa, "limite_duvida", None) is not None:
+                    limite_duvida = float(empresa.limite_duvida)
+                credenciais = getattr(empresa, "credenciais_canais", {}) or {}
+                api_key_empresa = credenciais.get("openai_api_key")
+                modelo_roteador_empresa = str(getattr(empresa, "modelo_roteador", "") or "").strip() or "gpt-5.4-nano"
+
+        query_vetorial = normalized_query
+        try:
+            query_vetorial = await self._expandir_query_com_llm(
+                mensagem_atual=normalized_query,
+                recent_history_text=normalized_history_text,
+                api_key=api_key_empresa,
+                model_name=modelo_roteador_empresa,
+            )
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha na etapa de query expansion contextual: %s", exc)
+            query_vetorial = normalized_query
+
+        query_vetorial = str(query_vetorial or "").strip() or normalized_query
+        termos = [termo.strip() for termo in query_vetorial.split(",") if termo.strip()]
+        query_vetorial = ", ".join(termos[:10]) if termos else normalized_query
+        print(
+            f"[ROTEADOR - QUERY EXPANSION] Original: '{normalized_query}' | "
+            f"Termos Expandidos: '{query_vetorial}'"
+        )
+
+        try:
+            query_embedding = await self.embeddings_model.aembed_query(query_vetorial)
+            similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
+            stmt = (
+                select(Especialista, similarity_expr)
+                .where(
+                    Especialista.ativo.is_(True),
+                    Especialista.embedding.isnot(None),
+                    similarity_expr >= limite_duvida,
+                )
+                .order_by(similarity_expr.desc())
+                .limit(max(1, int(top_k)))
+            )
+            if empresa_id:
+                stmt = stmt.where(Especialista.empresa_id == empresa_id)
+
+            result = await self.db.execute(stmt)
+            rows = result.all()
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha na busca vetorial: %s", exc)
+            rows = []
+
+        candidatos = []
+        for especialista, similarity in rows:
+            candidatos.append(
+                {
+                    "id": str(especialista.id),
+                    "nome": str(getattr(especialista, "nome", "") or ""),
+                    "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
+                    "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
+                    "usar_rag": bool(getattr(especialista, "usar_rag", False)),
+                    "usar_agenda": bool(getattr(especialista, "usar_agenda", False)),
+                    "similarity": float(similarity or 0.0),
+                }
+            )
+
+        return {"termos_expandidos": query_vetorial, "candidatos": candidatos}
+
     async def route_multi_specialists(
         self,
         query_text: str,
@@ -360,7 +447,7 @@ class SemanticRouterService:
         termos_consulta_log = [query_vetorial]
 
         # ETAPA 2: Busca semântica vetorial usando EXATAMENTE a query expandida
-        top_por_termo = max(3, min(5, max_agentes_desempate))
+        top_por_termo = 5
         t0_pool = time.perf_counter()
         try:
             query_embedding = await self.embeddings_model.aembed_query(query_vetorial)
@@ -373,7 +460,7 @@ class SemanticRouterService:
                     similarity_expr >= limite_duvida,
                 )
                 .order_by(similarity_expr.desc())
-                .limit(max(8, top_por_termo))
+                .limit(top_por_termo)
             )
             if empresa_id:
                 stmt = stmt.where(Especialista.empresa_id == empresa_id)
@@ -407,7 +494,7 @@ class SemanticRouterService:
             key=lambda item: item[1],
             reverse=True,
         )
-        candidatos_ordenados = candidatos_ordenados[: max(8, top_por_termo)]
+        candidatos_ordenados = candidatos_ordenados[:top_por_termo]
 
         # ETAPA 3: Seleção final (LLM reranking por IDs)
         ids_escolhidos: list[str] = []
