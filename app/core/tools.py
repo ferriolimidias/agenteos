@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import select, func
+from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.tools import tool
 
 from db.database import AsyncSessionLocal
@@ -23,7 +24,9 @@ def _normalizar_tags(tags: list[str] | None) -> list[str]:
     return output
 
 
+@tool
 async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
+    """Use esta ferramenta para atualizar ou adicionar múltiplas tags oficiais ao lead de uma vez. Passe uma lista com os nomes das tags."""
     try:
         lead_uuid = uuid.UUID(str(lead_id))
     except (ValueError, TypeError):
@@ -73,8 +76,10 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
             if not tags_ids_aplicadas:
                 return "Erro ao atualizar tags do lead: nenhuma das tags informadas existe nas tags oficiais da empresa."
 
-            # Atualiza o lead apenas com UUIDs oficiais encontrados.
-            lead.tags = tags_ids_aplicadas
+            # Atualiza o lead com UUIDs oficiais encontrados.
+            mapa_finais = {tag_id: tag_id for tag_id in tags_ids_aplicadas}
+            lead.tags = list(mapa_finais.values())
+            flag_modified(lead, "tags")
 
             # Notifica os Ads usando o nome oficial
             await processar_disparo_conversao_ads_para_tags(
