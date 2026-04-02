@@ -1666,15 +1666,14 @@ async def node_roteador_maestro(state: AgentState):
     for esp in especialistas_match:
         if not isinstance(esp, dict):
             continue
-        for chave in (esp.get("id"), esp.get("nome")):
-            valor = str(chave or "").strip()
-            if not valor:
-                continue
-            normalizado = _normalizar_chave_especialista(valor)
-            if normalizado in vistos:
-                continue
-            vistos.add(normalizado)
-            especialistas_identificados.append(valor)
+        valor = str(esp.get("id") or "").strip()
+        if not valor:
+            continue
+        normalizado = _normalizar_chave_especialista(valor)
+        if normalizado in vistos:
+            continue
+        vistos.add(normalizado)
+        especialistas_identificados.append(valor)
     print(
         f"[NODE ROTEADOR] Matches: {len(ids_especialistas)} "
         f"| IDs={ids_especialistas} | Nomes={nomes_especialistas} "

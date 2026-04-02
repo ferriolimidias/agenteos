@@ -297,7 +297,7 @@ async def save_history_and_check_pause(
 
         if lead_criado_ou_identidade_atualizada and lead_payload_atualizacao:
             await manager.broadcast_to_empresa(
-                empresa_id,
+                str(empresa_id),
                 {
                     "tipo_evento": "atualizacao_lead",
                     "lead": lead_payload_atualizacao,
@@ -346,7 +346,7 @@ async def save_history_and_check_pause(
         }
         tipo_evento = "nova_mensagem_outbound" if from_me else "nova_mensagem_inbound"
         await manager.broadcast_to_empresa(
-            empresa_id,
+            str(empresa_id),
             {
                 "tipo_evento": tipo_evento,
                 "telefone": telefone,
@@ -409,11 +409,6 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             f"Empresa: {empresa_id} | Telefone: {_mask_phone(telefone)}"
         )
         empresa_uuid = uuid.UUID(empresa_id)
-
-        # Nunca bloquear o fluxo principal do webhook por causa de foto de perfil.
-        # A atualização da foto roda em paralelo e falhas são ignoradas.
-        if not fromMe:
-            asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
 
         async with AsyncSessionLocal() as session:
             conexao_id = await get_conexao_id_por_tipo(
@@ -567,6 +562,10 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             fbclid=fbclid,
             profile_pic_url=profile_pic_url,
         )
+
+        # Dispara atualização de foto somente após persistência/commit do lead no webhook.
+        if not fromMe:
+            asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
         
         if should_process:
             msg = StandardMessage(

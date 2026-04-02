@@ -39,6 +39,7 @@ export default function Inbox() {
   const leadsFetchInFlightRef = useRef(false);
   const leadsFetchQueuedRef = useRef(false);
   const leadsRefreshTimerRef = useRef(null);
+  const heartbeatIntervalRef = useRef(null);
 
   const user = getStoredUser();
   const activeEmpresaId = getActiveEmpresaId();
@@ -203,12 +204,62 @@ export default function Inbox() {
         failedReconnectTimestampsRef.current = [];
         reconnectBlockedUntilRef.current = 0;
         socketOpenedRef.current = true;
+        if (heartbeatIntervalRef.current) {
+          window.clearInterval(heartbeatIntervalRef.current);
+        }
+        heartbeatIntervalRef.current = window.setInterval(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            try {
+              wsRef.current.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+            } catch (_) {
+              // no-op
+            }
+          }
+        }, 25000);
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data || "{}");
           const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
+          if (tipoEvento === "atualizacao_lead") {
+            const leadPayload = data?.lead || {};
+            const leadId = String(leadPayload?.id || data?.lead_id || "");
+            if (!leadId) {
+              scheduleFetchLeads(150);
+              return;
+            }
+            setLeads((prev) => {
+              const lista = prev || [];
+              const jaExiste = lista.some((lead) => String(lead?.id || "") === leadId);
+              const leadAtualizado = {
+                id: leadId,
+                nome_contato: String(leadPayload?.nome || ""),
+                telefone_contato: String(leadPayload?.telefone || ""),
+                foto_url: leadPayload?.foto_url || null,
+                status_atendimento: "aberto",
+                bot_pausado: false,
+                bot_pausado_ate: null,
+                tags: [],
+                historico_resumo: "",
+                dados_adicionais: {},
+              };
+              if (!jaExiste) return [leadAtualizado, ...lista];
+              return lista.map((lead) => (String(lead?.id || "") === leadId ? { ...lead, ...leadAtualizado } : lead));
+            });
+            setSelectedLead((prev) => {
+              if (!prev?.id || String(prev.id) !== leadId) return prev;
+              return {
+                ...prev,
+                nome_contato: String(leadPayload?.nome || prev.nome_contato || ""),
+                telefone_contato: String(leadPayload?.telefone || prev.telefone_contato || ""),
+                foto_url: leadPayload?.foto_url || prev.foto_url || null,
+              };
+            });
+            scheduleFetchLeads(150);
+            return;
+          }
+
           if (tipoEvento !== "nova_mensagem_inbound" && tipoEvento !== "nova_mensagem_outbound") return;
 
           const telefoneEvento = String(data?.telefone || "");
@@ -236,6 +287,10 @@ export default function Inbox() {
 
       ws.onclose = () => {
         if (!isActive) return;
+        if (heartbeatIntervalRef.current) {
+          window.clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+        }
         const openedOnce = socketOpenedRef.current;
         const now = Date.now();
 
@@ -275,6 +330,10 @@ export default function Inbox() {
       if (reconnectTimeoutRef.current) {
         window.clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
+      }
+      if (heartbeatIntervalRef.current) {
+        window.clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
       }
       if (leadsRefreshTimerRef.current) {
         window.clearTimeout(leadsRefreshTimerRef.current);
@@ -596,7 +655,12 @@ export default function Inbox() {
     return (leads || []).filter((lead) => {
       const statusLead = (lead?.status_atendimento || "aberto").toLowerCase();
       const statusSelecionado = filtroStatus.toLowerCase();
-      if (statusLead !== statusSelecionado) return false;
+      // Se o filtro for 'aberto', deve incluir também 'aguardando_humano'
+      if (statusSelecionado === "aberto") {
+        if (statusLead !== "aberto" && statusLead !== "aguardando_humano") return false;
+      } else {
+        if (statusLead !== statusSelecionado) return false;
+      }
 
       if (termo) {
         const nome = String(lead?.nome_contato || "").toLowerCase();
