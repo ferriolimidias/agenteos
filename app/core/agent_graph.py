@@ -102,7 +102,6 @@ from app.core.tools import (
     tool_aplicar_tag_dinamica,
     tool_transferir_para_humano,
 )
-from app.services.websocket_manager import manager
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
@@ -1225,23 +1224,6 @@ async def node_crm(state: AgentState):
                     state["lead_id"] = str(novo_lead.id)
                     print(f"[NODE CRM] Novo Lead criado com sucesso. ID: {state['lead_id']}")
 
-                    if primeira_msg_inbound:
-                        mensagem_payload = {
-                            "id": str(primeira_msg_inbound.id),
-                            "texto": str(primeira_msg_inbound.texto or ""),
-                            "from_me": bool(primeira_msg_inbound.from_me),
-                            "tipo_mensagem": str(primeira_msg_inbound.tipo_mensagem or "text"),
-                            "media_url": str(primeira_msg_inbound.media_url) if primeira_msg_inbound.media_url else None,
-                            "criado_em": primeira_msg_inbound.criado_em.isoformat() if primeira_msg_inbound.criado_em else None,
-                        }
-                        await manager.broadcast_to_empresa(
-                            str(empresa_id),
-                            {
-                                "tipo_evento": "nova_mensagem_inbound",
-                                "telefone": origem,
-                                "mensagem": mensagem_payload,
-                            },
-                        )
                 else:
                     state["nome_contato"] = None
                     state["lead_id"] = None
@@ -2303,11 +2285,49 @@ async def node_especialista_dinamico(state: AgentState):
                         tool_name = _tool_name_safe(f_db.nome_ferramenta)
 
                         if f_db.nome_ferramenta in MAP_FUNCOES_NATIVAS:
+                            coroutine_native = MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta]
+
+                            # Ferramentas nativas que exigem contexto do lead/empresa
+                            # recebem wrappers contextuais para o LLM enviar apenas
+                            # os parâmetros de negócio.
+                            if f_db.nome_ferramenta == "tool_aplicar_tag_dinamica":
+                                async def _tool_aplicar_tag_dinamica_contextual(
+                                    nome_da_tag: str,
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _lead_id or not _empresa_id:
+                                        return "Falha ao aplicar tag dinâmica: contexto de lead/empresa ausente."
+                                    return await _coroutine_native(
+                                        lead_id=_lead_id,
+                                        empresa_id=_empresa_id,
+                                        nome_da_tag=nome_da_tag,
+                                    )
+
+                                coroutine_native = _tool_aplicar_tag_dinamica_contextual
+                            elif f_db.nome_ferramenta == "tool_transferir_para_humano":
+                                async def _tool_transferir_para_humano_contextual(
+                                    motivo: Optional[str] = None,
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _lead_id or not _empresa_id:
+                                        return "SISTEMA_BOT_PAUSADO"
+                                    return await _coroutine_native(
+                                        lead_id=_lead_id,
+                                        empresa_id=_empresa_id,
+                                        motivo=motivo,
+                                    )
+
+                                coroutine_native = _tool_transferir_para_humano_contextual
+
                             nova_tool = StructuredTool(
                                 name=tool_name,
                                 description=f_db.descricao_ia,
                                 args_schema=args_schema,
-                                coroutine=MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta],
+                                coroutine=coroutine_native,
                             )
                             tools_disponiveis.append(nova_tool)
                             nomes_tools_registradas.add(nova_tool.name)

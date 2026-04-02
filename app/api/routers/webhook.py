@@ -173,6 +173,8 @@ async def save_history_and_check_pause(
         return "".join(ch for ch in texto if not unicodedata.combining(ch))
 
     should_process = True
+    lead_criado_ou_identidade_atualizada = False
+    lead_payload_atualizacao: dict[str, Any] | None = None
     async with AsyncSessionLocal() as session:
         empresa_uuid = uuid.UUID(empresa_id)
         try:
@@ -211,6 +213,13 @@ async def save_history_and_check_pause(
             await session.flush()
             await session.commit()
             await session.refresh(lead)
+            lead_criado_ou_identidade_atualizada = True
+            lead_payload_atualizacao = {
+                "id": str(lead.id),
+                "nome": str(lead.nome_contato or ""),
+                "telefone": str(lead.telefone_contato or ""),
+                "foto_url": str(lead.foto_url) if lead.foto_url else None,
+            }
         else:
             nome_atual = str(lead.nome_contato or "").strip()
             nome_atual_digitos = re.sub(r"\D", "", nome_atual)
@@ -225,13 +234,16 @@ async def save_history_and_check_pause(
             )
 
             lead_alterado = False
+            identidade_lead_atualizada = False
             if nome_contato_limpo and nome_precisa_atualizar:
                 lead.nome_contato = nome_contato_limpo
                 lead_alterado = True
+                identidade_lead_atualizada = True
             if profile_pic_limpa and profile_pic_limpa != str(lead.foto_url or "").strip():
                 lead.foto_url = profile_pic_limpa
                 lead.foto_atualizada_em = agora
                 lead_alterado = True
+                identidade_lead_atualizada = True
             if not from_me:
                 if gclid and lead.gclid != gclid:
                     lead.gclid = gclid
@@ -274,6 +286,25 @@ async def save_history_and_check_pause(
                     lead_alterado = True
             if lead_alterado:
                 await session.commit()
+                if identidade_lead_atualizada:
+                    lead_criado_ou_identidade_atualizada = True
+                    lead_payload_atualizacao = {
+                        "id": str(lead.id),
+                        "nome": str(lead.nome_contato or ""),
+                        "telefone": str(lead.telefone_contato or ""),
+                        "foto_url": str(lead.foto_url) if lead.foto_url else None,
+                    }
+
+        if lead_criado_ou_identidade_atualizada and lead_payload_atualizacao:
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "tipo_evento": "atualizacao_lead",
+                    "lead": lead_payload_atualizacao,
+                    "lead_id": str(lead.id),
+                    "telefone": str(lead.telefone_contato or telefone or ""),
+                },
+            )
 
         # Salvar no histórico (sempre após garantir que o lead existe)
         nova_msg = MensagemHistorico(
@@ -319,6 +350,7 @@ async def save_history_and_check_pause(
             {
                 "tipo_evento": tipo_evento,
                 "telefone": telefone,
+                "lead_id": str(lead.id),
                 "mensagem": mensagem_payload,
             },
         )
