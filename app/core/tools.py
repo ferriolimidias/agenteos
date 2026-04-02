@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from langchain_core.tools import tool
 
 from db.database import AsyncSessionLocal
@@ -42,36 +42,39 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
             if not lead:
                 return "Erro ao atualizar tags do lead: lead não encontrado."
 
+            nomes_tags_lower = [tag.lower() for tag in tags_normalizadas]
             result_tags = await session.execute(
-                select(TagCRM).where(TagCRM.empresa_id == lead.empresa_id)
+                select(TagCRM).where(
+                    TagCRM.empresa_id == lead.empresa_id,
+                    func.lower(TagCRM.nome).in_(nomes_tags_lower),
+                )
             )
-            tags_oficiais = result_tags.scalars().all()
+            tags_oficiais_encontradas = result_tags.scalars().all()
 
-            # Mapeamentos para obter o ID e o Nome Oficial
-            mapa_oficiais_ids = {str(tag.nome).strip().lower(): str(tag.id) for tag in tags_oficiais if str(tag.nome).strip()}
-            mapa_oficiais_nomes = {str(tag.nome).strip().lower(): str(tag.nome).strip() for tag in tags_oficiais if str(tag.nome).strip()}
+            # Mapeamento por nome normalizado para preservar a ordem da entrada da IA.
+            mapa_tags_por_nome = {
+                str(tag.nome).strip().lower(): tag
+                for tag in tags_oficiais_encontradas
+                if str(tag.nome).strip()
+            }
 
             tags_ids_aplicadas: list[str] = []
             tags_nomes_aplicadas: list[str] = []
-
-            for tag in tags_normalizadas:
-                tag_lower = tag.lower()
-                oficial_id = mapa_oficiais_ids.get(tag_lower)
-                oficial_nome = mapa_oficiais_nomes.get(tag_lower)
-                if oficial_id and oficial_nome:
-                    tags_ids_aplicadas.append(oficial_id)
-                    tags_nomes_aplicadas.append(oficial_nome)
+            for nome_tag in nomes_tags_lower:
+                tag_oficial = mapa_tags_por_nome.get(nome_tag)
+                if not tag_oficial:
+                    continue
+                tag_id_str = str(tag_oficial.id)
+                if tag_id_str in tags_ids_aplicadas:
+                    continue
+                tags_ids_aplicadas.append(tag_id_str)
+                tags_nomes_aplicadas.append(str(tag_oficial.nome).strip())
 
             if not tags_ids_aplicadas:
                 return "Erro ao atualizar tags do lead: nenhuma das tags informadas existe nas tags oficiais da empresa."
 
-            # Atualiza o lead com os UUIDs corretos
-            atuais = [str(t).strip() for t in (lead.tags if isinstance(lead.tags, list) else []) if str(t).strip()]
-            mapa_finais = {t: t for t in atuais}
-            for tag_id in tags_ids_aplicadas:
-                mapa_finais[tag_id] = tag_id
-
-            lead.tags = list(mapa_finais.values())
+            # Atualiza o lead apenas com UUIDs oficiais encontrados.
+            lead.tags = tags_ids_aplicadas
 
             # Notifica os Ads usando o nome oficial
             await processar_disparo_conversao_ads_para_tags(
