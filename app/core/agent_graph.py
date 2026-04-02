@@ -936,6 +936,7 @@ MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
     "transferir_para_humano": transferir_para_humano,
+    "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
     "tool_transferir_para_humano": tool_transferir_para_humano.coroutine,
 }
@@ -2317,7 +2318,8 @@ async def node_especialista_dinamico(state: AgentState):
                         )
                         erros_extracao.append(f"Falha ao instanciar ferramenta {conexao.nome}: {e}")
 
-                for f_db in (especialista_db.ferramentas if especialista_db else []):
+                ferramentas_nativas = list(especialista_db.ferramentas if especialista_db else [])
+                for f_db in ferramentas_nativas:
                     try:
                         schema_dict = f_db.schema_parametros if f_db.schema_parametros else {}
                         if isinstance(schema_dict, str):
@@ -2327,15 +2329,27 @@ async def node_especialista_dinamico(state: AgentState):
                             schema_dict,
                             model_name=f"{_tool_name_safe(f_db.nome_ferramenta)}Args",
                         )
-                        tool_name = _tool_name_safe(f_db.nome_ferramenta)
+                        nome_tool_original = str(getattr(f_db, "nome_ferramenta", "") or "").strip()
+                        nome_tool_normalizado = _tool_name_safe(nome_tool_original)
+                        chave_nativa = None
+                        if nome_tool_original in MAP_FUNCOES_NATIVAS:
+                            chave_nativa = nome_tool_original
+                        elif nome_tool_normalizado in MAP_FUNCOES_NATIVAS:
+                            chave_nativa = nome_tool_normalizado
 
-                        if f_db.nome_ferramenta in MAP_FUNCOES_NATIVAS:
-                            coroutine_native = MAP_FUNCOES_NATIVAS[f_db.nome_ferramenta]
+                        tool_name = _tool_name_safe(chave_nativa or nome_tool_original)
+
+                        if chave_nativa:
+                            fn_nativa = MAP_FUNCOES_NATIVAS[chave_nativa]
+                            if hasattr(fn_nativa, "coroutine") and callable(getattr(fn_nativa, "coroutine")):
+                                coroutine_native = fn_nativa.coroutine
+                            else:
+                                coroutine_native = fn_nativa
 
                             # Ferramentas nativas que exigem contexto do lead/empresa
                             # recebem wrappers contextuais para o LLM enviar apenas
                             # os parâmetros de negócio.
-                            if f_db.nome_ferramenta == "tool_aplicar_tag_dinamica":
+                            if chave_nativa == "tool_aplicar_tag_dinamica":
                                 async def _tool_aplicar_tag_dinamica_contextual(
                                     nome_da_tag: str,
                                     _lead_id: str | None = str(lead_id) if lead_id else None,
@@ -2351,7 +2365,23 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_aplicar_tag_dinamica_contextual
-                            elif f_db.nome_ferramenta == "tool_transferir_para_humano":
+                            elif chave_nativa == "tool_atualizar_tags_lead":
+                                async def _tool_atualizar_tags_lead_contextual(
+                                    tags: List[str],
+                                    lead_id: Optional[str] = None,
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    lead_id_final = str(lead_id or _lead_id or "").strip()
+                                    if not lead_id_final:
+                                        return "Erro ao atualizar tags do lead: contexto de lead ausente."
+                                    return await _coroutine_native(
+                                        lead_id=lead_id_final,
+                                        tags=tags,
+                                    )
+
+                                coroutine_native = _tool_atualizar_tags_lead_contextual
+                            elif chave_nativa == "tool_transferir_para_humano":
                                 async def _tool_transferir_para_humano_contextual(
                                     motivo: Optional[str] = None,
                                     _lead_id: str | None = str(lead_id) if lead_id else None,
