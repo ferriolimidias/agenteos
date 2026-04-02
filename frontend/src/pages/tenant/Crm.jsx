@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../../services/api";
-import { Users, Plus, Phone, Clock, MessageSquare, Upload, X } from "lucide-react";
+import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2 } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
@@ -89,6 +89,30 @@ export default function Crm() {
       tags: res.data?.tags || updates.tags,
       valor_conversao: res.data?.valor_conversao ?? updates.valor_conversao,
     });
+  };
+
+  const handleDeleteLead = async (leadId) => {
+    if (!leadId) return;
+    const confirmou = window.confirm("Tem certeza que deseja excluir este lead?");
+    if (!confirmou) return;
+
+    try {
+      await api.delete(`/empresas/${empresaId}/crm/leads/${leadId}`);
+      setFunil((prev) => {
+        if (!prev?.etapas) return prev;
+        return {
+          ...prev,
+          etapas: prev.etapas.map((etapa) => ({
+            ...etapa,
+            leads: (etapa.leads || []).filter((lead) => lead.id !== leadId),
+          })),
+        };
+      });
+      setSelectedLead((prev) => (prev?.id === leadId ? null : prev));
+    } catch (err) {
+      console.error("Erro ao excluir lead:", err);
+      alert(err.response?.data?.detail || "Não foi possível excluir o lead.");
+    }
   };
 
   const resetImportModal = () => {
@@ -246,9 +270,24 @@ export default function Crm() {
                         >
                           <div className="mb-2 flex justify-between gap-3">
                             <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
-                            <button className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100">
-                              <MessageSquare size={14} />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MessageSquare size={14} />
+                              </button>
+                              <button
+                                className="rounded-lg bg-red-50 p-1.5 text-red-600 opacity-0 transition-opacity hover:bg-red-100 group-hover:opacity-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteLead(lead.id);
+                                }}
+                                title="Excluir lead"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
                           </div>
 
                           {lead.telefone ? (

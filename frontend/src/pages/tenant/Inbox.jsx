@@ -650,9 +650,7 @@ export default function Inbox() {
 
   const filteredLeads = useMemo(() => {
     const termo = String(searchTerm || "").trim().toLowerCase();
-    console.log("Leads carregados:", leads);
-
-    return (leads || []).filter((lead) => {
+    const leadsFiltrados = (leads || []).filter((lead) => {
       const statusLead = (lead?.status_atendimento || "aberto").toLowerCase();
       const statusSelecionado = filtroStatus.toLowerCase();
       // Se o filtro for 'aberto', deve incluir também 'aguardando_humano'
@@ -686,6 +684,15 @@ export default function Inbox() {
 
       return tagsOficiaisLead.some((tag) => String(tag?.grupo_id || "") === abaAtiva);
     });
+
+    const getLeadSortTime = (lead) => {
+      const dataReferencia = lead?.ultima_mensagem_data || lead?.criado_em;
+      if (!dataReferencia) return 0;
+      const timestamp = new Date(dataReferencia).getTime();
+      return Number.isNaN(timestamp) ? 0 : timestamp;
+    };
+
+    return leadsFiltrados.sort((a, b) => getLeadSortTime(b) - getLeadSortTime(a));
   }, [abaAtiva, filtroStatus, grupos, leads, searchTerm, tagsOficiaisPorNome]);
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
