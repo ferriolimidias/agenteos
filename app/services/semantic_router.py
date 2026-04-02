@@ -42,6 +42,7 @@ class SemanticRouterService:
             except Exception:
                 return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
 
+    @staticmethod
     def _build_routing_text(especialista: Especialista) -> str:
         # Unificacao: roteamento semantico deve depender apenas da missao do especialista.
         return (especialista.descricao_missao or "").strip()

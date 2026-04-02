@@ -2675,9 +2675,10 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("especialista_funcionamento", "node_roteador_maestro")
-workflow.add_edge("especialista_localizacao", "node_roteador_maestro")
-workflow.add_edge("node_especialista_saudacao", "node_roteador_maestro")
+workflow.add_conditional_edges("especialista_funcionamento", router_maestro)
+workflow.add_conditional_edges("especialista_localizacao", router_maestro)
+workflow.add_conditional_edges("node_especialista_saudacao", router_maestro)
+workflow.add_conditional_edges("node_especialista_dinamico", router_maestro)
 
 def router_pos_acao_sistema(state: AgentState):
     if state.get("bot_foi_pausado"):
@@ -2696,21 +2697,6 @@ workflow.add_conditional_edges(
         "node_roteador_maestro": "node_roteador_maestro",
     }
 )
-def router_pos_especialista_dinamico(state: AgentState):
-    if state.get("bot_foi_pausado"):
-        return END
-    return "node_roteador_maestro"
-
-
-workflow.add_conditional_edges(
-    "node_especialista_dinamico",
-    router_pos_especialista_dinamico,
-    {
-        END: END,
-        "node_roteador_maestro": "node_roteador_maestro",
-    }
-)
-
 # Compilar sem checkpointer persistente:
 # a memória global da conversa vem exclusivamente do histórico consolidado no estado.
 graph = workflow.compile()
