@@ -636,6 +636,33 @@ async def processar_bloco_mensagens(
                             "mensagem": mensagem_payload,
                         },
                     )
+                    # --- VERIFICA SE A IA SOLICITOU A PAUSA (Pausa Efetiva) ---
+                    respostas_especialistas = estado_final.get("respostas_especialistas", [])
+                    bot_pausado_flag = any("SISTEMA_BOT_PAUSADO" in str(r) for r in respostas_especialistas)
+
+                    if bot_pausado_flag or estado_final.get("status_conversa") == "HANDOFF":
+                        try:
+                            from sqlalchemy import update
+                            from db.database import AsyncSessionLocal
+                            from db.models import CRMLead
+                            from datetime import datetime, timedelta
+
+                            async with AsyncSessionLocal() as session:
+                                await session.execute(
+                                    update(CRMLead)
+                                    .where(
+                                        CRMLead.telefone_contato == str(mensagens[0].identificador_origem),
+                                        CRMLead.empresa_id == uuid.UUID(mensagens[0].empresa_id)
+                                    )
+                                    .values(
+                                        bot_pausado_ate=datetime.utcnow() + timedelta(hours=24),
+                                        status_atendimento="AGUARDANDO_HUMANO"
+                                    )
+                                )
+                                await session.commit()
+                                print(f"[ENGINE] Bot efetivamente pausado por 24h para {mensagens[0].identificador_origem}.")
+                        except Exception as ep:
+                            print(f"Erro ao pausar bot no webhook: {ep}")
             except Exception as e:
                 print(f"Erro ao salvar histórico do Grafo (Webhook): {e}")
                 traceback.print_exc()

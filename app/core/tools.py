@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from langchain_core.tools import tool
@@ -47,30 +46,41 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
                 select(TagCRM).where(TagCRM.empresa_id == lead.empresa_id)
             )
             tags_oficiais = result_tags.scalars().all()
-            mapa_oficiais = {str(tag.nome).strip().lower(): str(tag.nome).strip() for tag in tags_oficiais if str(tag.nome).strip()}
 
-            tags_aplicadas: list[str] = []
+            # Mapeamentos para obter o ID e o Nome Oficial
+            mapa_oficiais_ids = {str(tag.nome).strip().lower(): str(tag.id) for tag in tags_oficiais if str(tag.nome).strip()}
+            mapa_oficiais_nomes = {str(tag.nome).strip().lower(): str(tag.nome).strip() for tag in tags_oficiais if str(tag.nome).strip()}
+
+            tags_ids_aplicadas: list[str] = []
+            tags_nomes_aplicadas: list[str] = []
+
             for tag in tags_normalizadas:
-                oficial = mapa_oficiais.get(tag.lower())
-                if oficial:
-                    tags_aplicadas.append(oficial)
+                tag_lower = tag.lower()
+                oficial_id = mapa_oficiais_ids.get(tag_lower)
+                oficial_nome = mapa_oficiais_nomes.get(tag_lower)
+                if oficial_id and oficial_nome:
+                    tags_ids_aplicadas.append(oficial_id)
+                    tags_nomes_aplicadas.append(oficial_nome)
 
-            if not tags_aplicadas:
+            if not tags_ids_aplicadas:
                 return "Erro ao atualizar tags do lead: nenhuma das tags informadas existe nas tags oficiais da empresa."
 
-            atuais = _normalizar_tags(lead.tags if isinstance(lead.tags, list) else [])
-            mapa_finais = {tag.lower(): tag for tag in atuais}
-            for tag in tags_aplicadas:
-                mapa_finais[tag.lower()] = tag
+            # Atualiza o lead com os UUIDs corretos
+            atuais = [str(t).strip() for t in (lead.tags if isinstance(lead.tags, list) else []) if str(t).strip()]
+            mapa_finais = {t: t for t in atuais}
+            for tag_id in tags_ids_aplicadas:
+                mapa_finais[tag_id] = tag_id
 
             lead.tags = list(mapa_finais.values())
+
+            # Notifica os Ads usando o nome oficial
             await processar_disparo_conversao_ads_para_tags(
                 session=session,
                 lead=lead,
-                tags_aplicadas=tags_aplicadas,
+                tags_aplicadas=tags_nomes_aplicadas,
             )
             await session.commit()
-            return f"Sucesso: tags oficiais aplicadas ao lead: {lead.tags}"
+            return f"Sucesso: tags oficiais aplicadas ao lead: {tags_nomes_aplicadas}"
     except Exception as e:
         return f"Erro ao atualizar tags do lead: {str(e)}"
 
@@ -128,27 +138,9 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, nome_da_tag: 
 @tool
 async def tool_transferir_para_humano(lead_id: str, empresa_id: str, motivo: str = None) -> str:
     """
-    Use esta ferramenta QUANDO PRECISAR TRANSFERIR o atendimento para um humano, pausando o bot. Sempre avise o cliente que está transferindo ANTES ou JUNTO com a chamada desta ferramenta.
+    Use esta ferramenta QUANDO PRECISAR TRANSFERIR o atendimento para um humano, pausando o bot. 
+    Sempre avise o cliente que está transferindo ANTES ou JUNTO com a chamada desta ferramenta.
     """
-    try:
-        lead_uuid = uuid.UUID(str(lead_id))
-        empresa_uuid = uuid.UUID(str(empresa_id))
-    except (ValueError, TypeError):
-        return "SISTEMA_BOT_PAUSADO"
-
-    try:
-        async with AsyncSessionLocal() as session:
-            result_lead = await session.execute(
-                select(CRMLead).where(
-                    CRMLead.id == lead_uuid,
-                    CRMLead.empresa_id == empresa_uuid,
-                )
-            )
-            lead = result_lead.scalars().first()
-            if lead:
-                lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
-                lead.status_atendimento = "AGUARDANDO_HUMANO"
-                await session.commit()
-            return "SISTEMA_BOT_PAUSADO"
-    except Exception:
-        return "SISTEMA_BOT_PAUSADO"
+    # Apenas retorna a flag. A pausa real no banco será feita na borda do sistema (webhook)
+    # após a IA ter a chance de se despedir do cliente.
+    return "SISTEMA_BOT_PAUSADO"
