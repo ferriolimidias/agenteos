@@ -376,7 +376,7 @@ async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_task
             texto_mensagem=texto,
             is_human_agent=False
         )
-        background_tasks.add_task(handle_debouncer, msg)
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
     
     return {"status": "received"}
 
@@ -463,7 +463,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                              texto_mensagem=texto_transcrito,
                              is_human_agent=False,
                          )
-                         await handle_debouncer(msg)
+                         await handle_debouncer(msg, background_tasks=background_tasks)
                      return
                      
                  if not base64_data:
@@ -534,7 +534,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                          texto_mensagem=texto_transcrito,
                          is_human_agent=False,
                      )
-                     await handle_debouncer(msg)
+                     await handle_debouncer(msg, background_tasks=background_tasks)
                  
              background_tasks.add_task(transcribe_audio)
              return {"status": "received", "message": "Transcription in background"}
@@ -577,7 +577,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 texto_mensagem=texto_limpo or "[Mensagem não suportada]",
                 is_human_agent=False
             )
-            background_tasks.add_task(handle_debouncer, msg)
+            background_tasks.add_task(handle_debouncer, msg, background_tasks)
         
         return {"status": "received", "message": "Processed"}
 
@@ -598,7 +598,7 @@ async def webhook_telegram(empresa_id: str, payload: Dict[Any, Any], background_
     
     if should_process:
         msg = StandardMessage(empresa_id=empresa_id, canal="telegram", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=False)
-        background_tasks.add_task(handle_debouncer, msg)
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
     return {"status": "received"}
 
 
@@ -616,5 +616,5 @@ async def webhook_chatwoot(empresa_id: str, payload: Dict[Any, Any], background_
     
     if should_process:
         msg = StandardMessage(empresa_id=empresa_id, canal="chatwoot", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=(sender_type == "user"))
-        background_tasks.add_task(handle_debouncer, msg)
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
     return {"status": "received"}

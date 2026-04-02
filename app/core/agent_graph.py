@@ -209,6 +209,14 @@ def _normalizar_chave_especialista(valor: str) -> str:
     return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).strip().lower()
 
 
+def _prepend_resumo_cliente_system_prompt(state: "AgentState", prompt: str) -> str:
+    resumo_cliente = str(state.get("resumo_cliente") or "").strip()
+    return (
+        f"RESUMO DO CLIENTE (Memória de longo prazo): {resumo_cliente}\n\n"
+        f"{str(prompt or '').strip()}"
+    ).strip()
+
+
 def _remover_especialista_do_estado(state: "AgentState", *chaves: str) -> None:
     alvos = {_normalizar_chave_especialista(chave) for chave in chaves if str(chave or "").strip()}
     if not alvos:
@@ -674,7 +682,10 @@ NÃO redija mensagem para o cliente final."""
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    mensagens = [SystemMessage(content=prompt), HumanMessage(content=ultima_mensagem)]
+    mensagens = [
+        SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt)),
+        HumanMessage(content=ultima_mensagem),
+    ]
     dados_crus_tags: list[str] = []
     fontes_tags: list[str] = []
     erros_tags: list[str] = []
@@ -710,8 +721,11 @@ NÃO redija mensagem para o cliente final."""
         [
             (
                 "system",
-                "Converta o material bruto em um objeto ExtracaoEspecialista. "
-                "Preserve os dados tecnicos, mantenha apenas fatos, sem linguagem ao cliente."
+                _prepend_resumo_cliente_system_prompt(
+                    state,
+                    "Converta o material bruto em um objeto ExtracaoEspecialista. "
+                    "Preserve os dados tecnicos, mantenha apenas fatos, sem linguagem ao cliente.",
+                ),
             ),
             (
                 "user",
@@ -789,7 +803,7 @@ Mensagem atual do cliente: {ultima_mensagem}
 Objetivo: classificar e aplicar tags oficiais no CRM.
 Retorne apenas o resultado técnico da ação."""
 
-                msgs = [("system", prompt_tags), ("user", ultima_mensagem)]
+                msgs = [("system", _prepend_resumo_cliente_system_prompt(state, prompt_tags)), ("user", ultima_mensagem)]
                 resultado_tool = ""
                 for _ in range(4):
                     resposta = await llm_with_tools.ainvoke(msgs)
@@ -836,7 +850,7 @@ Retorne apenas o resultado técnico da ação."""
                     "Não responda ao cliente; apenas execute a ação interna.\n"
                     f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
                 )
-                mensagens = [("system", prompt_transferencia), ("user", ultima_mensagem)]
+                mensagens = [("system", _prepend_resumo_cliente_system_prompt(state, prompt_transferencia)), ("user", ultima_mensagem)]
                 retorno_transferencia = ""
                 for _ in range(4):
                     resposta = await llm_with_tools.ainvoke(mensagens)
@@ -1092,6 +1106,8 @@ class AgentState(TypedDict):
     conexao_id: Optional[str]
     mensagens: list  # Memória global única da conversa (cliente + assistente), somente a orquestradora atualiza.
     historico_bd: str          # Histórico real do PostgreSQL, formatado
+    resumo_cliente: str
+    historico_curto: str       # Histórico resumido (últimas 5 mensagens) para roteamento/especialistas
     nome_contato: Optional[str]
     especialistas_identificados: List[str]
     especialistas_selecionados: List[EspecialistaSelecionadoState]
@@ -1244,7 +1260,9 @@ async def node_capturar_nome(state: AgentState):
     ultima_mensagem = _ultima_mensagem_cliente(state)
     
     llm = await get_llm(state.get("empresa_id"))
-    resposta = await llm.ainvoke([("system", prompt), ("user", ultima_mensagem)])
+    resposta = await llm.ainvoke(
+        [("system", _prepend_resumo_cliente_system_prompt(state, prompt)), ("user", ultima_mensagem)]
+    )
     state["resposta_final"] = resposta.content
 
     return state
@@ -1417,29 +1435,29 @@ async def node_atendente(state: AgentState):
 {bloco_xml_sintese}
 
 <instrucao_final>
-Você recebeu os seguintes DADOS CRUS dos especialistas do sistema em <respostas_especialistas>, no formato JSON com os campos: "dados", "fontes" e "erros".
-Sua tarefa é ler esses dados e formular uma resposta natural, educada e coesa para o cliente, assumindo a persona da empresa.
-Você também recebeu um super-contexto técnico consolidado dos especialistas selecionados para esta pergunta.
-IMPORTANTE: podem existir múltiplos especialistas cobrindo assuntos diferentes (ex.: curso, preço, agenda, suporte).
-Você DEVE mesclar tudo em uma única resposta integrada e fluida, sem segmentar por especialista e sem parecer múltiplas vozes.
-Quando houver pontos complementares, conecte-os com transições naturais para o cliente perceber uma única resposta contínua.
-Não mencione nomes de especialistas, ferramentas, APIs, bancos internos ou roteamento.
-Se houver "erros" no JSON de algum especialista, informe ao cliente de forma educada que houve uma limitação técnica ao buscar aquela informação específica.
-Baseie a resposta principalmente no campo "dados" de cada JSON, combinado com o histórico da conversa.
-REGRA ABSOLUTA DE INTEGRIDADE DE DADOS: NUNCA altere, reescreva, tente 'desencurtar' ou invente links (URLs). Se os dados em formato JSON dos especialistas contiverem um link (como links do Google Maps, sites, etc.), você DEVE copiar e colar o link EXATAMENTE como foi fornecido nos dados crus. A alteração de URLs causará falha crítica no sistema.
-Considere o seguinte super-contexto como fonte adicional para cobrir todas as partes da pergunta do usuário:
+Você recebeu os DADOS CRUS dos especialistas em <respostas_especialistas> (formato JSON com "dados", "fontes", "erros").
+Sua tarefa é ANALISAR CUIDADOSAMENTE essas respostas, cruzar com o histórico recente e formular a resposta final ao cliente assumindo a persona da empresa.
+
+REGRAS DE ANÁLISE E SÍNTESE:
+1. DESPEDIDA DE TRANSFERÊNCIA: Se algum especialista retornar "SISTEMA_BOT_PAUSADO", "AGUARDANDO_HUMANO" ou indicar que a transferência foi feita, você DEVE encerrar sua resposta avisando educadamente que um atendente humano assumirá a conversa em instantes. Não faça mais perguntas se a transferência ocorreu.
+2. COESÃO ABSOLUTA: Mescle as informações de múltiplos especialistas (ex: endereço + curso + horário) em um texto fluido e contínuo. Não repita saudações a cada frase. Pareça uma única mente brilhante respondendo a tudo.
+3. CAMUFLAGEM TÉCNICA: NUNCA mencione que você consultou "especialistas", "JSON", "ferramentas", "APIs" ou "banco de dados". Entregue a informação como se você mesma soubesse.
+4. INTEGRIDADE DE LINKS: Se os especialistas trouxerem URLs (ex: Google Maps), cole-as EXATAMENTE como chegaram. Nunca abrevie ou invente links.
+5. TRATAMENTO DE FALHAS: Se algum especialista disser que não achou a informação, seja empática. Diga que não localizou aquele detalhe no momento, forneça os dados que você conseguiu e sugira ajuda da equipe.
+
+Super-contexto das regras de negócio dos especialistas envolvidos:
 <super_contexto_especialistas>
 {super_contexto_especialistas or '(sem super-contexto consolidado)'}
 </super_contexto_especialistas>
-Especialistas selecionados neste turno: {[esp.get('nome') for esp in especialistas_selecionados] if especialistas_selecionados else ['(nenhum)']}
-Responda em uma única mensagem clara e objetiva.
-A resposta DEVE estar visualmente organizada para leitura em dispositivos móveis (com respiro e escaneabilidade).
-Na síntese final, aplique OBRIGATORIAMENTE a DIRETRIZ DE FORMATAÇÃO (CRÍTICO) definida no prompt.
-Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
+
+Responda em uma única mensagem clara, separando parágrafos curtos para leitura no WhatsApp.
+Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
-        mensagens_para_llm = [SystemMessage(content=prompt_sintese)] + _to_chat_messages(mensagens_recentes)
+        mensagens_para_llm = [
+            SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_sintese))
+        ] + _to_chat_messages(mensagens_recentes)
         llm = await get_llm(empresa_id)
         resposta = await llm.ainvoke(mensagens_para_llm)
 
@@ -1485,16 +1503,22 @@ Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e To
 {bloco_xml_direto}
 
 <instrucao_final>
-Você está no fluxo sem especialistas selecionados para este turno.
-Responda diretamente ao cliente em uma única mensagem clara, cordial e objetiva.
-Use o histórico da conversa para manter continuidade e contexto.
-Não mencione roteamento interno, especialistas, ferramentas, APIs ou limitações técnicas internas.
-REGRA DE SEGURANÇA: NUNCA invente ou crie links de Google Maps ou URLs falsas (como '/0'). Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.
-Você DEVE aplicar rigorosamente a persona e o tom definidos em "Identidade e Tom de Voz da IA".
+Você deve responder diretamente à solicitação do cliente com base no seu conhecimento, no histórico recente e nas diretrizes da empresa.
+
+REGRAS DE RESPOSTA DIRETA:
+1. TOM E PERSONA: Assuma completamente a identidade da empresa. Seja cordial, resolutiva e empática.
+2. CONCISÃO E CLAREZA: Vá direto ao ponto. Use parágrafos curtos, listas em bullet points se necessário, e emojis com moderação para manter a leveza.
+3. LIMITES DE CONHECIMENTO: Se o cliente perguntar algo que exija ação no sistema interno (ex: transferências, agendamentos complexos ou financeiro) e você não tiver uma ferramenta direta para isso, informe educadamente que você acionará o departamento responsável.
+4. NUNCA mencione que você é uma IA, um LLM, ou que está lendo um "prompt".
+
+Responda em uma única mensagem clara.
+Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
 </instrucao_final>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
-    mensagens_para_llm = [SystemMessage(content=prompt_resposta_direta)] + _to_chat_messages(mensagens_recentes)
+    mensagens_para_llm = [
+        SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_resposta_direta))
+    ] + _to_chat_messages(mensagens_recentes)
     llm = await get_llm(empresa_id)
     resposta = await llm.ainvoke(mensagens_para_llm)
 
@@ -1570,7 +1594,8 @@ async def node_roteador_maestro(state: AgentState):
         state["respostas_especialistas"] = []
         return state
 
-    historico_curto_roteador = _historico_curto_roteador(state, limite=4)
+    historico_curto_estado = str(state.get("historico_curto") or "").strip()
+    historico_curto_roteador = historico_curto_estado or _historico_curto_roteador(state, limite=4)
     historico_turnos_maestro = _turnos_consolidados_roteador(state, limite_turnos=3)
 
     def _parse_ids_json(raw: str) -> list[str]:
@@ -1643,6 +1668,8 @@ async def node_roteador_maestro(state: AgentState):
                 "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
             )
             entrada_decisao = (
+                "HISTORICO_CURTO_ULTIMAS_5_MENSAGENS:\n"
+                f"{historico_curto_roteador or '(sem histórico)'}\n\n"
                 "ULTIMOS_3_TURNOS_CONSOLIDADOS:\n"
                 f"{historico_turnos_maestro or '(sem histórico)'}\n\n"
                 f"TERMOS_EXPANDIDOS: {termos_expandidos or ultima_mensagem}\n\n"
@@ -1651,7 +1678,7 @@ async def node_roteador_maestro(state: AgentState):
 
             try:
                 resposta_maestro = await llm_maestro.ainvoke(
-                    [("system", prompt_decisao), ("user", entrada_decisao)]
+                    [("system", _prepend_resumo_cliente_system_prompt(state, prompt_decisao)), ("user", entrada_decisao)]
                 )
                 ids_selecionados_maestro = _parse_ids_json(getattr(resposta_maestro, "content", ""))
             except Exception as exc:
@@ -1710,7 +1737,7 @@ async def node_especialista_funcionamento(state: AgentState):
 
     empresa_id = state.get("empresa_id")
     ultima_mensagem = _ultima_mensagem_cliente(state)
-    historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
+    historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
 
     dias_funcionamento_raw = None
     excecoes_raw = []
@@ -1863,7 +1890,7 @@ async def node_especialista_funcionamento(state: AgentState):
         "Você é o especialista em horários da empresa. "
         f"Hoje é {dia_semana}, {data_hora_atual}. "
         f"Configuração de hoje ({dia_semana_curto}): {json.dumps(config_hoje, ensure_ascii=False)}. "
-        f"HISTORICO_GLOBAL_READ_ONLY: {historico_global}. "
+        f"HISTORICO_CURTO_READ_ONLY: {historico_curto}. "
         f"Frase-base obrigatória: {frase_hoje} "
         "Sempre comece a resposta com essa frase-base (ou equivalente com os mesmos dados), "
         "depois complemente de forma curta e cordial conforme a pergunta do cliente."
@@ -1871,7 +1898,9 @@ async def node_especialista_funcionamento(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke([("system", prompt_sistema), ("user", ultima_mensagem)])
+        resposta = await llm.ainvoke(
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)]
+        )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao invocar LLM: %s", e)
@@ -1895,6 +1924,7 @@ async def node_especialista_localizacao(state: AgentState):
     print("[NODE ESPECIALISTA LOCALIZACAO] Processando dúvida de endereços/unidades...")
     empresa_id = state.get("empresa_id")
     ultima_mensagem = _ultima_mensagem_cliente(state)
+    historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
 
     respostas_existentes = state.get("respostas_especialistas") or []
     if not isinstance(respostas_existentes, list):
@@ -1924,6 +1954,7 @@ async def node_especialista_localizacao(state: AgentState):
 
     prompt_sistema = (
         "Você é o Especialista de Localização. Use EXCLUSIVAMENTE os dados abaixo para responder sobre endereços e unidades.\n"
+        f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
         "[UNIDADES DA EMPRESA]\n"
         f"{dados_unidades_formatados}\n"
         "[FIM DAS UNIDADES]\n"
@@ -1932,7 +1963,9 @@ async def node_especialista_localizacao(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke([("system", prompt_sistema), ("user", ultima_mensagem)])
+        resposta = await llm.ainvoke(
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)]
+        )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA LOCALIZACAO] Falha ao invocar LLM: %s", e)
@@ -1986,7 +2019,9 @@ async def node_especialista_saudacao(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke([("system", prompt_saudacao), ("user", ultima_mensagem)])
+        resposta = await llm.ainvoke(
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_saudacao)), ("user", ultima_mensagem)]
+        )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA SAUDACAO] Falha ao invocar LLM: %s", e)
@@ -2041,7 +2076,7 @@ async def node_especialista_dinamico(state: AgentState):
 
         print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
         ultima_mensagem = _ultima_mensagem_cliente(state)
-        historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
+        historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
 
         import uuid
         empresa_id = state.get("empresa_id")
@@ -2098,9 +2133,9 @@ async def node_especialista_dinamico(state: AgentState):
                 "NÃO redija mensagens para o cliente final.\n"
                 "REGRA DE SEGURANÇA: NUNCA invente ou crie links de Google Maps ou URLs falsas (como '/0'). "
                 "Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.\n"
-                "Você recebe o histórico global APENAS para leitura e contexto. "
+                "Você recebe o histórico curto APENAS para leitura e contexto. "
                 "NÃO altere memória e não assuma persona de atendimento final.\n"
-                f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
+                f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
             )
 
             # ETAPA 1: montar tools sem I/O de banco no construtor das ferramentas.
@@ -2463,7 +2498,10 @@ async def node_especialista_dinamico(state: AgentState):
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
 
-                mensagens = [SystemMessage(content=prompt_completo), HumanMessage(content=ultima_mensagem)]
+                mensagens = [
+                    SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_completo)),
+                    HumanMessage(content=ultima_mensagem),
+                ]
                 for _ in range(5):
                     logger.info(
                         "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Invocando LLM para '%s'",

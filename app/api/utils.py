@@ -1,12 +1,15 @@
 import asyncio
+import logging
 import os
 import traceback
 import uuid
 from typing import List
+from fastapi import BackgroundTasks
 from app.schemas import StandardMessage
 from app.services.websocket_manager import manager
 
 LOG_LEVEL_CONVERSATION = os.getenv("LOG_LEVEL_CONVERSATION", "INFO").upper()
+logger = logging.getLogger(__name__)
 
 
 def _conversation_debug_enabled() -> bool:
@@ -213,7 +216,107 @@ async def _salvar_historico_saida_ia(
             "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
         }
 
-async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
+
+def formatar_historico_mensagens(mensagens: list, limite: int = None) -> str:
+    """
+    Formata uma lista de objetos MensagemHistorico numa string padronizada.
+    """
+    msgs = mensagens[-limite:] if limite else mensagens
+    linhas = [f"[{'Atena' if m.from_me else 'Cliente'}]: {m.texto}" for m in msgs]
+    return "\n".join(linhas) if linhas else "(sem histórico)"
+
+async def atualizar_resumo_lead_bg(lead_id: str, empresa_id: str) -> None:
+    """
+    Consolida memória de longo prazo do lead sem bloquear o atendimento.
+    Lê resumo atual + últimas 10 mensagens, gera um novo parágrafo e persiste em CRMLead.historico_resumo.
+    """
+    from db.database import AsyncSessionLocal
+    from db.models import CRMLead, Empresa, MensagemHistorico
+    from sqlalchemy import select
+    from app.api.main import redis_client
+
+    try:
+        lead_uuid = uuid.UUID(str(lead_id))
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError):
+        print(f"[MEMORIA_BG] IDs inválidos para atualização: lead_id={lead_id} empresa_id={empresa_id}")
+        return
+
+    lock_key = f"lock:sumarizacao:{lead_id}"
+    adquiriu_lock = await redis_client.set(lock_key, "1", ex=300, nx=True)  # Cooldown de 5 minutos
+    if not adquiriu_lock:
+        logger.info(f"[Sumarização] Cooldown ativo para lead {lead_id}. Ignorando.")
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            res_lead = await session.execute(
+                select(CRMLead).where(CRMLead.id == lead_uuid, CRMLead.empresa_id == empresa_uuid)
+            )
+            lead = res_lead.scalars().first()
+            if not lead:
+                print(f"[MEMORIA_BG] Lead não encontrado para consolidar memória: {lead_id}")
+                return
+
+            resumo_atual = str(lead.historico_resumo or "").strip()
+
+            res_msgs = await session.execute(
+                select(MensagemHistorico)
+                .where(MensagemHistorico.lead_id == lead.id)
+                .order_by(MensagemHistorico.criado_em.desc())
+                .limit(10)
+            )
+            ultimas_msgs = list(reversed(res_msgs.scalars().all()))
+            linhas_historico = []
+            for msg in ultimas_msgs:
+                texto = str(msg.texto or "").strip()
+                if not texto:
+                    continue
+                papel = "Assistente" if msg.from_me else "Cliente"
+                linhas_historico.append(f"{papel}: {texto}")
+
+            historico_recente = "\n".join(linhas_historico) or "(sem mensagens recentes)"
+
+            api_key_empresa = None
+            res_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+            empresa = res_empresa.scalars().first()
+            if empresa and empresa.credenciais_canais:
+                api_key_empresa = empresa.credenciais_canais.get("openai_api_key")
+
+            llm = get_llm_model("gpt-5.4-nano", api_key=api_key_empresa)
+            prompt_sistema = (
+                "Você consolida memória de CRM para IA de atendimento. "
+                "Sua saída deve ser APENAS 1 parágrafo curto em português (máx. 1200 caracteres), "
+                "com fatos estáveis e vitais do cliente: nome, contexto, necessidades, objeções, "
+                "preferências, estágio da conversa, urgência, cidade/unidade, orçamento e próximos passos. "
+                "Não invente dados. Não use markdown."
+            )
+            prompt_usuario = (
+                f"Resumo atual:\n{resumo_atual or '(vazio)'}\n\n"
+                f"Últimas 10 mensagens:\n{historico_recente}\n\n"
+                "Gere o NOVO resumo consolidado, substituindo o anterior."
+            )
+
+            resposta = await llm.ainvoke([("system", prompt_sistema), ("user", prompt_usuario)])
+            novo_resumo = str(getattr(resposta, "content", "") or "").strip()
+            if not novo_resumo:
+                print(f"[MEMORIA_BG] LLM retornou resumo vazio para lead={lead_id}")
+                return
+
+            lead.historico_resumo = novo_resumo
+            await session.commit()
+            print(
+                f"[MEMORIA_BG] Resumo atualizado para lead={lead_id} "
+                f"(chars={len(novo_resumo)})."
+            )
+    except Exception as e:
+        print(f"[MEMORIA_BG] Erro ao consolidar resumo do lead={lead_id}: {e}")
+        traceback.print_exc()
+
+
+async def processar_bloco_mensagens(
+    mensagens: List[StandardMessage], background_tasks: BackgroundTasks | None = None
+):
     """
     Função assíncrona que processa o bloco de mensagens quando o timer do debouncer termina.
     Importa e invoca o Grafo do LangGraph passando o bloco de texto e o identificador.
@@ -249,12 +352,16 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
     
     # ── PONTO 1: Ingestão do histórico real do PostgreSQL ──────────────────────
     historico_bd_formatado = ""
+    historico_curto = ""
+    resumo_cliente = ""
     mensagens_globais = list(textos)
+    lead_id_hist = None
+    total_msgs_historico = 0
     try:
         import uuid as _uuid
         from db.database import AsyncSessionLocal as _ASL
         from db.models import CRMLead as _CRMLead, MensagemHistorico as _MH
-        from sqlalchemy import select as _select
+        from sqlalchemy import select as _select, func as _func
 
         empresa_id_hist = mensagens[0].empresa_id
         telefone_hist   = str(mensagens[0].identificador_origem)
@@ -271,6 +378,12 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
             _lead_hist = _res_lead.scalars().first()
 
             if _lead_hist:
+                lead_id_hist = str(_lead_hist.id)
+                resumo_cliente = str(_lead_hist.historico_resumo or "").strip()
+                _res_total = await _sess.execute(
+                    _select(_func.count(_MH.id)).where(_MH.lead_id == _lead_hist.id)
+                )
+                total_msgs_historico = int(_res_total.scalar() or 0)
                 # Busca as últimas 15 mensagens, da mais antiga para a mais nova
                 _res_hist = await _sess.execute(
                     _select(_MH)
@@ -281,12 +394,20 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
                 _msgs_hist = list(reversed(_res_hist.scalars().all()))
 
                 if _msgs_hist:
-                    linhas = []
+                    linhas_estado = []
                     for _m in _msgs_hist:
-                        papel = "Assistente" if _m.from_me else "Usuario"
-                        linhas.append(f"{papel}: {_m.texto}")
-                    historico_bd_formatado = "\n".join(linhas)
-                    mensagens_globais = list(linhas)
+                        texto_limpo_hist = str(_m.texto or "").strip()
+                        if not texto_limpo_hist:
+                            continue
+
+                        papel_estado = "Assistente" if _m.from_me else "Usuario"
+                        linhas_estado.append(f"{papel_estado}: {texto_limpo_hist}")
+
+                    historico_longo = formatar_historico_mensagens(_msgs_hist, limite=15)
+                    historico_curto = formatar_historico_mensagens(_msgs_hist, limite=5)
+                    historico_bd_formatado = historico_longo
+                    if linhas_estado:
+                        mensagens_globais = list(linhas_estado)
                     print(f"[ENGINE] Histórico PostgreSQL carregado: {len(_msgs_hist)} mensagem(ns).")
                     _conversation_debug_log(f"[ENGINE][DEBUG] Histórico formatado:\n{historico_bd_formatado}")
                 else:
@@ -304,6 +425,8 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "conexao_id": mensagens[0].conexao_id,
         "mensagens": mensagens_globais,
         "historico_bd": historico_bd_formatado,
+        "resumo_cliente": resumo_cliente,
+        "historico_curto": historico_curto,
         "nome_contato": getattr(mensagens[0], "nome_contato", None),
         "intencao": [],
         "especialistas_selecionados": [],
@@ -317,6 +440,17 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
         "status_conversa": None,
         "especialista_respondeu_no_ciclo": False,
     }
+
+    if lead_id_hist and total_msgs_historico > 0:
+        if total_msgs_historico % 10 == 0:
+            print(
+                "[MEMORIA_BG] Agendando consolidação de resumo "
+                f"(total_msgs={total_msgs_historico}, bloco={len(mensagens_validas)})."
+            )
+            if background_tasks is not None:
+                background_tasks.add_task(atualizar_resumo_lead_bg, lead_id_hist, mensagens[0].empresa_id)
+            else:
+                asyncio.create_task(atualizar_resumo_lead_bg(lead_id_hist, mensagens[0].empresa_id))
     
     import time
     timestamp_inicio = await redis_client.get(f"last_msg_time:{mensagens[0].canal}:{mensagens[0].identificador_origem}")
@@ -348,6 +482,78 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
              return
     except Exception as e:
         print(f"\n[ENGINE] Erro no processamento do LangGraph: {e}")
+        traceback.print_exc()
+
+        fallback_msg = (
+            "Desculpe, o meu sistema sofreu uma pequena instabilidade de conexão agora. "
+            "Poderia repetir a sua última mensagem num instante? 🔄"
+        )
+
+        try:
+            from app.services.channel_factory import despachar_mensagem
+
+            await despachar_mensagem(
+                canal=mensagens[0].canal,
+                identificador_origem=mensagens[0].identificador_origem,
+                texto=fallback_msg,
+                conexao_id=mensagens[0].conexao_id,
+                empresa_id=mensagens[0].empresa_id,
+            )
+        except Exception as e_dispatch:
+            print(
+                "[ENGINE] Falha ao despachar mensagem de fallback para o cliente. "
+                f"empresa_id={mensagens[0].empresa_id} canal={mensagens[0].canal} "
+                f"identificador='{mensagens[0].identificador_origem}'"
+            )
+            print(f"Erro real no outbound fallback: {str(e_dispatch)}")
+            traceback.print_exc()
+
+        try:
+            from db.database import AsyncSessionLocal
+            from db.models import CRMLead, MensagemHistorico
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as session:
+                empresa_uuid = uuid.UUID(mensagens[0].empresa_id)
+                telefone = str(mensagens[0].identificador_origem)
+                conexao_id_limpo = str(mensagens[0].conexao_id or "").strip()
+
+                try:
+                    conexao_uuid = uuid.UUID(conexao_id_limpo) if conexao_id_limpo else None
+                except (ValueError, TypeError):
+                    print(
+                        "[ENGINE] conexao_id inválido ao salvar fallback no histórico; "
+                        f"valor recebido='{conexao_id_limpo}'. Salvando com conexao_id=None."
+                    )
+                    conexao_uuid = None
+
+                result = await session.execute(
+                    select(CRMLead).where(
+                        CRMLead.empresa_id == empresa_uuid,
+                        CRMLead.telefone_contato == telefone,
+                    )
+                )
+                lead = result.scalars().first()
+
+                if not lead:
+                    print(
+                        "[ENGINE] Lead não encontrado ao salvar fallback no histórico. "
+                        f"empresa_id={mensagens[0].empresa_id} telefone='{telefone}'"
+                    )
+                else:
+                    session.add(
+                        MensagemHistorico(
+                            lead_id=lead.id,
+                            conexao_id=conexao_uuid,
+                            texto=fallback_msg,
+                            from_me=True,
+                            tipo_mensagem="text",
+                        )
+                    )
+                    await session.commit()
+        except Exception as e_db:
+            print(f"[ENGINE] Falha ao salvar mensagem de fallback no histórico: {str(e_db)}")
+            traceback.print_exc()
         return
     finally:
         await redis_client.delete(in_flight_key)
@@ -587,7 +793,7 @@ async def processar_bloco_mensagens(mensagens: List[StandardMessage]):
 
 
 
-async def handle_debouncer(msg: StandardMessage):
+async def handle_debouncer(msg: StandardMessage, background_tasks: BackgroundTasks | None = None):
     """
     Lógica principal do Debouncer baseada em Redis Sliding Window com Atomic Rename.
     """
@@ -628,7 +834,7 @@ async def handle_debouncer(msg: StandardMessage):
         mensagens_json = await redis_client.lrange(batch_key, 0, -1)
         mensagens = [StandardMessage.model_validate_json(m) for m in mensagens_json]
         if mensagens:
-            await processar_bloco_mensagens(mensagens)
+            await processar_bloco_mensagens(mensagens, background_tasks=background_tasks)
     finally:
         await redis_client.delete(batch_key)
         await redis_client.delete(f"lock:{lead_id}")
