@@ -25,72 +25,42 @@ def _normalizar_tags(tags: list[str] | None) -> list[str]:
 
 
 @tool
-async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]) -> str:
+async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
     """Use esta ferramenta para atualizar ou adicionar múltiplas tags oficiais ao lead de uma vez. Passe uma lista com os nomes das tags."""
-    try:
-        lead_uuid = uuid.UUID(str(lead_id))
-    except (ValueError, TypeError):
-        return "Erro ao atualizar tags do lead: lead_id inválido."
+    print(f"\n--- [DEBUG TOOL] Iniciando atualização de tags para Lead: {lead_id} ---")
+    print(f"Tags recebidas da IA: {tags}")
 
-    tags_normalizadas = _normalizar_tags(tags)
-    if not tags_normalizadas:
-        return "Erro ao atualizar tags do lead: informe ao menos uma tag válida."
+    async with AsyncSessionLocal() as session:
+        # 1. Buscar o Lead
+        result = await session.execute(select(CRMLead).where(CRMLead.id == uuid.UUID(lead_id)))
+        lead = result.scalars().first()
+        if not lead:
+            print(f"ERRO: Lead {lead_id} não encontrado.")
+            return "Lead não encontrado."
 
-    try:
-        async with AsyncSessionLocal() as session:
-            result_lead = await session.execute(
-                select(CRMLead).where(CRMLead.id == lead_uuid)
-            )
-            lead = result_lead.scalars().first()
-            if not lead:
-                return "Erro ao atualizar tags do lead: lead não encontrado."
+        # 2. Buscar IDs das tags oficiais
+        tags_lower = [t.lower() for t in tags]
+        print(f"Buscando no banco tags (lower): {tags_lower} para empresa: {lead.empresa_id}")
 
-            nomes_tags_lower = [tag.lower() for tag in tags_normalizadas]
-            result_tags = await session.execute(
-                select(TagCRM).where(
-                    TagCRM.empresa_id == lead.empresa_id,
-                    func.lower(TagCRM.nome).in_(nomes_tags_lower),
-                )
-            )
-            tags_oficiais_encontradas = result_tags.scalars().all()
+        query = select(TagCRM).where(
+            TagCRM.empresa_id == lead.empresa_id,
+            func.lower(TagCRM.nome).in_(tags_lower)
+        )
+        result_tags = await session.execute(query)
+        tags_encontradas = result_tags.scalars().all()
 
-            # Mapeamento por nome normalizado para preservar a ordem da entrada da IA.
-            mapa_tags_por_nome = {
-                str(tag.nome).strip().lower(): tag
-                for tag in tags_oficiais_encontradas
-                if str(tag.nome).strip()
-            }
+        print(f"Tags encontradas no banco: {[t.nome for t in tags_encontradas]}")
 
-            tags_ids_aplicadas: list[str] = []
-            tags_nomes_aplicadas: list[str] = []
-            for nome_tag in nomes_tags_lower:
-                tag_oficial = mapa_tags_por_nome.get(nome_tag)
-                if not tag_oficial:
-                    continue
-                tag_id_str = str(tag_oficial.id)
-                if tag_id_str in tags_ids_aplicadas:
-                    continue
-                tags_ids_aplicadas.append(tag_id_str)
-                tags_nomes_aplicadas.append(str(tag_oficial.nome).strip())
+        ids_finais = [str(t.id) for t in tags_encontradas]
+        print(f"IDs que serão gravados: {ids_finais}")
 
-            if not tags_ids_aplicadas:
-                return "Erro ao atualizar tags do lead: nenhuma das tags informadas existe nas tags oficiais da empresa."
+        # 3. Atualizar e Salvar
+        lead.tags = ids_finais
+        flag_modified(lead, "tags")
+        await session.commit()
+        print("--- [DEBUG TOOL] Commit realizado com sucesso! --- \n")
 
-            # Atualiza o lead com UUIDs oficiais encontrados.
-            mapa_finais = {tag_id: tag_id for tag_id in tags_ids_aplicadas}
-            lead.tags = list(mapa_finais.values())
-            flag_modified(lead, "tags")
-
-            # Notifica os Ads usando o nome oficial
-            await processar_disparo_conversao_ads_para_tags(
-                session=session,
-                lead=lead,
-                tags_aplicadas=tags_nomes_aplicadas,
-            )
-            await session.commit()
-            return f"Sucesso: tags oficiais aplicadas ao lead: {tags_nomes_aplicadas}"
-    except Exception as e:
-        return f"Erro ao atualizar tags do lead: {str(e)}"
+        return f"Tags atualizadas: {', '.join([t.nome for t in tags_encontradas])}"
 
 
 @tool
