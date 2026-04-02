@@ -209,12 +209,23 @@ def _normalizar_chave_especialista(valor: str) -> str:
     return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).strip().lower()
 
 
-def _prepend_resumo_cliente_system_prompt(state: "AgentState", prompt: str) -> str:
-    resumo_cliente = str(state.get("resumo_cliente") or "").strip()
-    return (
-        f"RESUMO DO CLIENTE (Memória de longo prazo): {resumo_cliente}\n\n"
-        f"{str(prompt or '').strip()}"
-    ).strip()
+def _prepend_resumo_cliente_system_prompt(state: AgentState, prompt: str) -> str:
+    """
+    Injeta o resumo de longo prazo do cliente e diretrizes obrigatórias de sistema
+    no início do prompt.
+    """
+    resumo = state.get("resumo_cliente", "")
+
+    diretrizes_sistema = """
+[DIRETRIZES GLOBAIS DE SISTEMA - OBRIGATÓRIO]
+1. USO DE FERRAMENTAS: Você é um agente proativo. Se a sua missão envolve classificar o lead ou se o cliente indicou interesse em um setor/produto específico (ex: Financeiro, Pedagógico, Vendas), você DEVE OBRIGATORIAMENTE chamar a ferramenta de atualizar tags ANTES de formular sua resposta em texto.
+2. Não diga "vou adicionar a tag", simplesmente EXECUTE a ferramenta silenciosamente e responda ao cliente normalmente.
+"""
+
+    if resumo:
+        return f"{diretrizes_sistema}\nRESUMO DO CLIENTE (Memória de longo prazo): {resumo}\n\n{prompt}"
+
+    return f"{diretrizes_sistema}\n\n{prompt}"
 
 
 def _remover_especialista_do_estado(state: "AgentState", *chaves: str) -> None:
