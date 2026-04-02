@@ -1,9 +1,9 @@
 import asyncio
 import uuid
 from sqlalchemy import select
-from app.db.database import AsyncSessionLocal
-from app.db.models import TagCRM, CRMLead
-from app.core.tools import tool_atualizar_tags_lead, tool_transferir_para_humano
+from db.database import AsyncSessionLocal
+from db.models import TagCRM, CRMLead
+from core.tools import tool_atualizar_tags_lead, tool_transferir_para_humano
 
 EMPRESA_ID = "ca87e7a5-b673-4e13-9388-c373c33049ca"
 LEAD_ID = "87f28df9-fb06-429c-a1bf-f3673bab5390"
