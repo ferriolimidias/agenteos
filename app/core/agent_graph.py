@@ -1695,45 +1695,32 @@ async def node_especialista_funcionamento(state: AgentState):
     print("[NODE ESPECIALISTA FUNCIONAMENTO] Processando dúvida de horários...")
     import uuid
 
-    empresa_obj = state.get("empresa")
     empresa_id = state.get("empresa_id")
     ultima_mensagem = _ultima_mensagem_cliente(state)
     historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
-    if not empresa_obj and empresa_id:
-        try:
-            empresa_uuid = uuid.UUID(str(empresa_id))
-            async with AsyncSessionLocal() as session:
-                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                empresa_obj = result_empresa.scalars().first()
-        except Exception as e:
-            logger.error("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao carregar empresa %s: %s", empresa_id, e)
-            empresa_obj = None
-
-    agenda_config = getattr(empresa_obj, "agenda_config", None) if empresa_obj else None
     dias_funcionamento_raw = None
     excecoes_raw = []
     horario_inicio_legacy = None
     horario_fim_legacy = None
 
-    if isinstance(agenda_config, str):
+    if empresa_id:
         try:
-            agenda_config = json.loads(agenda_config)
-        except Exception:
-            agenda_config = None
-
-    if isinstance(agenda_config, dict):
-        dias_funcionamento_raw = agenda_config.get("dias_funcionamento", agenda_config)
-        excecoes_raw = agenda_config.get("excecoes", [])
-        horario_inicio_legacy = agenda_config.get("horario_inicio")
-        horario_fim_legacy = agenda_config.get("horario_fim")
-    elif agenda_config is not None:
-        dias_funcionamento_raw = getattr(agenda_config, "dias_funcionamento", None)
-        excecoes_raw = getattr(agenda_config, "excecoes", [])
-        horario_inicio_obj = getattr(agenda_config, "horario_inicio", None)
-        horario_fim_obj = getattr(agenda_config, "horario_fim", None)
-        horario_inicio_legacy = horario_inicio_obj.strftime("%H:%M") if horario_inicio_obj else None
-        horario_fim_legacy = horario_fim_obj.strftime("%H:%M") if horario_fim_obj else None
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            async with AsyncSessionLocal() as session:
+                result_agenda = await session.execute(
+                    select(AgendaConfiguracao).where(AgendaConfiguracao.empresa_id == empresa_uuid)
+                )
+                agenda_config = result_agenda.scalars().first()
+                if agenda_config:
+                    dias_funcionamento_raw = agenda_config.dias_funcionamento
+                    excecoes_raw = getattr(agenda_config, "excecoes", [])
+                    h_inicio = getattr(agenda_config, "horario_inicio", None)
+                    h_fim = getattr(agenda_config, "horario_fim", None)
+                    horario_inicio_legacy = h_inicio.strftime("%H:%M") if h_inicio else None
+                    horario_fim_legacy = h_fim.strftime("%H:%M") if h_fim else None
+        except Exception as e:
+            logger.error("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao carregar AgendaConfiguracao: %s", e)
 
     respostas_existentes = state.get("respostas_especialistas") or []
     if not isinstance(respostas_existentes, list):
