@@ -1,3 +1,6 @@
+import sys
+sys.path.insert(0, '/')
+
 import asyncio
 import uuid
 from sqlalchemy import select
@@ -9,7 +12,7 @@ EMPRESA_ID = "ca87e7a5-b673-4e13-9388-c373c33049ca"
 LEAD_ID = "87f28df9-fb06-429c-a1bf-f3673bab5390"
 
 async def main():
-    print("\n=== [VERSÃO FINAL] INICIANDO TESTE NO TERMINAL ===\n")
+    print("\n=== [AGORA VAI] INICIANDO TESTE NO TERMINAL ===\n")
     async with AsyncSessionLocal() as session:
         print("1️⃣ LISTA DE TAGS EXISTENTES:")
         result = await session.execute(select(TagCRM).where(TagCRM.empresa_id == uuid.UUID(EMPRESA_ID)))
@@ -21,15 +24,15 @@ async def main():
 
         print("\n2️⃣ TESTE DA FERRAMENTA DE TRANSFERIR:")
         ret_transf = await tool_transferir_para_humano.ainvoke({
-            "lead_id": LEAD_ID, 
-            "empresa_id": EMPRESA_ID, 
+            "lead_id": LEAD_ID,
+            "empresa_id": EMPRESA_ID,
             "motivo": "Teste no Terminal"
         })
         print(f"   Retorno da Tool: {ret_transf}")
 
         print("\n3️⃣ TESTE DA FERRAMENTA DE TAG (Adicionando 'Financeiro'):")
         ret_tag = await tool_atualizar_tags_lead.ainvoke({
-            "lead_id": LEAD_ID, 
+            "lead_id": LEAD_ID,
             "tags": ["Financeiro"]
         })
         print(f"   Retorno da Tool: {ret_tag}")
