@@ -9,7 +9,7 @@ from db.models import TagCRM, CRMLead
 from core.tools import tool_atualizar_tags_lead, tool_transferir_para_humano
 
 EMPRESA_ID = "ca87e7a5-b673-4e13-9388-c373c33049ca"
-LEAD_ID = "87f28df9-fb06-429c-a1bf-f3673bab5390"
+LEAD_ID = "f1b1b4ea-eb80-4bb8-a255-e2cf8aeb2472"
 
 async def main():
     print(f"\n=== [SOLUÇÃO DEFINITIVA] TESTE NO TERMINAL ===")
