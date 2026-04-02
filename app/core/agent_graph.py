@@ -2508,9 +2508,12 @@ async def node_especialista_dinamico(state: AgentState):
             # ETAPA 3: invoke
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
+                from types import SimpleNamespace
 
+                especialista = SimpleNamespace(prompt_sistema=prompt_completo)
+                system_msg = SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, especialista.prompt_sistema))
                 mensagens = [
-                    SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_completo)),
+                    system_msg,
                     HumanMessage(content=ultima_mensagem),
                 ]
                 for _ in range(5):
