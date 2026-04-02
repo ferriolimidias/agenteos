@@ -1548,14 +1548,27 @@ async def node_roteador_maestro(state: AgentState):
     state["saudacao_pendente"] = False
 
     handoff_markers = (
-        "humano",
-        "atendente",
-        "pessoa",
-        "suporte humano",
-        "falar com",
-        "transferir",
+        "humano", "atendente", "pessoa", "suporte humano", "falar com", "transferir",
     )
-    state["handoff_requested"] = any(marker in ultima_mensagem.lower() for marker in handoff_markers)
+    msg_lower = ultima_mensagem.lower()
+    is_handoff = any(marker in msg_lower for marker in handoff_markers)
+
+    # Detecção de Confirmação de Transferência (Evitar Efeito Manada)
+    ultima_ia = _ultima_mensagem_assistente(state).lower()
+    is_short_confirm = msg_lower in ["sim", "quero", "pode", "por favor", "pode transferir", "sim por favor"]
+
+    if is_short_confirm and any(m in ultima_ia for m in ["transferir", "humano", "atendente", "especialista"]):
+        is_handoff = True
+
+    state["handoff_requested"] = is_handoff
+
+    # Se o usuário apenas confirmou a transferência, corta o roteamento dos especialistas
+    if is_handoff and is_short_confirm:
+        state["especialistas_identificados"] = []
+        state["especialistas_selecionados"] = []
+        state["fila_agentes"] = []
+        state["respostas_especialistas"] = []
+        return state
 
     historico_curto_roteador = _historico_curto_roteador(state, limite=4)
     historico_turnos_maestro = _turnos_consolidados_roteador(state, limite_turnos=3)
@@ -2581,6 +2594,12 @@ workflow.add_conditional_edges(
 )
 
 def router_maestro(state: AgentState):
+    # Curto-circuito para parar a fila se houve transferência
+    respostas = state.get("respostas_especialistas", [])
+    if any("SISTEMA_BOT_PAUSADO" in str(r) or "AGUARDANDO_HUMANO" in str(r) for r in respostas):
+        state["fila_agentes"] = []
+        return "node_atendente"
+
     especialistas_identificados = state.get("especialistas_identificados") or []
     if not isinstance(especialistas_identificados, list):
         especialistas_identificados = [especialistas_identificados] if especialistas_identificados else []
