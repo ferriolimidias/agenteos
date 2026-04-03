@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from db.database import AsyncSessionLocal, get_db
-from db.models import CRMLead, MensagemHistorico, CRMEtapa, CRMFunil, Conexao
+from db.models import CRMLead, MensagemHistorico, CRMEtapa, CRMFunil, Conexao, TagCRM
 from sqlalchemy import select, func, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -97,11 +97,41 @@ async def _buscar_conexao_evolution_ativa(session: AsyncSession, empresa_uuid: u
     )
     return result.scalars().first()
 
+
+async def _carregar_tags_empresa(session: AsyncSession, empresa_uuid: uuid.UUID) -> dict[str, TagCRM]:
+    result = await session.execute(
+        select(TagCRM).where(TagCRM.empresa_id == empresa_uuid)
+    )
+    tags = result.scalars().all()
+    return {str(tag.id): tag for tag in tags}
+
+
+def _montar_tags_frontend(tags_lead: list[str] | None, tags_por_id: dict[str, TagCRM]) -> list[dict[str, Any]]:
+    retorno: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+    for item in (tags_lead or []):
+        tag_id = str(item or "").strip()
+        if not tag_id or tag_id in vistos:
+            continue
+        tag = tags_por_id.get(tag_id)
+        if not tag:
+            continue
+        vistos.add(tag_id)
+        retorno.append(
+            {
+                "id": str(tag.id),
+                "nome": str(tag.nome or ""),
+                "cor": str(tag.cor or "#2563eb"),
+            }
+        )
+    return retorno
+
 @router.get("/{empresa_id}/inbox", response_model=List[ConversaListaResponse])
 async def listar_inbox(empresa_id: str):
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:
+            tags_por_id = await _carregar_tags_empresa(session, empresa_uuid)
             result = await session.execute(
                 select(CRMLead)
                 .where(CRMLead.empresa_id == empresa_uuid)
@@ -127,7 +157,7 @@ async def listar_inbox(empresa_id: str):
                     "bot_pausado": bot_pausado,
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
                     "etapa_crm": l.etapa.nome if l.etapa else None,
-                    "tags": l.tags or [],
+                    "tags": _montar_tags_frontend(l.tags, tags_por_id),
                     "historico_resumo": l.historico_resumo or "",
                     "dados_adicionais": l.dados_adicionais or {},
                 })

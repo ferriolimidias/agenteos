@@ -229,7 +229,7 @@ class ConversaListaResponse(BaseModel):
     bot_pausado: bool = False
     bot_pausado_ate: str | None = None
     etapa_crm: str | None = None
-    tags: list[str] = Field(default_factory=list)
+    tags: list[dict[str, Any]] = Field(default_factory=list)
     historico_resumo: str | None = None
     dados_adicionais: dict[str, Any] = Field(default_factory=dict)
 

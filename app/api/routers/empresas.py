@@ -104,6 +104,54 @@ def _parse_uuid_or_none(value: str | None) -> uuid.UUID | None:
         return None
 
 
+async def _carregar_mapa_tags_empresa(db: AsyncSession, empresa_uuid: uuid.UUID) -> tuple[dict[str, TagCRM], dict[str, TagCRM]]:
+    result_tags = await db.execute(
+        select(TagCRM).where(TagCRM.empresa_id == empresa_uuid)
+    )
+    tags = result_tags.scalars().all()
+    por_id = {str(tag.id): tag for tag in tags}
+    por_nome = {str(tag.nome or "").strip().lower(): tag for tag in tags if str(tag.nome or "").strip()}
+    return por_id, por_nome
+
+
+def _normalizar_tags_lead_para_ids(tags_brutas: Any, tags_por_id: dict[str, TagCRM], tags_por_nome: dict[str, TagCRM]) -> list[str]:
+    ids: list[str] = []
+    vistos: set[str] = set()
+    for item in (tags_brutas or []):
+        valor = str(item or "").strip()
+        if not valor:
+            continue
+        if valor in tags_por_id:
+            tag_id = valor
+        else:
+            tag_por_nome = tags_por_nome.get(valor.lower())
+            if not tag_por_nome:
+                continue
+            tag_id = str(tag_por_nome.id)
+        if tag_id in vistos:
+            continue
+        vistos.add(tag_id)
+        ids.append(tag_id)
+    return ids
+
+
+def _montar_tags_front(tags_brutas: Any, tags_por_id: dict[str, TagCRM], tags_por_nome: dict[str, TagCRM]) -> list[dict[str, Any]]:
+    tags_ids = _normalizar_tags_lead_para_ids(tags_brutas, tags_por_id, tags_por_nome)
+    saida: list[dict[str, Any]] = []
+    for tag_id in tags_ids:
+        tag = tags_por_id.get(tag_id)
+        if not tag:
+            continue
+        saida.append(
+            {
+                "id": str(tag.id),
+                "nome": str(tag.nome or ""),
+                "cor": str(tag.cor or "#2563eb"),
+            }
+        )
+    return saida
+
+
 async def _limpar_estado_simulador_redis(sessao_id: str = SIMULADOR_LEAD_ID) -> None:
     try:
         from app.api.main import redis_client
@@ -801,7 +849,7 @@ class CRMLeadResponse(BaseModel):
     nome_contato: str
     telefone: str | None = None
     historico_resumo: str | None = None
-    tags: List[str] = Field(default_factory=list)
+    tags: List[Dict[str, Any]] = Field(default_factory=list)
     dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
     valor_conversao: float | None = None
     criado_em: str | None = None
@@ -933,7 +981,7 @@ class CampanhaListaLeadResponse(BaseModel):
     nome_contato: str
     telefone_contato: str | None = None
     status: str | None = None
-    tags: List[str] = Field(default_factory=list)
+    tags: List[Dict[str, Any]] = Field(default_factory=list)
     historico_resumo: str | None = None
     dados_adicionais: Dict[str, Any] = Field(default_factory=dict)
 
@@ -1291,6 +1339,7 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
 
         # Ordena as etapas pela ordem
         etapas_ordenadas = sorted(funil.etapas, key=lambda x: x.ordem)
+        tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, empresa_id)
 
         resposta: dict = {
             "funil_id": str(funil.id),
@@ -1310,7 +1359,7 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
                         "nome_contato": lead.nome_contato,
                         "telefone": lead.telefone_contato,
                         "historico_resumo": lead.historico_resumo,
-                        "tags": lead.tags or [],
+                        "tags": _montar_tags_front(lead.tags, tags_por_id, tags_por_nome),
                         "dados_adicionais": lead.dados_adicionais or {},
                         "valor_conversao": lead.valor_conversao,
                         "criado_em": lead.criado_em.isoformat() if lead.criado_em else None
@@ -2058,18 +2107,19 @@ async def listar_listas_campanhas(empresa_id: str, db: AsyncSession = Depends(ge
         .order_by(TagCRM.nome.asc())
     )
     tags_oficiais = result_tags.scalars().all()
+    tags_por_id = {str(tag.id): tag for tag in tags_oficiais}
+    tags_por_nome = {str(tag.nome or "").strip().lower(): tag for tag in tags_oficiais if str(tag.nome or "").strip()}
 
     result_leads = await db.execute(
         select(CRMLead.tags).where(CRMLead.empresa_id == emp_uuid)
     )
     leads_tags = result_leads.scalars().all()
 
-    def _contar(nome_tag: str) -> int:
-        nome_normalizado = str(nome_tag).strip().lower()
+    def _contar(tag_id: str) -> int:
         total = 0
         for tags in leads_tags:
-            tags_normalizadas = {str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()}
-            if nome_normalizado in tags_normalizadas:
+            tags_ids = set(_normalizar_tags_lead_para_ids(tags, tags_por_id, tags_por_nome))
+            if tag_id in tags_ids:
                 total += 1
         return total
 
@@ -2078,7 +2128,7 @@ async def listar_listas_campanhas(empresa_id: str, db: AsyncSession = Depends(ge
             "tag_id": str(tag.id),
             "tag": tag.nome,
             "cor": tag.cor or "#2563eb",
-            "total_leads": _contar(tag.nome),
+            "total_leads": _contar(str(tag.id)),
         }
         for tag in tags_oficiais
     ]
@@ -2109,7 +2159,8 @@ async def listar_leads_da_lista_campanha(empresa_id: str, tag_id: str, db: Async
         .order_by(CRMLead.criado_em.desc())
     )
     leads = result_leads.scalars().all()
-    tag_normalizada = tag.nome.strip().lower()
+    tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, emp_uuid)
+    tag_id_str = str(tag.id)
 
     return [
         {
@@ -2117,12 +2168,12 @@ async def listar_leads_da_lista_campanha(empresa_id: str, tag_id: str, db: Async
             "nome_contato": lead.nome_contato,
             "telefone_contato": lead.telefone_contato,
             "status": lead.etapa.nome if lead.etapa else None,
-            "tags": lead.tags or [],
+            "tags": _montar_tags_front(lead.tags, tags_por_id, tags_por_nome),
             "historico_resumo": lead.historico_resumo,
             "dados_adicionais": lead.dados_adicionais or {},
         }
         for lead in leads
-        if tag_normalizada in {str(item).strip().lower() for item in (lead.tags or []) if str(item).strip()}
+        if tag_id_str in set(_normalizar_tags_lead_para_ids(lead.tags, tags_por_id, tags_por_nome))
     ]
 
 
@@ -2412,6 +2463,7 @@ async def atualizar_lead_crm(
         for tag in tags_para_notificar:
             background_tasks.add_task(notificar_conversao_ads, str(lead.id), str(tag.nome), db)
         await db.refresh(lead)
+        tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, emp_uuid)
         return {
             "id": str(lead.id),
             "nome_contato": lead.nome_contato,
@@ -2419,7 +2471,7 @@ async def atualizar_lead_crm(
             "historico_resumo": lead.historico_resumo,
             "etapa_id": str(lead.etapa_id) if lead.etapa_id else None,
             "status_atendimento": lead.status_atendimento,
-            "tags": lead.tags or [],
+            "tags": _montar_tags_front(lead.tags, tags_por_id, tags_por_nome),
             "dados_adicionais": lead.dados_adicionais or {},
             "valor_conversao": lead.valor_conversao,
         }
