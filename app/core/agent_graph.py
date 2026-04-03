@@ -1192,6 +1192,7 @@ class AgentState(TypedDict):
     empresa: Optional[Any]
     total_msgs_historico: Optional[int]
     primeiro_contato: Optional[bool]
+    especialista_corrente: Optional[EspecialistaSelecionadoState]
 
 class AnaliseRoteador(BaseModel):
     termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
@@ -1657,6 +1658,7 @@ async def node_roteador_maestro(state: AgentState):
         state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
         state["fila_agentes"] = []
+        state["especialista_corrente"] = None
         state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = []
         state["handoff_requested"] = False
@@ -1712,6 +1714,7 @@ async def node_roteador_maestro(state: AgentState):
         state["especialistas_selecionados"] = [especialista_saudacao]
         state["especialistas_identificados"] = ["especialista_saudacao"]
         state["fila_agentes"] = ["especialista_saudacao"]
+        state["especialista_corrente"] = None
         state["super_contexto_especialistas"] = ""
         state["respostas_especialistas"] = respostas_existentes
         return state
@@ -1738,6 +1741,7 @@ async def node_roteador_maestro(state: AgentState):
         state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
         state["fila_agentes"] = []
+        state["especialista_corrente"] = None
         state["respostas_especialistas"] = []
         return state
 
@@ -1784,11 +1788,26 @@ async def node_roteador_maestro(state: AgentState):
             candidatos = []
 
         nomes_candidatos = [str(item.get("nome") or "").strip() for item in candidatos if isinstance(item, dict)]
+        resposta_menu_numerica = bool(re.fullmatch(r"\d{1,2}", msg_lower))
+        menu_detectado_na_ultima_ia = bool(_extrair_opcoes_menu(ultima_ia_contexto))
+        continuidade_menu_ativa = resposta_menu_numerica and menu_detectado_na_ultima_ia
+
+        def _score_ajustado_candidato(item: dict) -> float:
+            score_base = float(item.get("similarity") or 0.0)
+            nome_norm = _normalizar_chave_especialista(str(item.get("nome") or ""))
+            if continuidade_menu_ativa and "triagem_microline" in nome_norm:
+                return min(1.0, score_base + 0.12)
+            if continuidade_menu_ativa and "triagem" in nome_norm:
+                return min(1.0, score_base + 0.08)
+            return score_base
+
         candidatos_payload = [
             {
                 "id": str(item.get("id") or "").strip(),
                 "nome": str(item.get("nome") or "").strip(),
                 "missao": str(item.get("descricao_missao") or "").strip(),
+                "similaridade": float(item.get("similarity") or 0.0),
+                "score_ajustado": _score_ajustado_candidato(item),
             }
             for item in candidatos
             if isinstance(item, dict) and str(item.get("id") or "").strip()
@@ -1818,6 +1837,8 @@ async def node_roteador_maestro(state: AgentState):
                 "- Dê prioridade absoluta a especialistas de 'Triagem' ou 'Financeiro/Pedagógico' se o contexto indicar uma escolha de menu.\n"
                 "- É OBRIGATÓRIO considerar a ÚLTIMA MENSAGEM DA IA para resolver respostas curtas do usuário (ex.: '1', '2', 'sim').\n"
                 "- Se a última mensagem da IA continha menu/opções e o usuário respondeu com número, mapeie o número para a opção correspondente.\n"
+                "- Em caso de dúvida razoável entre especialistas próximos, devolva PELO MENOS 2 IDs.\n"
+                "- Evite retornar apenas 1 ID quando houver candidatos com score ajustado semelhante.\n"
                 "- Se nenhum candidato for realmente relevante, retorne uma lista vazia.\n"
                 "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
             )
@@ -1847,8 +1868,39 @@ async def node_roteador_maestro(state: AgentState):
             if isinstance(item, dict) and str(item.get("id") or "").strip()
         }
         ids_validos = [esp_id for esp_id in ids_selecionados_maestro if esp_id in candidatos_por_id]
+        candidatos_rankeados = sorted(
+            [item for item in candidatos if isinstance(item, dict) and str(item.get("id") or "").strip()],
+            key=_score_ajustado_candidato,
+            reverse=True,
+        )
 
-        especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_validos if esp_id in candidatos_por_id]
+        margem_tolerancia = 0.18
+        ids_por_margem: list[str] = []
+        if candidatos_rankeados:
+            melhor_score = _score_ajustado_candidato(candidatos_rankeados[0])
+            if melhor_score > 0:
+                limite = melhor_score * (1 - margem_tolerancia)
+                ids_por_margem = [
+                    str(item.get("id") or "").strip()
+                    for item in candidatos_rankeados
+                    if _score_ajustado_candidato(item) >= limite
+                ]
+
+        ids_base = ids_validos or [str(item.get("id") or "").strip() for item in candidatos_rankeados[:1]]
+        ids_combinados: list[str] = []
+        for esp_id in [*ids_base, *ids_por_margem]:
+            if esp_id and esp_id in candidatos_por_id and esp_id not in ids_combinados:
+                ids_combinados.append(esp_id)
+
+        if len(ids_combinados) < 2 and len(candidatos_rankeados) >= 2:
+            score_top = _score_ajustado_candidato(candidatos_rankeados[0])
+            score_segundo = _score_ajustado_candidato(candidatos_rankeados[1])
+            if score_top > 0 and (score_top - score_segundo) / score_top <= 0.20:
+                segundo_id = str(candidatos_rankeados[1].get("id") or "").strip()
+                if segundo_id and segundo_id not in ids_combinados:
+                    ids_combinados.append(segundo_id)
+
+        especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_combinados if esp_id in candidatos_por_id]
 
         # Fallback determinístico: resposta numérica para menu da mensagem anterior da IA.
         ultima_msg_usuario = str(ultima_mensagem or "").strip().lower()
@@ -1888,7 +1940,7 @@ async def node_roteador_maestro(state: AgentState):
         # Fallback de memória conversacional: evita seleção vazia após pergunta prévia da IA.
         resposta_curta = bool(re.fullmatch(r"\d{1,2}|sim|não|nao|ok|blz|beleza", ultima_msg_usuario))
         if not especialistas_match and candidatos and ultima_ia_contexto and resposta_curta:
-            primeiro_candidato = next((item for item in candidatos if isinstance(item, dict)), None)
+            primeiro_candidato = candidatos_rankeados[0] if candidatos_rankeados else None
             if primeiro_candidato:
                 especialistas_match = [primeiro_candidato]
                 logger.info(
@@ -1932,6 +1984,7 @@ async def node_roteador_maestro(state: AgentState):
     state["super_contexto_especialistas"] = ""
     state["especialistas_identificados"] = especialistas_identificados
     state["fila_agentes"] = list(especialistas_identificados)
+    state["especialista_corrente"] = None
     return state
 
 async def node_especialista_funcionamento(state: AgentState):
@@ -2284,7 +2337,11 @@ async def node_especialista_saudacao(state: AgentState):
 
 async def node_especialista_dinamico(state: AgentState):
     try:
-        especialistas_selecionados = state.get("especialistas_selecionados", []) or []
+        especialista_corrente = state.get("especialista_corrente")
+        if isinstance(especialista_corrente, dict) and especialista_corrente:
+            especialistas_selecionados = [especialista_corrente]
+        else:
+            especialistas_selecionados = state.get("especialistas_selecionados", []) or []
         if not isinstance(especialistas_selecionados, list):
             especialistas_selecionados = []
 
@@ -2867,6 +2924,7 @@ async def node_especialista_dinamico(state: AgentState):
             if super_contexto_existente and super_contexto_novo
             else (super_contexto_novo or super_contexto_existente)
         )
+        state["especialista_corrente"] = None
         return state
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA DINAMICO] Erro crítico no nó: %s", e)
@@ -2974,9 +3032,11 @@ def router_maestro(state: AgentState):
     state["acoes_sistema_pendentes"] = pendentes
 
     if pendentes:
+        state["especialista_corrente"] = None
         return "node_acao_sistema"
     if not fila_agentes:
         state["fila_agentes"] = []
+        state["especialista_corrente"] = None
         return "node_atendente"
 
     agente_atual = str(fila_agentes.pop(0) or "").strip()
@@ -2986,6 +3046,7 @@ def router_maestro(state: AgentState):
     print(f"Agentes restantes na fila: {state['fila_agentes']}")
     print("--------------------------")
     if not agente_atual:
+        state["especialista_corrente"] = None
         return "node_atendente"
 
     atual_norm = _normalizar_chave_especialista(agente_atual)
@@ -3004,15 +3065,25 @@ def router_maestro(state: AgentState):
     )
 
     if nome_ref == "especialista_saudacao":
+        state["especialista_corrente"] = None
         return "node_especialista_saudacao"
     if nome_ref == "especialista_funcionamento":
+        state["especialista_corrente"] = None
         return "especialista_funcionamento"
     if nome_ref == "especialista_localizacao":
+        state["especialista_corrente"] = None
         return "especialista_localizacao"
 
     # Processa apenas o especialista atual neste passo da fila.
     if isinstance(metadado_atual, dict):
-        state["especialistas_selecionados"] = [metadado_atual]
+        state["especialista_corrente"] = metadado_atual
+    else:
+        state["especialista_corrente"] = {
+            "id": agente_atual,
+            "nome": agente_atual,
+            "prompt_sistema": "",
+            "usar_rag": False,
+        }
     return "node_especialista_dinamico"
 
 
