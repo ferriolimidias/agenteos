@@ -600,6 +600,16 @@ async def processar_bloco_mensagens(
     
     conexao_id_dispatch = estado_final.get("conexao_id") or mensagens[0].conexao_id
     resposta = estado_final.get("resposta_final")
+    respostas_especialistas = estado_final.get("respostas_especialistas", [])
+    handoff_pendente = bool(
+        estado_final.get("status_conversa") == "HANDOFF"
+        or any("SISTEMA_BOT_PAUSADO" in str(r) for r in respostas_especialistas)
+    )
+    if not resposta and handoff_pendente:
+        resposta = (
+            "Perfeito! Vou te transferir agora para o time responsável. "
+            "Um atendente humano continua com você em instantes."
+        )
     if resposta:
         print("\n[Channel Factory] Despachando a resposta final...")
         
@@ -673,7 +683,6 @@ async def processar_bloco_mensagens(
                         },
                     )
                     # --- VERIFICA SE A IA SOLICITOU A PAUSA (Pausa Efetiva) ---
-                    respostas_especialistas = estado_final.get("respostas_especialistas", [])
                     bot_pausado_flag = any("SISTEMA_BOT_PAUSADO" in str(r) for r in respostas_especialistas)
 
                     if bot_pausado_flag or estado_final.get("status_conversa") == "HANDOFF":

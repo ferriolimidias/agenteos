@@ -265,6 +265,9 @@ def _prepend_resumo_cliente_system_prompt(state: AgentState, prompt: str) -> str
 [DIRETRIZES GLOBAIS DE SISTEMA - OBRIGATÓRIO]
 1. USO DE FERRAMENTAS: Você é um agente proativo. Se a sua missão envolve classificar o lead ou se o cliente indicou interesse em um setor/produto específico (ex: Financeiro, Pedagógico, Vendas), você DEVE OBRIGATORIAMENTE chamar a ferramenta de atualizar tags ANTES de formular sua resposta em texto.
 2. Não diga "vou adicionar a tag", simplesmente EXECUTE a ferramenta silenciosamente e responda ao cliente normalmente.
+3. ORDEM DE TRANSFERÊNCIA OBRIGATÓRIA: quando houver transbordo para humano/setor, siga esta sequência sem exceções:
+   (a) aplicar tag de intenção/setor -> (b) enviar a mensagem ao cliente informando a transferência -> (c) executar a transferência para humano.
+4. É proibido acionar transferência para humano antes da mensagem de confirmação ao cliente.
 """
 
     if resumo:
@@ -819,8 +822,17 @@ async def node_acao_sistema(state: AgentState):
     lead_id = str(state.get("lead_id") or "").strip()
     conexao_id = state.get("conexao_id")
     ultima_mensagem = _ultima_mensagem_cliente(state)
+    prioridade_acoes = {
+        "aplicar_tags": 1,
+        "transferir_atendimento": 2,
+        "fechar_conversa": 3,
+    }
+    pendentes_ordenadas = sorted(
+        pendentes,
+        key=lambda acao: prioridade_acoes.get(str(acao or "").strip().lower(), 99),
+    )
 
-    for acao in pendentes:
+    for acao in pendentes_ordenadas:
         acao_nome = str(acao or "").strip().lower()
         if not acao_nome:
             continue
@@ -2429,6 +2441,11 @@ async def node_especialista_dinamico(state: AgentState):
                 "Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.\n"
                 "Você recebe o histórico curto APENAS para leitura e contexto. "
                 "NÃO altere memória e não assuma persona de atendimento final.\n"
+                "ORDEM OBRIGATÓRIA DE FERRAMENTAS PARA TRANSFERÊNCIA:\n"
+                "1) aplique tags de intenção/setor primeiro;\n"
+                "2) registre dados da resposta de confirmação de transferência;\n"
+                "3) só então acione a transferência para humano.\n"
+                "Nunca acione transferência antes das tags de intenção.\n"
                 f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
             )
 
@@ -3032,6 +3049,13 @@ def router_maestro(state: AgentState):
     state["acoes_sistema_pendentes"] = pendentes
 
     if pendentes:
+        somente_transferencia = all(
+            str(acao or "").strip().lower() == "transferir_atendimento"
+            for acao in pendentes
+        )
+        # Garante que a mensagem final de transferência seja gerada antes de pausar o bot.
+        if somente_transferencia and not state.get("resposta_final"):
+            return "node_atendente"
         state["especialista_corrente"] = None
         return "node_acao_sistema"
     if not fila_agentes:
@@ -3106,6 +3130,8 @@ workflow.add_conditional_edges("node_especialista_saudacao", router_maestro)
 workflow.add_conditional_edges("node_especialista_dinamico", router_maestro)
 
 def router_pos_acao_sistema(state: AgentState):
+    if state.get("bot_foi_pausado") and not state.get("resposta_final"):
+        return "node_atendente"
     if state.get("bot_foi_pausado"):
         return END
     if state.get("resposta_final"):
