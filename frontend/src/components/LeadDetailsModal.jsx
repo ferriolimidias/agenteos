@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 
 import LeadTagsEditor from "./LeadTagsEditor";
+import { normalizeLeadTags } from "../utils/leadTags";
 
 export default function LeadDetailsModal({
   lead,
@@ -101,7 +102,7 @@ export default function LeadDetailsModal({
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags do lead</p>
                 <LeadTagsEditor
-                  tags={lead.tags || []}
+                  tags={normalizeLeadTags(lead?.tags)}
                   placeholder="Selecione tags oficiais"
                   onChange={(nextTags) => onSaveTags?.(lead.id, nextTags)}
                   tagDefinitions={availableTags}

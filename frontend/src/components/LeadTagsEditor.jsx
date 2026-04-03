@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Tag, X } from "lucide-react";
+import { normalizeLeadTags, normalizeLeadTagsForApi, normalizeTagValue } from "../utils/leadTags";
 
 const TAG_COLOR_VARIANTS = [
   "bg-blue-50 text-blue-700 border-blue-200",
@@ -42,25 +43,6 @@ function getTagInlineStyle(tagDefinition) {
   };
 }
 
-function normalizeTags(tags) {
-  const output = [];
-  const seen = new Set();
-
-  (tags || []).forEach((tag) => {
-    const isObjectTag = tag && typeof tag === "object";
-    const clean = isObjectTag
-      ? String(tag.id || tag.nome || "").trim()
-      : String(tag || "").trim();
-    if (!clean) return;
-    const key = clean.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    output.push(clean);
-  });
-
-  return output;
-}
-
 export default function LeadTagsEditor({
   tags = [],
   onChange,
@@ -72,19 +54,20 @@ export default function LeadTagsEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
+  const safeTags = useMemo(() => normalizeLeadTags(tags), [tags]);
+  const normalizedTags = useMemo(() => normalizeLeadTagsForApi(safeTags), [safeTags]);
   const tagDefinitionsMap = useMemo(() => getTagDefinitionMap(tagDefinitions), [tagDefinitions]);
   const selectedTagLabelsMap = useMemo(() => {
     const map = new Map();
-    (tags || []).forEach((tag) => {
+    safeTags.forEach((tag) => {
       if (!tag || typeof tag !== "object") return;
-      const key = String(tag.id || tag.nome || "").trim();
-      const label = String(tag.nome || tag.id || "").trim();
+      const key = normalizeTagValue(tag);
+      const label = String(tag.nome || tag.label || tag.id || "").trim();
       if (!key || !label) return;
       map.set(key, label);
     });
     return map;
-  }, [tags]);
+  }, [safeTags]);
   const availableTagNames = useMemo(
     () =>
       (tagDefinitions || [])
@@ -101,7 +84,7 @@ export default function LeadTagsEditor({
     try {
       setSaving(true);
       setError("");
-      await onChange(normalizeTags(nextTags));
+      await onChange(normalizeLeadTagsForApi(nextTags));
     } catch (err) {
       console.error("Erro ao atualizar tags:", err);
       setError("Não foi possível salvar as tags.");

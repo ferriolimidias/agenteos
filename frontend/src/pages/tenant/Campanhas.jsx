@@ -15,6 +15,7 @@ import {
 import api from "../../services/api";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
 import { getActiveEmpresaId } from "../../utils/auth";
+import { normalizeLeadTags, normalizeLeadTagsForApi } from "../../utils/leadTags";
 
 const initialTemplateForm = {
   nome: "",
@@ -401,16 +402,19 @@ export default function Campanhas() {
   };
 
   const handleRemoveLeadFromList = async (lead, lista) => {
-    const nextTags = (lead.tags || []).filter(
+    const nextTags = normalizeLeadTags(lead?.tags).filter(
       (tag) => {
-        const tagId = tag && typeof tag === "object" ? String(tag.id || "").trim() : String(tag || "").trim();
-        const tagNome = tag && typeof tag === "object" ? String(tag.nome || "").trim().toLowerCase() : String(tag || "").trim().toLowerCase();
+        const isObjectTag = tag && typeof tag === "object";
+        const tagId = isObjectTag ? String(tag.id || "").trim() : String(tag || "").trim();
+        const tagNome = isObjectTag ? String(tag.nome || "").trim().toLowerCase() : String(tag || "").trim().toLowerCase();
         if (tagId && tagId === String(lista.tag_id || "").trim()) return false;
         if (tagNome && tagNome === String(lista.tag || "").trim().toLowerCase()) return false;
         return true;
       }
-    ).map((tag) => (tag && typeof tag === "object" ? String(tag.id || "").trim() : String(tag || "").trim())).filter(Boolean);
-    await handleSaveLeadTags(lead.id, nextTags);
+    );
+
+    const normalizedNextTags = normalizeLeadTagsForApi(nextTags);
+    await handleSaveLeadTags(lead.id, normalizedNextTags);
     setSelectedListaLeads((prev) => prev.filter((item) => item.id !== lead.id));
   };
 

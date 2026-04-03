@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
@@ -652,22 +653,6 @@ export default function Inbox() {
 
   const normalizeStatusAtendimento = (status) => String(status || "aberto").trim().toLowerCase();
 
-  const normalizeLeadTags = (rawTags) => {
-    if (Array.isArray(rawTags)) return rawTags;
-    if (!rawTags) return [];
-    if (typeof rawTags === "string") {
-      const normalizedTag = rawTags.trim();
-      return normalizedTag ? [normalizedTag] : [];
-    }
-    if (typeof rawTags === "object") {
-      if (Array.isArray(rawTags.tags)) return rawTags.tags;
-      if (Array.isArray(rawTags.items)) return rawTags.items;
-      if (Array.isArray(rawTags.values)) return rawTags.values;
-      return Object.values(rawTags).filter((value) => value && (typeof value === "string" || typeof value === "object"));
-    }
-    return [];
-  };
-
   const statusAbertos = new Set(["aberto", "aguardando_humano", "manual"]);
 
   const filteredLeads = useMemo(() => {
@@ -950,7 +935,7 @@ export default function Inbox() {
                   {showTagsPanel ? (
                     <div className="rounded-xl border border-gray-200 bg-gray-50 p-2.5">
                       <LeadTagsEditor
-                        tags={selectedLead.tags || []}
+                        tags={normalizeLeadTags(selectedLead?.tags)}
                         compact
                         placeholder="Buscar tags oficiais..."
                         onChange={(nextTags) => handleLeadTagsChange(selectedLead.id, nextTags)}

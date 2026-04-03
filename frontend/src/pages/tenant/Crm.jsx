@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2 } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
 
@@ -304,7 +305,7 @@ export default function Crm() {
                           ) : null}
 
                           <LeadTagsEditor
-                            tags={lead.tags || []}
+                            tags={normalizeLeadTags(lead?.tags)}
                             compact
                             placeholder="Selecione tags oficiais"
                             onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
