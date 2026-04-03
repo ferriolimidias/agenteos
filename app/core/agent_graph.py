@@ -1369,7 +1369,6 @@ async def node_atendente(state: AgentState):
 
         nome_agente = str(getattr(empresa, "nome_agente", "") or "").strip() or "Assistente Virtual"
         nome_empresa_prompt = str(getattr(empresa, "nome_empresa", "") or "").strip() or "Empresa"
-        blocos.append(f"Você é {nome_agente}, assistente virtual da {nome_empresa_prompt}.")
 
         agora = datetime.now()
         dias_semana = [
@@ -1390,14 +1389,6 @@ async def node_atendente(state: AgentState):
         regras_prompt = ia_regras_negocio or "(não configuradas)"
 
         blocos.append(
-            "Identidade e Tom de Voz da IA: "
-            f"{personalidade_prompt}."
-        )
-        blocos.append(
-            "Diretrizes de Atendimento e Estratégia de Vendas: "
-            f"{regras_prompt}."
-        )
-        blocos.append(
             "Diretriz de roteamento de sistema: Se o cliente pedir para falar com atendente humano, "
             "ou se a conversa chegar ao fim natural (fechamento), acione o [Especialista de Sistema / Ferramenta de Roteamento] "
             "e avise o cliente amigavelmente que a ação está sendo tomada."
@@ -1414,13 +1405,11 @@ async def node_atendente(state: AgentState):
             "NUNCA use formatação Markdown padrão.\n"
             "- Proibido usar ** para negrito. Use apenas um asterisco: *texto*.\n"
             "- Proibido usar # ou ## para títulos.\n"
-            "- Para itálico, use _texto_.\n"
-            "- Mantenha os parágrafos curtos e não polua a tela com formatações excessivas."
+            "- Para itálico, use _texto_."
         )
         blocos.append(formatacao_base)
-        blocos.append(
-            "Varie seu vocabulário. Nunca repita a mesma saudação ou estrutura de frase usada nas suas mensagens anteriores."
-        )
+
+        blocos.append(f"Identidade da IA: Você é {nome_agente}, assistente virtual da {nome_empresa_prompt}.")
 
         if incluir_especialistas and respostas_especialistas:
             respostas_texto = "\n".join([str(r) for r in respostas_especialistas if str(r).strip()])
@@ -1433,6 +1422,17 @@ async def node_atendente(state: AgentState):
                 "Use os dados acima para formular sua resposta com suas próprias palavras, "
                 "mantendo o tom de voz amigável e conversacional."
             )
+
+        blocos.append(
+            "AS INSTRUÇÕES A SEGUIR SÃO SOBERANAS E OBRIGATÓRIAS. ELAS SOBREPÕEM-SE A QUALQUER REGRA ANTERIOR. "
+            "SE HOUVER UM MENU OU SCRIPT ABAIXO, VOCÊ DEVE SEGUI-LO À RISCA SEM ALTERAR A ESTRUTURA, "
+            "NOMENCLATURA OU QUANTIDADE DE OPÇÕES."
+        )
+        blocos.append(
+            "[SOBERANIA] Diretrizes de Atendimento e Regras de Negócio:\n"
+            f"- Diretrizes de Atendimento e Estratégia de Vendas: {regras_prompt}.\n"
+            f"- Identidade e Tom de Voz da IA: {personalidade_prompt}."
+        )
 
         return "\n\n".join(blocos).strip()
 
