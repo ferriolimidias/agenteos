@@ -210,6 +210,25 @@ def _normalizar_chave_especialista(valor: str) -> str:
     return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).strip().lower()
 
 
+def _extrair_opcoes_menu(texto_assistente: str) -> dict[str, str]:
+    texto = str(texto_assistente or "")
+    if not texto.strip():
+        return {}
+    opcoes: dict[str, str] = {}
+    for linha in texto.splitlines():
+        trecho = str(linha or "").strip()
+        if not trecho:
+            continue
+        match = re.match(r"^(\d{1,2})\s*[\)\-\.:\u2013]\s*(.+)$", trecho)
+        if not match:
+            continue
+        indice = match.group(1).strip()
+        rotulo = match.group(2).strip()
+        if indice and rotulo:
+            opcoes[indice] = rotulo
+    return opcoes
+
+
 def _is_primeiro_contato(state: "AgentState") -> bool:
     flag_deterministica = state.get("primeiro_contato")
     if isinstance(flag_deterministica, bool):
@@ -1723,8 +1742,13 @@ async def node_roteador_maestro(state: AgentState):
         return state
 
     historico_curto_estado = str(state.get("historico_curto") or "").strip()
-    historico_curto_roteador = historico_curto_estado or _historico_curto_roteador(state, limite=4)
+    historico_curto_dinamico = _historico_curto_roteador(state, limite=6)
+    if historico_curto_estado and historico_curto_dinamico:
+        historico_curto_roteador = f"{historico_curto_estado}\n{historico_curto_dinamico}".strip()
+    else:
+        historico_curto_roteador = historico_curto_estado or historico_curto_dinamico
     historico_turnos_maestro = _turnos_consolidados_roteador(state, limite_turnos=3)
+    ultima_ia_contexto = _ultima_mensagem_assistente(state)
 
     def _parse_ids_json(raw: str) -> list[str]:
         texto = str(raw or "").strip()
@@ -1792,6 +1816,8 @@ async def node_roteador_maestro(state: AgentState):
                 "REGRAS:\n"
                 "- Você pode selecionar MAIS DE UM especialista se a dúvida for mista.\n"
                 "- Dê prioridade absoluta a especialistas de 'Triagem' ou 'Financeiro/Pedagógico' se o contexto indicar uma escolha de menu.\n"
+                "- É OBRIGATÓRIO considerar a ÚLTIMA MENSAGEM DA IA para resolver respostas curtas do usuário (ex.: '1', '2', 'sim').\n"
+                "- Se a última mensagem da IA continha menu/opções e o usuário respondeu com número, mapeie o número para a opção correspondente.\n"
                 "- Se nenhum candidato for realmente relevante, retorne uma lista vazia.\n"
                 "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
             )
@@ -1800,6 +1826,8 @@ async def node_roteador_maestro(state: AgentState):
                 f"{historico_curto_roteador or '(sem histórico)'}\n\n"
                 "ULTIMOS_3_TURNOS_CONSOLIDADOS:\n"
                 f"{historico_turnos_maestro or '(sem histórico)'}\n\n"
+                "ULTIMA_MENSAGEM_DA_IA:\n"
+                f"{ultima_ia_contexto or '(sem mensagem anterior da IA)'}\n\n"
                 f"TERMOS_EXPANDIDOS: {termos_expandidos or ultima_mensagem}\n\n"
                 f"CANDIDATOS_TOP5 (Nome + Missão):\n{json.dumps(candidatos_payload, ensure_ascii=False)}"
             )
@@ -1821,6 +1849,53 @@ async def node_roteador_maestro(state: AgentState):
         ids_validos = [esp_id for esp_id in ids_selecionados_maestro if esp_id in candidatos_por_id]
 
         especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_validos if esp_id in candidatos_por_id]
+
+        # Fallback determinístico: resposta numérica para menu da mensagem anterior da IA.
+        ultima_msg_usuario = str(ultima_mensagem or "").strip().lower()
+        opcoes_menu = _extrair_opcoes_menu(ultima_ia_contexto)
+        if not especialistas_match and opcoes_menu and re.fullmatch(r"\d{1,2}", ultima_msg_usuario):
+            rotulo_opcao = str(opcoes_menu.get(ultima_msg_usuario, "")).strip()
+            if rotulo_opcao:
+                alvo_norm = _normalizar_chave_especialista(rotulo_opcao)
+                termos_alvo = [tok for tok in re.split(r"\W+", alvo_norm) if tok]
+
+                def _score_candidato(item: dict) -> int:
+                    nome = _normalizar_chave_especialista(str(item.get("nome") or ""))
+                    missao = _normalizar_chave_especialista(str(item.get("descricao_missao") or ""))
+                    base = f"{nome} {missao}".strip()
+                    score = 0
+                    if alvo_norm and alvo_norm in base:
+                        score += 10
+                    for termo in termos_alvo:
+                        if termo and termo in base:
+                            score += 2
+                    return score
+
+                candidatos_ordenados = sorted(
+                    [item for item in candidatos if isinstance(item, dict)],
+                    key=_score_candidato,
+                    reverse=True,
+                )
+                if candidatos_ordenados and _score_candidato(candidatos_ordenados[0]) > 0:
+                    especialistas_match = [candidatos_ordenados[0]]
+                    logger.info(
+                        "[MAESTRO] Fallback de menu aplicado. resposta='%s' opcao='%s' especialista='%s'",
+                        ultima_msg_usuario,
+                        rotulo_opcao,
+                        str(candidatos_ordenados[0].get("nome") or ""),
+                    )
+
+        # Fallback de memória conversacional: evita seleção vazia após pergunta prévia da IA.
+        resposta_curta = bool(re.fullmatch(r"\d{1,2}|sim|não|nao|ok|blz|beleza", ultima_msg_usuario))
+        if not especialistas_match and candidatos and ultima_ia_contexto and resposta_curta:
+            primeiro_candidato = next((item for item in candidatos if isinstance(item, dict)), None)
+            if primeiro_candidato:
+                especialistas_match = [primeiro_candidato]
+                logger.info(
+                    "[MAESTRO] Fallback contextual aplicado. resposta='%s' ultimo_bot_presente=True especialista='%s'",
+                    ultima_msg_usuario,
+                    str(primeiro_candidato.get("nome") or ""),
+                )
         nomes_selecionados = [str(item.get("nome") or "").strip() for item in especialistas_match if isinstance(item, dict)]
         print(
             f"[MAESTRO - DECISÃO CONTEXTUAL] Candidatos: {nomes_candidatos} | "

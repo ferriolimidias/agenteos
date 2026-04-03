@@ -225,6 +225,25 @@ def formatar_historico_mensagens(mensagens: list, limite: int = None) -> str:
     linhas = [f"[{'Atena' if m.from_me else 'Cliente'}]: {m.texto}" for m in msgs]
     return "\n".join(linhas) if linhas else "(sem histórico)"
 
+
+def _formatar_historico_curto_estado(mensagens_estado: list[str], limite: int = 5) -> str:
+    if not mensagens_estado:
+        return ""
+    itens_validos = [str(item or "").strip() for item in mensagens_estado if str(item or "").strip()]
+    if not itens_validos:
+        return ""
+    ultimos = itens_validos[-max(1, int(limite)):]
+    linhas = []
+    for texto in ultimos:
+        texto_lower = texto.lower()
+        if texto_lower.startswith("assistente:"):
+            linhas.append(f"IA: {texto.split(':', 1)[1].strip() if ':' in texto else texto}")
+        elif texto_lower.startswith("usuario:") or texto_lower.startswith("usuário:"):
+            linhas.append(f"Cliente: {texto.split(':', 1)[1].strip() if ':' in texto else texto}")
+        else:
+            linhas.append(f"Cliente: {texto}")
+    return "\n".join(linhas).strip()
+
 async def atualizar_resumo_lead_bg(lead_id: str, empresa_id: str) -> None:
     """
     Consolida memória de longo prazo do lead sem bloquear o atendimento.
@@ -417,6 +436,21 @@ async def processar_bloco_mensagens(
     except Exception as _e_hist:
         print(f"[ENGINE] Aviso: falha ao carregar histórico do Postgres: {_e_hist}")
     # ────────────────────────────────────────────────────────────────────────────
+
+    # Garante que a última mensagem do usuário do bloco atual esteja no estado,
+    # preservando também as últimas respostas da IA vindas do histórico do banco.
+    for texto_inbound in textos:
+        entrada = f"Usuario: {texto_inbound}".strip()
+        if not entrada:
+            continue
+        ultimo = str(mensagens_globais[-1] if mensagens_globais else "").strip().lower()
+        if ultimo == entrada.lower():
+            continue
+        mensagens_globais.append(entrada)
+
+    historico_curto_estado = _formatar_historico_curto_estado(mensagens_globais, limite=5)
+    if historico_curto_estado:
+        historico_curto = historico_curto_estado
 
     estado_inicial = {
         "empresa_id": mensagens[0].empresa_id,
