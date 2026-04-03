@@ -40,6 +40,17 @@ FERRAMENTAS_SISTEMA: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "nome_exibicao": "Consultar Lista de Tags",
+        "nome_ferramenta": "tool_consultar_tags_empresa",
+        "descricao_ia": "Permite que o agente leia todas as tags ativas do painel para saber exatamente quais nomes de tags ele pode usar.",
+        "schema_parametros": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 

@@ -122,3 +122,34 @@ async def tool_transferir_para_humano(lead_id: str, empresa_id: str, motivo: str
     # Apenas retorna a flag. A pausa real no banco será feita na borda do sistema (webhook)
     # após a IA ter a chance de se despedir do cliente.
     return "SISTEMA_BOT_PAUSADO"
+
+
+@tool
+async def tool_consultar_tags_empresa(empresa_id: str) -> str:
+    """
+    Use esta ferramenta para ler TODAS as tags oficiais criadas no painel da empresa.
+    Retorna os nomes exatos das tags e as suas instruções/descrições (se houver).
+    """
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError):
+        return "Falha ao consultar tags: empresa_id inválido."
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_tags = await session.execute(
+                select(TagCRM).where(TagCRM.empresa_id == empresa_uuid)
+            )
+            tags = result_tags.scalars().all()
+            if not tags:
+                return "Nenhuma tag encontrada no sistema para esta empresa."
+
+            linhas = []
+            for t in tags:
+                nome = t.nome
+                instrucao = f" - Descrição: {t.instrucao_ia}" if getattr(t, "instrucao_ia", None) else ""
+                linhas.append(f"- Tag: '{nome}'{instrucao}")
+
+            return "Tags disponíveis para uso:\n" + "\n".join(linhas)
+    except Exception as e:
+        return f"Falha ao consultar tags: {str(e)}"

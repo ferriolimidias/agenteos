@@ -101,6 +101,7 @@ from app.core.tools import (
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
     tool_transferir_para_humano,
+    tool_consultar_tags_empresa,
 )
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt import create_react_agent, ToolNode
@@ -939,6 +940,7 @@ MAP_FUNCOES_NATIVAS = {
     "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
     "tool_transferir_para_humano": tool_transferir_para_humano.coroutine,
+    "tool_consultar_tags_empresa": tool_consultar_tags_empresa.coroutine,
 }
 
 
@@ -1462,8 +1464,9 @@ Super-contexto das regras de negócio dos especialistas envolvidos:
 {super_contexto_especialistas or '(sem super-contexto consolidado)'}
 </super_contexto_especialistas>
 
-Responda em uma única mensagem clara, separando parágrafos curtos para leitura no WhatsApp.
+Responda em uma única mensagem clara.
 Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
+ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
 </instrucao_final>"""
 
         _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
@@ -1519,12 +1522,13 @@ Você deve responder diretamente à solicitação do cliente com base no seu con
 
 REGRAS DE RESPOSTA DIRETA:
 1. TOM E PERSONA: Assuma completamente a identidade da empresa. Seja cordial, resolutiva e empática.
-2. CONCISÃO E CLAREZA: Vá direto ao ponto. Use parágrafos curtos, listas em bullet points se necessário, e emojis com moderação para manter a leveza.
+2. CONCISÃO E CLAREZA: Vá direto ao ponto. Use listas em bullet points se necessário, e emojis com moderação para manter a leveza.
 3. LIMITES DE CONHECIMENTO: Se o cliente perguntar algo que exija ação no sistema interno (ex: transferências, agendamentos complexos ou financeiro) e você não tiver uma ferramenta direta para isso, informe educadamente que você acionará o departamento responsável.
 4. NUNCA mencione que você é uma IA, um LLM, ou que está lendo um "prompt".
 
 Responda em uma única mensagem clara.
 Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
+ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
 </instrucao_final>"""
 
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
@@ -2397,6 +2401,16 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_transferir_para_humano_contextual
+                            elif chave_nativa == "tool_consultar_tags_empresa":
+                                async def _tool_consultar_tags_empresa_contextual(
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _empresa_id:
+                                        return "Falha ao consultar tags: empresa não identificada."
+                                    return await _coroutine_native(empresa_id=_empresa_id)
+
+                                coroutine_native = _tool_consultar_tags_empresa_contextual
 
                             nova_tool = StructuredTool(
                                 name=tool_name,
