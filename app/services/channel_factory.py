@@ -8,6 +8,11 @@ from sqlalchemy import String, cast, func, select
 from app.services.mensageria.dispatcher import dispatch_outbound_message
 from app.services.mensageria.schemas import StandardOutgoingMessage
 
+HUMANIZACAO_DELAY_MIN = 0.5
+HUMANIZACAO_DELAY_MAX = 2.0
+HUMANIZACAO_CHARS_POR_SEGUNDO = 120.0
+HUMANIZACAO_PALAVRAS_POR_SEGUNDO = 30.0
+
 
 async def _resolver_conexao_evolution(
     *,
@@ -93,8 +98,13 @@ async def despachar_mensagem(
     sucesso_geral = True
 
     for parte in partes:
-        # Cálculo de delay baseado no tamanho do texto (ex: 15 caracteres por segundo)
-        delay = max(1.0, len(parte) / 15.0)
+        # Humanização enxuta: delay curto com teto absoluto de 2s.
+        total_chars = len(parte)
+        total_palavras = len([p for p in parte.split() if p.strip()])
+        delay_chars = total_chars / HUMANIZACAO_CHARS_POR_SEGUNDO
+        delay_palavras = total_palavras / HUMANIZACAO_PALAVRAS_POR_SEGUNDO
+        delay_base = max(delay_chars, delay_palavras)
+        delay = min(HUMANIZACAO_DELAY_MAX, max(HUMANIZACAO_DELAY_MIN, delay_base))
         print(f"[Humanização] Delay de {delay:.1f}s calculado para o trecho: '{parte[:40]}...'")
         await asyncio.sleep(delay)
         
