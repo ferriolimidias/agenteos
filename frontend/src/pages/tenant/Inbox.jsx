@@ -650,14 +650,33 @@ export default function Inbox() {
     return { porNome, porId };
   }, [tagsOficiais]);
 
+  const normalizeStatusAtendimento = (status) => String(status || "aberto").trim().toLowerCase();
+
+  const normalizeLeadTags = (rawTags) => {
+    if (Array.isArray(rawTags)) return rawTags;
+    if (!rawTags) return [];
+    if (typeof rawTags === "string") {
+      const normalizedTag = rawTags.trim();
+      return normalizedTag ? [normalizedTag] : [];
+    }
+    if (typeof rawTags === "object") {
+      if (Array.isArray(rawTags.tags)) return rawTags.tags;
+      if (Array.isArray(rawTags.items)) return rawTags.items;
+      if (Array.isArray(rawTags.values)) return rawTags.values;
+      return Object.values(rawTags).filter((value) => value && (typeof value === "string" || typeof value === "object"));
+    }
+    return [];
+  };
+
+  const statusAbertos = new Set(["aberto", "aguardando_humano", "manual"]);
+
   const filteredLeads = useMemo(() => {
     const termo = String(searchTerm || "").trim().toLowerCase();
     const leadsFiltrados = (leads || []).filter((lead) => {
-      const statusLead = (lead?.status_atendimento || "aberto").toLowerCase();
-      const statusSelecionado = filtroStatus.toLowerCase();
-      // Se o filtro for 'aberto', deve incluir também 'aguardando_humano'
+      const statusLead = normalizeStatusAtendimento(lead?.status_atendimento);
+      const statusSelecionado = normalizeStatusAtendimento(filtroStatus);
       if (statusSelecionado === "aberto") {
-        if (statusLead !== "aberto" && statusLead !== "aguardando_humano") return false;
+        if (!statusAbertos.has(statusLead)) return false;
       } else {
         if (statusLead !== statusSelecionado) return false;
       }
@@ -670,7 +689,7 @@ export default function Inbox() {
 
       if (abaAtiva === "Todos") return true;
 
-      const tagsLead = lead?.tags || [];
+      const tagsLead = normalizeLeadTags(lead?.tags);
       if (abaAtiva === "Sem Grupo" && tagsLead.length === 0) return true;
 
       const tagsOficiaisLead = tagsLead
@@ -805,11 +824,11 @@ export default function Inbox() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="truncate text-sm font-semibold text-gray-900">{lead.nome_contato}</p>
-                    {String(lead?.status_atendimento || "aberto").toLowerCase() === "concluido" ? (
+                    {normalizeStatusAtendimento(lead?.status_atendimento) === "concluido" ? (
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
                         Concluído
                       </span>
-                    ) : lead.bot_pausado ? (
+                    ) : normalizeStatusAtendimento(lead?.status_atendimento) === "manual" || lead.bot_pausado ? (
                       <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
                         Humano
                       </span>

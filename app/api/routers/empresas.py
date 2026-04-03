@@ -3215,6 +3215,8 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
     l_uuid = _parse_uuid_or_none(lead_id)
+    if not l_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de lead inválido")
 
     result = await db.execute(select(CRMLead).where(CRMLead.id == l_uuid, CRMLead.empresa_id == emp_uuid))
     lead = result.scalars().first()
@@ -3223,10 +3225,14 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado ou não pertence a esta empresa")
         
     try:
-        # Limpeza explícita de dependências para evitar falha por FK em bases legadas sem ON DELETE efetivo.
+        # 1) Limpa histórico do lead (mensagens_historico) antes de apagar o lead.
         await db.execute(
             delete(MensagemHistorico).where(MensagemHistorico.lead_id == lead.id)
         )
+        # Garante execução imediata da limpeza de dependências com FK.
+        await db.flush()
+
+        # Dependências adicionais de relacionamento.
         await db.execute(
             delete(HistoricoTransferencia).where(HistoricoTransferencia.lead_id == lead.id)
         )
@@ -3235,8 +3241,11 @@ async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends
             .where(AgendamentoLocal.lead_id == lead.id)
             .values(lead_id=None)
         )
+        await db.flush()
 
+        # 2) Remove o lead somente após limpar registros filhos.
         await db.delete(lead)
+        # 3) Commit final da transação.
         await db.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
