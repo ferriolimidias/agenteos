@@ -3201,7 +3201,7 @@ async def resetar_simulador(empresa_id: str, db: AsyncSession = Depends(get_db))
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao resetar simulador: {str(e)}")
 
-@router.delete("/{empresa_id}/leads/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{empresa_id}/crm/leads/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deletar_lead(empresa_id: str, lead_id: str, db: AsyncSession = Depends(get_db)):
     """
     Remove fisicamente um Lead e todo o seu histórico de mensagens do banco de dados (Hard Delete).

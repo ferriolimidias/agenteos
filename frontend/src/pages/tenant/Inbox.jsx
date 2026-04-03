@@ -578,7 +578,7 @@ export default function Inbox() {
     if (!selectedLead) return;
     if (!window.confirm("Certeza que deseja excluir permanentemente este lead e todo o seu histórico de mensagens?")) return;
     try {
-      await api.delete(`/empresas/${empresa_id}/leads/${selectedLead.id}`);
+      await api.delete(`/empresas/${empresa_id}/crm/leads/${selectedLead.id}`);
       setSelectedLead(null);
       setMessages([]);
       fetchLeads();
