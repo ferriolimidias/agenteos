@@ -644,7 +644,7 @@ class ToolAtualizarTagsLeadInput(BaseModel):
 
 
 class ToolAplicarTagDinamicaInput(BaseModel):
-    nome_da_tag: str = Field(description="Nome exato da tag oficial que deve ser aplicada no lead atual.")
+    tag_id: str = Field(description="UUID da tag oficial que deve ser aplicada no lead atual.")
 
 
 class ToolTransferirParaHumanoInput(BaseModel):
@@ -652,6 +652,10 @@ class ToolTransferirParaHumanoInput(BaseModel):
         default=None,
         description="Resumo curto do motivo para pausar o bot e transferir para humano.",
     )
+
+
+class ToolConsultarTagsEmpresaInput(BaseModel):
+    pass
 
 
 async def node_especialista_tags(state: AgentState):
@@ -2294,11 +2298,16 @@ async def node_especialista_dinamico(state: AgentState):
 
                 # Fallback temporário para testes: injeta as novas tools em todos os especialistas dinâmicos.
                 if lead_id and empresa_id:
-                    async def _tool_aplicar_tag_dinamica_contextual(nome_da_tag: str) -> str:
+                    async def _tool_consultar_tags_empresa_contextual() -> str:
+                        return await tool_consultar_tags_empresa.coroutine(
+                            empresa_id=str(empresa_id),
+                        )
+
+                    async def _tool_aplicar_tag_dinamica_contextual(tag_id: str) -> str:
                         return await tool_aplicar_tag_dinamica.coroutine(
                             lead_id=str(lead_id),
                             empresa_id=str(empresa_id),
-                            nome_da_tag=nome_da_tag,
+                            tag_id=tag_id,
                         )
 
                     async def _tool_transferir_para_humano_contextual(motivo: Optional[str] = None) -> str:
@@ -2310,10 +2319,19 @@ async def node_especialista_dinamico(state: AgentState):
 
                     ferramentas_contextuais = [
                         StructuredTool(
+                            name="tool_consultar_tags_empresa",
+                            description=(
+                                "Retorna a lista oficial de etiquetas com NOME e ID. "
+                                "Use isso antes de aplicar qualquer tag."
+                            ),
+                            args_schema=ToolConsultarTagsEmpresaInput,
+                            coroutine=_tool_consultar_tags_empresa_contextual,
+                        ),
+                        StructuredTool(
                             name="tool_aplicar_tag_dinamica",
                             description=(
-                                "Aplica uma tag oficial existente ao lead atual; "
-                                "use o nome exato da tag."
+                                "Aplica uma tag oficial existente ao lead atual usando o tag_id (UUID). "
+                                "Consulte antes com tool_consultar_tags_empresa para obter IDs válidos."
                             ),
                             args_schema=ToolAplicarTagDinamicaInput,
                             coroutine=_tool_aplicar_tag_dinamica_contextual,
@@ -2336,7 +2354,8 @@ async def node_especialista_dinamico(state: AgentState):
                         nomes_tools_registradas.add(nome_tool_ctx)
                     descricoes_tools.extend(
                         [
-                            "- tool_aplicar_tag_dinamica: aplica uma tag oficial ao lead atual.",
+                            "- tool_consultar_tags_empresa: retorna etiquetas oficiais com nome e ID.",
+                            "- tool_aplicar_tag_dinamica: aplica uma tag oficial ao lead atual usando tag_id (UUID).",
                             "- tool_transferir_para_humano: pausa o bot e transfere para atendimento humano.",
                         ]
                     )
@@ -2389,7 +2408,7 @@ async def node_especialista_dinamico(state: AgentState):
                             # os parâmetros de negócio.
                             if chave_nativa == "tool_aplicar_tag_dinamica":
                                 async def _tool_aplicar_tag_dinamica_contextual(
-                                    nome_da_tag: str,
+                                    tag_id: str,
                                     _lead_id: str | None = str(lead_id) if lead_id else None,
                                     _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
                                     _coroutine_native=coroutine_native,
@@ -2399,7 +2418,7 @@ async def node_especialista_dinamico(state: AgentState):
                                     return await _coroutine_native(
                                         lead_id=_lead_id,
                                         empresa_id=_empresa_id,
-                                        nome_da_tag=nome_da_tag,
+                                        tag_id=tag_id,
                                     )
 
                                 coroutine_native = _tool_aplicar_tag_dinamica_contextual

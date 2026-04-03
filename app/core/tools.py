@@ -64,9 +64,9 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
 
 
 @tool
-async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, nome_da_tag: str) -> str:
+async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) -> str:
     """
-    Use esta ferramenta para aplicar uma tag ao contato. Passe o nome exato da tag.
+    Use esta ferramenta para aplicar uma tag ao contato usando o ID oficial da etiqueta.
     """
     try:
         lead_uuid = uuid.UUID(str(lead_id))
@@ -74,22 +74,29 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, nome_da_tag: 
     except (ValueError, TypeError):
         return "Falha ao aplicar tag dinâmica: lead_id ou empresa_id inválido."
 
-    nome_limpo = str(nome_da_tag or "").strip()
-    if not nome_limpo:
-        return "Falha ao aplicar tag dinâmica: nome_da_tag inválido."
+    tag_id_limpo = str(tag_id or "").strip()
+    if not tag_id_limpo:
+        return "Erro: ID de etiqueta inválido."
+
+    try:
+        tag_uuid = uuid.UUID(tag_id_limpo)
+    except (ValueError, TypeError):
+        return "Erro: ID de etiqueta inválido."
 
     try:
         async with AsyncSessionLocal() as session:
+            # 1) Valida se o ID da etiqueta existe na empresa.
             result_tag = await session.execute(
                 select(TagCRM).where(
                     TagCRM.empresa_id == empresa_uuid,
-                    TagCRM.nome == nome_limpo,
+                    TagCRM.id == tag_uuid,
                 )
             )
             tag = result_tag.scalars().first()
             if not tag:
-                return "Falha ao aplicar tag dinâmica: tag não encontrada."
+                return "Erro: ID de etiqueta inválido."
 
+            # 2) Busca o lead.
             result_lead = await session.execute(
                 select(CRMLead).where(
                     CRMLead.id == lead_uuid,
@@ -102,13 +109,14 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, nome_da_tag: 
 
             tags_atuais = lead.tags if isinstance(lead.tags, list) else []
             tags_finais = [str(item).strip() for item in tags_atuais if str(item).strip()]
-            tag_id_str = str(tag.id)
-            if tag_id_str not in tags_finais:
-                tags_finais.append(tag_id_str)
+            tag_id_oficial = str(tag.id)
+            if tag_id_oficial not in tags_finais:
+                tags_finais.append(tag_id_oficial)
                 lead.tags = tags_finais
+                flag_modified(lead, "tags")
                 await session.commit()
-
-            return "Sucesso: tag aplicada ao lead."
+                return f"Sucesso: etiqueta '{tag.nome}' aplicada ao lead."
+            return f"Informação: O lead já possui a etiqueta '{tag.nome}'."
     except Exception as e:
         return f"Falha ao aplicar tag dinâmica: {str(e)}"
 
@@ -144,12 +152,15 @@ async def tool_consultar_tags_empresa(empresa_id: str) -> str:
             if not tags:
                 return "Nenhuma tag encontrada no sistema para esta empresa."
 
-            linhas = []
+            etiquetas = []
             for t in tags:
-                nome = t.nome
-                instrucao = f" - Descrição: {t.instrucao_ia}" if getattr(t, "instrucao_ia", None) else ""
-                linhas.append(f"- Tag: '{nome}'{instrucao}")
+                etiquetas.append(
+                    {
+                        "nome": str(getattr(t, "nome", "") or ""),
+                        "id": str(getattr(t, "id", "") or ""),
+                    }
+                )
 
-            return "Tags disponíveis para uso:\n" + "\n".join(linhas)
+            return f"Etiquetas disponíveis: {etiquetas}"
     except Exception as e:
         return f"Falha ao consultar tags: {str(e)}"

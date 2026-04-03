@@ -11,16 +11,16 @@ FERRAMENTAS_SISTEMA: list[dict[str, Any]] = [
     {
         "nome_exibicao": "Aplicar Tag Dinâmica",
         "nome_ferramenta": "tool_aplicar_tag_dinamica",
-        "descricao_ia": "Permite que o agente aplique tags de classificação ao contato de forma autônoma.",
+        "descricao_ia": "Recebe o tag_id (UUID) para aplicar uma etiqueta ao lead. Obrigatório consultar o ID antes.",
         "schema_parametros": {
             "type": "object",
             "properties": {
-                "nome_da_tag": {
+                "tag_id": {
                     "type": "string",
-                    "description": "Nome exato da tag oficial que deve ser aplicada ao lead atual.",
+                    "description": "UUID da etiqueta oficial que deve ser aplicada ao lead atual.",
                 }
             },
-            "required": ["nome_da_tag"],
+            "required": ["tag_id"],
             "additionalProperties": False,
         },
     },
@@ -43,7 +43,7 @@ FERRAMENTAS_SISTEMA: list[dict[str, Any]] = [
     {
         "nome_exibicao": "Consultar Lista de Tags",
         "nome_ferramenta": "tool_consultar_tags_empresa",
-        "descricao_ia": "Permite que o agente leia todas as tags ativas do painel para saber exatamente quais nomes de tags ele pode usar.",
+        "descricao_ia": "Retorna a lista oficial de etiquetas com NOME e ID. Use isso antes de aplicar qualquer tag.",
         "schema_parametros": {
             "type": "object",
             "properties": {},
