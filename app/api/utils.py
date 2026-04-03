@@ -23,80 +23,13 @@ def _conversation_debug_log(message: str) -> None:
 
 def get_llm_model(model_name: str, api_key: str = None):
     """
-    Fábrica de LLM para retornar o objeto correto (OpenAI, Google ou Anthropic) baseando-se no nome do modelo.
+    Wrapper para fábrica central de LLM.
     """
-    model_lower = model_name.lower() if model_name else "gpt-4o-mini"
-    
-    print(f"[get_llm_model] Solicitado modelo: '{model_name}' (interpretado: '{model_lower}')")
-    
-    # Alguns modelos (como o- series) não suportam temperature ou exigem config especial
-    temperature = 0.7
-    if model_lower.startswith("o"):
-        temperature = 1.0
+    from app.core.llm_factory import get_llm_model as _core_get_llm_model, normalize_model_name
 
-    openai_model_kwargs = {"frequency_penalty": 0.4, "presence_penalty": 0.4}
-
-    if model_lower.startswith("gemini-"):
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-        except ImportError:
-            raise ImportError("Instale langchain-google-genai para usar modelos Gemini.")
-        import os
-        key = api_key or os.environ.get("GOOGLE_API_KEY")
-        print(f"[get_llm_model] Instanciando ChatGoogleGenerativeAI para '{model_lower}'")
-        return ChatGoogleGenerativeAI(model=model_name, temperature=temperature, google_api_key=key)
-    
-    elif model_lower.startswith("claude-"):
-        try:
-            from langchain_anthropic import ChatAnthropic
-        except ImportError:
-            raise ImportError("Instale langchain-anthropic para usar modelos Claude.")
-        import os
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        print(f"[get_llm_model] Instanciando ChatAnthropic para '{model_lower}'")
-        return ChatAnthropic(model=model_name, temperature=temperature, anthropic_api_key=key)
-        
-    elif model_lower.startswith("gpt-") or model_lower.startswith("o"):
-        from langchain_openai import ChatOpenAI
-        import os
-        key = api_key or os.environ.get("OPENAI_API_KEY")
-
-        print(f"[get_llm_model] Instanciando ChatOpenAI para '{model_lower}'")
-        if model_lower.startswith("o"):
-            if key:
-                return ChatOpenAI(model=model_name, api_key=key, model_kwargs=openai_model_kwargs)
-            return ChatOpenAI(model=model_name, model_kwargs=openai_model_kwargs)
-        else:
-            if key:
-                return ChatOpenAI(
-                    model=model_name,
-                    temperature=temperature,
-                    api_key=key,
-                    model_kwargs=openai_model_kwargs,
-                )
-            return ChatOpenAI(
-                model=model_name,
-                temperature=temperature,
-                model_kwargs=openai_model_kwargs,
-            )
-    
-    else:
-        print(f"[get_llm_model] NENHUM prefixo conhecido encontrado para '{model_name}'. FALLBACK OBRIGATÓRIO para 'gpt-4o-mini'")
-        from langchain_openai import ChatOpenAI
-        import os
-        key = api_key or os.environ.get("OPENAI_API_KEY")
-        if key:
-            return ChatOpenAI(
-                model="gpt-4o-mini",
-                temperature=0.7,
-                api_key=key,
-                model_kwargs=openai_model_kwargs,
-            )
-        return ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.7,
-            model_kwargs=openai_model_kwargs,
-        )
+    normalized = normalize_model_name(model_name)
+    print(f"[get_llm_model] Solicitado modelo: '{model_name}' (normalizado: '{normalized}')")
+    return _core_get_llm_model(normalized, api_key=api_key)
 
 import json
 from datetime import timedelta

@@ -39,6 +39,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -> Any:
+    modelo_ia = str(modelo_ia or "").strip() or None
     api_key = None
     if empresa_id:
         try:
@@ -60,10 +61,12 @@ async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -
             pass
             
     from app.api.utils import get_llm_model
+    modelo_final = normalize_model_name(modelo_ia or "gpt-4o-mini")
     try:
-        return get_llm_model(modelo_ia or "gpt-4o-mini", api_key=api_key)
+        logger.info("[LLM] Instanciando modelo final='%s' (empresa_id=%s)", modelo_final, empresa_id)
+        return get_llm_model(modelo_final, api_key=api_key)
     except Exception as e:
-        print(f"Erro instanciando modelo {modelo_ia}: {e}")
+        print(f"Erro instanciando modelo {modelo_final}: {e}")
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model="gpt-4o-mini",
@@ -97,6 +100,7 @@ from app.services.ferramentas_service import (
 )
 from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
+from app.core.llm_factory import normalize_model_name
 from app.core.tools import (
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
@@ -1817,6 +1821,7 @@ async def node_roteador_maestro(state: AgentState):
             {
                 "id": str(item.get("id") or "").strip(),
                 "nome": str(item.get("nome") or "").strip(),
+                "modelo_ia": str(item.get("modelo_ia") or "").strip(),
                 "missao": str(item.get("descricao_missao") or "").strip(),
                 "similaridade": float(item.get("similarity") or 0.0),
                 "score_ajustado": _score_ajustado_candidato(item),
@@ -1827,18 +1832,17 @@ async def node_roteador_maestro(state: AgentState):
 
         ids_selecionados_maestro: list[str] = []
         if candidatos_payload:
-            api_key_empresa = None
-            if empresa_uuid:
-                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                empresa = result_empresa.scalars().first()
-                if empresa:
-                    credenciais = getattr(empresa, "credenciais_canais", {}) or {}
-                    api_key_empresa = credenciais.get("openai_api_key")
-
-            llm_maestro = ChatOpenAI(
-                model="gpt-5.4-nano",
-                temperature=0,
-                api_key=api_key_empresa or os.getenv("OPENAI_API_KEY"),
+            modelo_maestro = next(
+                (
+                    str(item.get("modelo_ia") or "").strip()
+                    for item in candidatos_payload
+                    if str(item.get("modelo_ia") or "").strip()
+                ),
+                "gpt-5.4",
+            )
+            llm_maestro = await get_llm(
+                state.get("empresa_id"),
+                modelo_ia=modelo_maestro,
             )
             prompt_decisao = (
                 "Você é o Maestro do AgenteOS. "
@@ -2834,7 +2838,17 @@ async def node_especialista_dinamico(state: AgentState):
                 )
             prompt_completo = prompt_base + system_message_adicional
 
-            modelo_esp = especialista_db.modelo_ia if especialista_db and hasattr(especialista_db, "modelo_ia") else None
+            modelo_esp = ""
+            if especialista_db and hasattr(especialista_db, "modelo_ia"):
+                modelo_esp = str(getattr(especialista_db, "modelo_ia", "") or "").strip()
+            if not modelo_esp:
+                modelo_esp = str(meta_especialista.get("modelo_ia") or "").strip()
+            modelo_esp = normalize_model_name(modelo_esp or "gpt-5.4")
+            logger.info(
+                "[NODE ESPECIALISTA DINAMICO] Especialista '%s' usando modelo='%s'",
+                nome_especialista_resultado,
+                modelo_esp,
+            )
             llm = await get_llm(state.get("empresa_id"), modelo_ia=modelo_esp)
             resposta_parcial = ""
 

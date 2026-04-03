@@ -366,6 +366,7 @@ class SemanticRouterService:
                 {
                     "id": str(especialista.id),
                     "nome": str(getattr(especialista, "nome", "") or ""),
+                    "modelo_ia": str(getattr(especialista, "modelo_ia", "") or "").strip(),
                     "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
                     "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
                     "usar_rag": bool(getattr(especialista, "usar_rag", False)),
