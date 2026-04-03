@@ -1144,6 +1144,7 @@ class AgentState(TypedDict):
     saudacao_processada: Optional[bool]
     especialista_respondeu_no_ciclo: Optional[bool]
     bot_foi_pausado: Optional[bool]
+    fluxo_encerrado: Optional[bool]
     empresa: Optional[Any]
 
 class AnaliseRoteador(BaseModel):
@@ -1179,7 +1180,33 @@ async def node_crm(state: AgentState):
             nome_atual = str(lead.nome_contato or "").strip()
             if nome_recebido and (not nome_atual or nome_atual == "Usuário (Auto)"):
                 lead.nome_contato = nome_recebido
+            if lead.bot_pausado_ate and lead.bot_pausado_ate > datetime.utcnow():
+                conexao_id_limpo = str(state.get("conexao_id") or "").strip()
+                try:
+                    conexao_uuid = uuid.UUID(conexao_id_limpo) if conexao_id_limpo else None
+                except (ValueError, TypeError):
+                    conexao_uuid = None
+
+                for texto_inbound in mensagens_pendentes:
+                    session.add(
+                        MensagemHistorico(
+                            lead_id=lead.id,
+                            conexao_id=conexao_uuid,
+                            texto=texto_inbound,
+                            from_me=False,
+                        )
+                    )
                 await session.commit()
+                state["lead_id"] = str(lead.id)
+                state["nome_contato"] = lead.nome_contato
+                state["resposta_final"] = None
+                state["fluxo_encerrado"] = True
+                print(
+                    "[NODE CRM] Bot pausado para este lead até "
+                    f"{lead.bot_pausado_ate}. Mensagem registrada no histórico e fluxo encerrado."
+                )
+                return state
+            await session.commit()
             state["nome_contato"] = lead.nome_contato
             state["lead_id"] = str(lead.id)
             print(f"[NODE CRM] Lead existente encontrado. ID: {state['lead_id']}")
@@ -2695,6 +2722,8 @@ async def node_especialista_dinamico(state: AgentState):
 
 # Função condicional de roteamento
 def router_crm(state: AgentState):
+    if state.get("fluxo_encerrado"):
+        return END
     if state.get("nome_contato") is None:
         return "capturar_nome"
     return "node_atendente"
@@ -2718,6 +2747,7 @@ workflow.add_conditional_edges(
     "node_crm",
     router_crm,
     {
+        END: END,
         "capturar_nome": "node_capturar_nome",
         "node_atendente": "node_atendente"
     }

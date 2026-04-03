@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, func
 from sqlalchemy.orm.attributes import flag_modified
@@ -127,9 +128,51 @@ async def tool_transferir_para_humano(lead_id: str, empresa_id: str, motivo: str
     Use esta ferramenta QUANDO PRECISAR TRANSFERIR o atendimento para um humano, pausando o bot. 
     Sempre avise o cliente que está transferindo ANTES ou JUNTO com a chamada desta ferramenta.
     """
-    # Apenas retorna a flag. A pausa real no banco será feita na borda do sistema (webhook)
-    # após a IA ter a chance de se despedir do cliente.
-    return "SISTEMA_BOT_PAUSADO"
+    try:
+        lead_uuid = uuid.UUID(str(lead_id))
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError):
+        return "SISTEMA_BOT_PAUSADO"
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.id == lead_uuid,
+                    CRMLead.empresa_id == empresa_uuid,
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                return "SISTEMA_BOT_PAUSADO"
+
+            # 1) Coloca o atendimento em modo manual.
+            lead.status_atendimento = "manual"
+
+            # 2) Pausa o bot por 24h.
+            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+
+            # 3) Aplica a tag oficial "Atendimento Humano" usando o ID real.
+            result_tag = await session.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == empresa_uuid,
+                    TagCRM.nome.ilike("Atendimento Humano"),
+                )
+            )
+            tag_humano = result_tag.scalars().first()
+            if tag_humano:
+                tags_atuais = lead.tags if isinstance(lead.tags, list) else []
+                tags_ids = [str(item).strip() for item in tags_atuais if str(item).strip()]
+                tag_id = str(tag_humano.id)
+                if tag_id not in tags_ids:
+                    tags_ids.append(tag_id)
+                    lead.tags = tags_ids
+                    flag_modified(lead, "tags")
+
+            await session.commit()
+            return "SISTEMA_BOT_PAUSADO"
+    except Exception:
+        return "SISTEMA_BOT_PAUSADO"
 
 
 @tool
