@@ -1890,7 +1890,7 @@ async def node_roteador_maestro(state: AgentState):
             reverse=True,
         )
 
-        margem_tolerancia = 0.18
+        margem_tolerancia = 0.08
         ids_por_margem: list[str] = []
         if candidatos_rankeados:
             melhor_score = _score_ajustado_candidato(candidatos_rankeados[0])
@@ -1908,13 +1908,16 @@ async def node_roteador_maestro(state: AgentState):
             if esp_id and esp_id in candidatos_por_id and esp_id not in ids_combinados:
                 ids_combinados.append(esp_id)
 
-        if len(ids_combinados) < 2 and len(candidatos_rankeados) >= 2:
+        if (not resposta_menu_numerica) and len(ids_combinados) < 2 and len(candidatos_rankeados) >= 2:
             score_top = _score_ajustado_candidato(candidatos_rankeados[0])
             score_segundo = _score_ajustado_candidato(candidatos_rankeados[1])
             if score_top > 0 and (score_top - score_segundo) / score_top <= 0.20:
                 segundo_id = str(candidatos_rankeados[1].get("id") or "").strip()
                 if segundo_id and segundo_id not in ids_combinados:
                     ids_combinados.append(segundo_id)
+
+        if resposta_menu_numerica and ids_combinados:
+            ids_combinados = ids_combinados[:1]
 
         especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_combinados if esp_id in candidatos_por_id]
 
@@ -2933,6 +2936,40 @@ async def node_especialista_dinamico(state: AgentState):
             state["respostas_especialistas"].append(
                 f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao, ensure_ascii=False)}"
             )
+
+            nome_especialista_norm = _normalizar_chave_especialista(nome_especialista_resultado)
+            fontes_norm = {_normalizar_chave_especialista(fonte) for fonte in fontes_unicas}
+            usou_transferencia = any(
+                chave in fontes_norm
+                for chave in {
+                    "tool_transferir_para_humano",
+                    "action_transferir_atendimento",
+                    "transferir_para_humano",
+                }
+            )
+            usou_tags_intencao = any(
+                chave in fontes_norm
+                for chave in {
+                    "tool_aplicar_tag_dinamica",
+                    "tool_atualizar_tags_lead",
+                }
+            )
+
+            # Isolamento de fila: se a triagem apenas classificou (tags) sem transferir,
+            # encerra a fila do turno atual e aguarda a próxima resposta do usuário.
+            if "triagem" in nome_especialista_norm and usou_tags_intencao and not usou_transferencia:
+                logger.info(
+                    "[QUEUE ISOLATION] Triagem classificou sem transferência; pausando fila atual."
+                )
+                state["fila_agentes"] = []
+                state["especialistas_identificados"] = []
+                state["especialistas_selecionados"] = []
+                pendentes = [
+                    str(acao).strip()
+                    for acao in (state.get("acoes_sistema_pendentes") or [])
+                    if str(acao).strip().lower() != "transferir_atendimento"
+                ]
+                state["acoes_sistema_pendentes"] = pendentes
 
             prompt_para_super_contexto = (
                 str(getattr(especialista_db, "prompt_sistema", "") or "").strip()
