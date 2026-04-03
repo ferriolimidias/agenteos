@@ -1759,6 +1759,7 @@ async def node_especialista_funcionamento(state: AgentState):
     excecoes_raw = []
     horario_inicio_legacy = None
     horario_fim_legacy = None
+    prompt_painel = ""
 
     if empresa_id:
         try:
@@ -1775,6 +1776,15 @@ async def node_especialista_funcionamento(state: AgentState):
                     h_fim = getattr(agenda_config, "horario_fim", None)
                     horario_inicio_legacy = h_inicio.strftime("%H:%M") if h_inicio else None
                     horario_fim_legacy = h_fim.strftime("%H:%M") if h_fim else None
+                result_esp = await session.execute(
+                    select(Especialista).where(
+                        Especialista.nome == "especialista_funcionamento",
+                        Especialista.empresa_id == empresa_uuid
+                    )
+                )
+                esp_db = result_esp.scalars().first()
+                if esp_db and esp_db.prompt_sistema:
+                    prompt_painel = esp_db.prompt_sistema
         except Exception as e:
             logger.error("[NODE ESPECIALISTA FUNCIONAMENTO] Falha ao carregar AgendaConfiguracao: %s", e)
 
@@ -1903,13 +1913,13 @@ async def node_especialista_funcionamento(state: AgentState):
         frase_hoje = f"Hoje, {dia_semana}, funcionamos das {inicio_hoje} às {fim_hoje}. No momento estamos {status_atual}."
 
     prompt_sistema = (
-        "Você é o especialista em horários da empresa. "
-        f"Hoje é {dia_semana}, {data_hora_atual}. "
-        f"Configuração de hoje ({dia_semana_curto}): {json.dumps(config_hoje, ensure_ascii=False)}. "
-        f"HISTORICO_CURTO_READ_ONLY: {historico_curto}. "
-        f"Frase-base obrigatória: {frase_hoje} "
-        "Sempre comece a resposta com essa frase-base (ou equivalente com os mesmos dados), "
-        "depois complemente de forma curta e cordial conforme a pergunta do cliente."
+        f"{prompt_painel}\n\n"
+        "--- DADOS DE SISTEMA OBRIGATÓRIOS (USE-OS PARA RESPONDER E COMANDAR A ATENDENTE) ---\n"
+        f"Hoje é {dia_semana}, {data_hora_atual}.\n"
+        f"Configuração de hoje ({dia_semana_curto}): {json.dumps(config_hoje, ensure_ascii=False)}.\n"
+        f"HISTORICO_CURTO_READ_ONLY: {historico_curto}.\n"
+        f"Frase-base sugerida pelos horários do banco: '{frase_hoje}'.\n"
+        "------------------------------------------------------------------------------------\n"
     )
 
     try:
@@ -1961,20 +1971,34 @@ async def node_especialista_localizacao(state: AgentState):
         state["especialista_respondeu_no_ciclo"] = True
         return state
 
+    prompt_painel = ""
     try:
         async with AsyncSessionLocal() as session:
             dados_unidades_formatados = await get_unidades_formatadas(empresa_id, session)
+            prompt_painel = ""
+            import uuid
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            result_esp = await session.execute(
+                select(Especialista).where(
+                    Especialista.nome == "especialista_localizacao",
+                    Especialista.empresa_id == empresa_uuid
+                )
+            )
+            esp_db = result_esp.scalars().first()
+            if esp_db and esp_db.prompt_sistema:
+                prompt_painel = esp_db.prompt_sistema
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA LOCALIZACAO] Falha ao buscar unidades: %s", e)
         dados_unidades_formatados = "(erro ao consultar unidades)"
 
     prompt_sistema = (
-        "Você é o Especialista de Localização. Use EXCLUSIVAMENTE os dados abaixo para responder sobre endereços e unidades.\n"
+        f"{prompt_painel}\n\n"
+        "--- DADOS DE SISTEMA OBRIGATÓRIOS (USE-OS PARA RESPONDER E COMANDAR A ATENDENTE) ---\n"
         f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
-        "[UNIDADES DA EMPRESA]\n"
+        "[UNIDADES DA EMPRESA CADASTRADAS NO BANCO]\n"
         f"{dados_unidades_formatados}\n"
         "[FIM DAS UNIDADES]\n"
-        "Responda de forma direta, clara e amigável, sem inventar dados."
+        "------------------------------------------------------------------------------------\n"
     )
 
     try:
@@ -2010,6 +2034,7 @@ async def node_especialista_saudacao(state: AgentState):
     historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
     saudacao_base_empresa = ""
+    prompt_painel = ""
     if empresa_id:
         try:
             empresa_uuid = uuid.UUID(str(empresa_id))
@@ -2018,19 +2043,28 @@ async def node_especialista_saudacao(state: AgentState):
                 empresa = result_empresa.scalars().first()
                 if empresa:
                     saudacao_base_empresa = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
+                result_esp = await session.execute(
+                    select(Especialista).where(
+                        Especialista.nome == "especialista_saudacao",
+                        Especialista.empresa_id == empresa_uuid
+                    )
+                )
+                esp_db = result_esp.scalars().first()
+                if esp_db and esp_db.prompt_sistema:
+                    prompt_painel = esp_db.prompt_sistema
         except Exception as e:
             logger.error("[NODE ESPECIALISTA SAUDACAO] Falha ao carregar empresa %s: %s", empresa_id, e)
 
     hora_atual = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M")
     prompt_saudacao = (
+        f"{prompt_painel}\n\n"
+        "--- DADOS DE SISTEMA OBRIGATÓRIOS (USE-OS PARA RESPONDER O CLIENTE) ---\n"
         f"Agora são {hora_atual}.\n"
-        "Sua única função é gerar a frase de saudação e recepção perfeita. "
-        "Analise a mensagem do usuário. Se for de manhã, diga Bom dia, à tarde Boa tarde, "
-        "à noite Boa noite. Espelhe a cordialidade do usuário. "
-        f"Integre a mensagem base da empresa: '{saudacao_base_empresa}'. "
-        f"Considere este histórico global apenas como leitura para contextualizar: {historico_global}. "
-        "RETORNE APENAS A SAUDAÇÃO GERADA, sem tentar responder a dúvidas "
-        "(outros especialistas farão isso)."
+        "MENSAGEM BASE DA EMPRESA OBRIGATÓRIA (COPIE-A LITERALMENTE):\n"
+        f"{saudacao_base_empresa}\n\n"
+        "REGRA CRÍTICA: Você DEVE incluir a MENSAGEM BASE DA EMPRESA na sua resposta final exatamente como ela está escrita. Se ela contiver um menu numérico, não o resuma e não altere a estrutura.\n"
+        f"Considere este histórico global apenas para leitura contextual: {historico_global}.\n"
+        "-----------------------------------------------------------------------\n"
     )
 
     try:
