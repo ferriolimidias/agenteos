@@ -210,6 +210,31 @@ def _normalizar_chave_especialista(valor: str) -> str:
     return "".join(ch for ch in texto_normalizado if not unicodedata.combining(ch)).strip().lower()
 
 
+def _is_primeiro_contato(state: "AgentState") -> bool:
+    flag_deterministica = state.get("primeiro_contato")
+    if isinstance(flag_deterministica, bool):
+        return flag_deterministica
+
+    total_hist = state.get("total_msgs_historico")
+    if isinstance(total_hist, int):
+        return total_hist <= 0
+
+    historico_bd = str(state.get("historico_bd") or "").strip()
+    if historico_bd:
+        return False
+
+    mensagens = _mensagens_estado(state)
+    mensagens_usuario = []
+    for item in mensagens:
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        if texto.lower().startswith("assistente:"):
+            continue
+        mensagens_usuario.append(texto)
+    return len(mensagens_usuario) <= 1
+
+
 def _prepend_resumo_cliente_system_prompt(state: AgentState, prompt: str) -> str:
     """
     Injeta o resumo de longo prazo do cliente e diretrizes obrigatórias de sistema
@@ -1146,6 +1171,8 @@ class AgentState(TypedDict):
     bot_foi_pausado: Optional[bool]
     fluxo_encerrado: Optional[bool]
     empresa: Optional[Any]
+    total_msgs_historico: Optional[int]
+    primeiro_contato: Optional[bool]
 
 class AnaliseRoteador(BaseModel):
     termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
@@ -1616,6 +1643,60 @@ async def node_roteador_maestro(state: AgentState):
         state["handoff_requested"] = False
         state["saudacao_pendente"] = False
         return state
+
+    if _is_primeiro_contato(state):
+        print("[NODE ROTEADOR] Primeiro contato detectado: pulando embeddings e forçando especialista de saudação.")
+        especialista_escolhido = None
+        if empresa_uuid:
+            try:
+                async with AsyncSessionLocal() as session:
+                    result_especialistas = await session.execute(
+                        select(Especialista).where(
+                            Especialista.empresa_id == empresa_uuid,
+                            Especialista.ativo.is_(True),
+                        )
+                    )
+                    especialistas_ativos = list(result_especialistas.scalars().all())
+
+                    def _prioridade_saudacao(esp: Especialista) -> int:
+                        nome_norm = _normalizar_chave_especialista(getattr(esp, "nome", "") or "")
+                        if nome_norm == "especialista_saudacao":
+                            return 0
+                        if "triagem" in nome_norm:
+                            return 1
+                        if "saudacao" in nome_norm:
+                            return 2
+                        return 99
+
+                    if especialistas_ativos:
+                        especialista_escolhido = min(especialistas_ativos, key=_prioridade_saudacao)
+            except Exception as exc:
+                logger.warning("[NODE ROTEADOR] Falha ao buscar especialista inicial de saudação: %s", exc)
+
+        especialista_saudacao = {
+            "id": str(getattr(especialista_escolhido, "id", "") or "especialista_saudacao"),
+            "nome": "especialista_saudacao",
+            "prompt_sistema": str(getattr(especialista_escolhido, "prompt_sistema", "") or ""),
+            "usar_rag": bool(getattr(especialista_escolhido, "usar_rag", False)),
+        }
+
+        nome_escolhido = str(getattr(especialista_escolhido, "nome", "") or "").strip() or "fallback:especialista_saudacao"
+        print(f"[NODE ROTEADOR] Saudação inicial selecionada: {nome_escolhido}")
+
+        respostas_existentes = state.get("respostas_especialistas") or []
+        if not isinstance(respostas_existentes, list):
+            respostas_existentes = []
+
+        state["saudacao_pendente"] = True
+        state["saudacao_processada"] = False
+        state["handoff_requested"] = False
+        state["especialistas_selecionados"] = [especialista_saudacao]
+        state["especialistas_identificados"] = ["especialista_saudacao"]
+        state["fila_agentes"] = ["especialista_saudacao"]
+        state["super_contexto_especialistas"] = ""
+        state["respostas_especialistas"] = respostas_existentes
+        return state
+
     state["saudacao_pendente"] = False
 
     handoff_markers = (

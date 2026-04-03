@@ -439,6 +439,8 @@ async def processar_bloco_mensagens(
         "resposta_final": None,
         "status_conversa": None,
         "especialista_respondeu_no_ciclo": False,
+        "total_msgs_historico": total_msgs_historico,
+        "primeiro_contato": total_msgs_historico == 0,
     }
 
     if lead_id_hist and total_msgs_historico > 0:
