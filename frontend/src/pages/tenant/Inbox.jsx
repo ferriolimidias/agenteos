@@ -638,14 +638,16 @@ export default function Inbox() {
     );
   }
 
-  const tagsOficiaisPorNome = useMemo(() => {
-    const map = new Map();
+  const tagsOficiaisLookup = useMemo(() => {
+    const porNome = new Map();
+    const porId = new Map();
     (tagsOficiais || []).forEach((tag) => {
       const nome = String(tag?.nome || "").trim().toLowerCase();
-      if (!nome) return;
-      map.set(nome, tag);
+      const id = String(tag?.id || "").trim();
+      if (nome) porNome.set(nome, tag);
+      if (id) porId.set(id, tag);
     });
-    return map;
+    return { porNome, porId };
   }, [tagsOficiais]);
 
   const filteredLeads = useMemo(() => {
@@ -672,7 +674,12 @@ export default function Inbox() {
       if (abaAtiva === "Sem Grupo" && tagsLead.length === 0) return true;
 
       const tagsOficiaisLead = tagsLead
-        .map((tag) => tagsOficiaisPorNome.get(String(tag || "").trim().toLowerCase()))
+        .map((tag) => {
+          const isObj = tag && typeof tag === "object";
+          const tagId = isObj ? String(tag.id || "").trim() : String(tag || "").trim();
+          const tagNome = isObj ? String(tag.nome || "").trim().toLowerCase() : String(tag || "").trim().toLowerCase();
+          return tagsOficiaisLookup.porId.get(tagId) || tagsOficiaisLookup.porNome.get(tagNome) || (isObj ? tag : null);
+        })
         .filter(Boolean);
 
       if (abaAtiva === "Sem Grupo") {
@@ -693,7 +700,7 @@ export default function Inbox() {
     };
 
     return leadsFiltrados.sort((a, b) => getLeadSortTime(b) - getLeadSortTime(a));
-  }, [abaAtiva, filtroStatus, grupos, leads, searchTerm, tagsOficiaisPorNome]);
+  }, [abaAtiva, filtroStatus, grupos, leads, searchTerm, tagsOficiaisLookup]);
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
   const selectedLeadPaused = Boolean(selectedLead?.bot_pausado);

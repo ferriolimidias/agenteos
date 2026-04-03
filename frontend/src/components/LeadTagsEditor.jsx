@@ -21,13 +21,15 @@ function getTagColorClass(tag) {
 }
 
 function getTagDefinitionMap(tagDefinitions) {
-  const output = new Map();
+  const byName = new Map();
+  const byId = new Map();
   (tagDefinitions || []).forEach((definition) => {
     const nome = String(definition?.nome || definition || "").trim();
-    if (!nome) return;
-    output.set(nome.toLowerCase(), definition);
+    const id = String(definition?.id || "").trim();
+    if (nome) byName.set(nome.toLowerCase(), definition);
+    if (id) byId.set(id, definition);
   });
-  return output;
+  return { byName, byId };
 }
 
 function getTagInlineStyle(tagDefinition) {
@@ -45,7 +47,10 @@ function normalizeTags(tags) {
   const seen = new Set();
 
   (tags || []).forEach((tag) => {
-    const clean = String(tag || "").trim();
+    const isObjectTag = tag && typeof tag === "object";
+    const clean = isObjectTag
+      ? String(tag.id || tag.nome || "").trim()
+      : String(tag || "").trim();
     if (!clean) return;
     const key = clean.toLowerCase();
     if (seen.has(key)) return;
@@ -69,11 +74,25 @@ export default function LeadTagsEditor({
 
   const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
   const tagDefinitionsMap = useMemo(() => getTagDefinitionMap(tagDefinitions), [tagDefinitions]);
+  const selectedTagLabelsMap = useMemo(() => {
+    const map = new Map();
+    (tags || []).forEach((tag) => {
+      if (!tag || typeof tag !== "object") return;
+      const key = String(tag.id || tag.nome || "").trim();
+      const label = String(tag.nome || tag.id || "").trim();
+      if (!key || !label) return;
+      map.set(key, label);
+    });
+    return map;
+  }, [tags]);
   const availableTagNames = useMemo(
     () =>
       (tagDefinitions || [])
-        .map((definition) => String(definition?.nome || "").trim())
-        .filter(Boolean),
+        .map((definition) => ({
+          id: String(definition?.id || "").trim(),
+          nome: String(definition?.nome || "").trim(),
+        }))
+        .filter((definition) => Boolean(definition.id || definition.nome)),
     [tagDefinitions]
   );
 
@@ -112,28 +131,36 @@ export default function LeadTagsEditor({
     <div className={`space-y-2 ${className}`}>
       <div className="flex flex-wrap items-center gap-2">
         {normalizedTags.length > 0 ? (
-          normalizedTags.map((tag) => (
-            <span
-              key={tag}
-              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${getTagColorClass(tag)}`}
-              style={getTagInlineStyle(tagDefinitionsMap.get(tag.toLowerCase()))}
-            >
-              <Tag size={12} />
-              <span>{tag}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRemoveTag(tag);
-                }}
-                className="rounded-full p-0.5 transition-colors hover:bg-white/60"
-                disabled={saving}
-                aria-label={`Remover tag ${tag}`}
+          normalizedTags.map((tag) => {
+            const tagDefinition =
+              tagDefinitionsMap.byId.get(tag) ||
+              tagDefinitionsMap.byName.get(String(tag).toLowerCase());
+            const label =
+              selectedTagLabelsMap.get(tag) ||
+              String(tagDefinition?.nome || tagDefinition?.id || tag || "").trim();
+            return (
+              <span
+                key={tag}
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${getTagColorClass(label)}`}
+                style={getTagInlineStyle(tagDefinition)}
               >
-                <X size={12} />
-              </button>
-            </span>
-          ))
+                <Tag size={12} />
+                <span>{label || tag}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemoveTag(tag);
+                  }}
+                  className="rounded-full p-0.5 transition-colors hover:bg-white/60"
+                  disabled={saving}
+                  aria-label={`Remover tag ${label || tag}`}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            );
+          })
         ) : (
           <span className="text-xs text-gray-400">Sem tags</span>
         )}
@@ -149,11 +176,13 @@ export default function LeadTagsEditor({
         <div className={`rounded-xl border border-gray-200 bg-white ${compact ? "p-2" : "p-3"}`}>
           <p className={`mb-2 text-gray-500 ${compact ? "text-[11px]" : "text-xs"}`}>{placeholder}</p>
           <div className={`grid gap-2 ${compact ? "grid-cols-1" : "grid-cols-2"}`}>
-            {availableTagNames.map((tagName) => {
-              const checked = normalizedTags.some((tag) => tag.toLowerCase() === tagName.toLowerCase());
+            {availableTagNames.map((tagOption) => {
+              const tagKey = tagOption.id || tagOption.nome;
+              const tagLabel = tagOption.nome || tagOption.id;
+              const checked = normalizedTags.some((tag) => tag.toLowerCase() === String(tagKey).toLowerCase());
               return (
                 <label
-                  key={tagName}
+                  key={tagKey}
                   className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-medium ${
                     checked ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 bg-white text-gray-600"
                   }`}
@@ -163,10 +192,10 @@ export default function LeadTagsEditor({
                     checked={checked}
                     disabled={saving}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={() => handleToggleOfficialTag(tagName)}
+                    onChange={() => handleToggleOfficialTag(tagKey)}
                     className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span>{tagName}</span>
+                  <span>{tagLabel}</span>
                 </label>
               );
             })}

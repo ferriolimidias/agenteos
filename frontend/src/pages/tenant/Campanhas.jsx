@@ -402,8 +402,14 @@ export default function Campanhas() {
 
   const handleRemoveLeadFromList = async (lead, lista) => {
     const nextTags = (lead.tags || []).filter(
-      (tag) => String(tag).trim().toLowerCase() !== String(lista.tag).trim().toLowerCase()
-    );
+      (tag) => {
+        const tagId = tag && typeof tag === "object" ? String(tag.id || "").trim() : String(tag || "").trim();
+        const tagNome = tag && typeof tag === "object" ? String(tag.nome || "").trim().toLowerCase() : String(tag || "").trim().toLowerCase();
+        if (tagId && tagId === String(lista.tag_id || "").trim()) return false;
+        if (tagNome && tagNome === String(lista.tag || "").trim().toLowerCase()) return false;
+        return true;
+      }
+    ).map((tag) => (tag && typeof tag === "object" ? String(tag.id || "").trim() : String(tag || "").trim())).filter(Boolean);
     await handleSaveLeadTags(lead.id, nextTags);
     setSelectedListaLeads((prev) => prev.filter((item) => item.id !== lead.id));
   };
