@@ -145,6 +145,7 @@ class EspecialistaBase(BaseModel):
     prompt_sistema: str
     usar_rag: bool = False
     usar_agenda: bool = False
+    peso_prioridade: int = Field(default=1, ge=1)
     ativo: bool = True
 
 class EspecialistaCreate(EspecialistaBase):
@@ -156,6 +157,7 @@ class EspecialistaUpdate(BaseModel):
     prompt_sistema: str | None = None
     usar_rag: bool | None = None
     usar_agenda: bool | None = None
+    peso_prioridade: int | None = Field(default=None, ge=1)
     ativo: bool | None = None
 
 class EspecialistaResponse(EspecialistaBase):

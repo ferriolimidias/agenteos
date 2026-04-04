@@ -21,7 +21,7 @@ export default function Orquestrador() {
   const [submitting, setSubmitting] = useState(false);
 
   // Forms
-  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
+  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
   const [formFerramenta, setFormFerramenta] = useState({ 
     nome_ferramenta: "", 
     descricao_ia: "",
@@ -96,16 +96,26 @@ export default function Orquestrador() {
     e.preventDefault();
     try {
       setSubmitting(true);
+      const pesoPrioridadeNumero = Number(formEspecialista.peso_prioridade);
+      if (!Number.isFinite(pesoPrioridadeNumero) || pesoPrioridadeNumero < 1) {
+        alert("O Peso de Prioridade deve ser um número maior ou igual a 1.");
+        setSubmitting(false);
+        return;
+      }
+      const payloadEspecialista = {
+        ...formEspecialista,
+        peso_prioridade: Math.max(1, Math.trunc(pesoPrioridadeNumero)),
+      };
       if (editingEspecialistaId) {
-        await api.put(`/admin/orquestrador/empresas/${empresaSelecionadaId}/especialistas/${editingEspecialistaId}`, formEspecialista);
+        await api.put(`/admin/orquestrador/empresas/${empresaSelecionadaId}/especialistas/${editingEspecialistaId}`, payloadEspecialista);
         alert("Especialista atualizado com sucesso!");
       } else {
-        await api.post(`/admin/orquestrador/empresas/${empresaSelecionadaId}/especialistas`, formEspecialista);
+        await api.post(`/admin/orquestrador/empresas/${empresaSelecionadaId}/especialistas`, payloadEspecialista);
         alert("Especialista criado com sucesso!");
       }
       setShowEspecialistaModal(false);
       setEditingEspecialistaId(null);
-      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
+      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
       fetchEspecialistas();
     } catch (err) {
       alert("Erro ao salvar especialista");
@@ -132,6 +142,7 @@ export default function Orquestrador() {
       modelo_ia: esp.modelo_ia || "gpt-4o-mini",
       usar_rag: esp.usar_rag || false,
       usar_agenda: esp.usar_agenda || false,
+      peso_prioridade: Number(esp.peso_prioridade || 1),
       ferramentas_ids: esp.ferramentas_ids || []
     });
     setEditingEspecialistaId(esp.id);
@@ -270,7 +281,7 @@ export default function Orquestrador() {
                 <button 
                   onClick={() => {
                     setEditingEspecialistaId(null);
-                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, ferramentas_ids: [] });
+                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
                     setShowEspecialistaModal(true);
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
@@ -295,6 +306,9 @@ export default function Orquestrador() {
                             <CheckCircle size={16} className="text-green-500" /> {esp.nome}
                           </h3>
                           <span className="bg-gray-800 text-xs px-2 py-1 rounded-md text-gray-300 font-mono mt-1 inline-block">ID: {esp.id.substring(0,8)}</span>
+                          <span className="bg-indigo-900/40 border border-indigo-700 text-xs px-2 py-1 rounded-md text-indigo-300 font-semibold mt-1 ml-2 inline-block">
+                            Peso: {Number(esp.peso_prioridade || 1)}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <button onClick={() => openEditEspecialista(esp)} className="text-gray-400 hover:text-white p-1 rounded transition-colors" title="Editar">
@@ -408,6 +422,21 @@ export default function Orquestrador() {
                   {modelosDisponiveis.map(m => <option key={m} value={m}>{m}</option>)}
                   {!modelosDisponiveis.includes("gpt-4o-mini") && <option value="gpt-4o-mini">gpt-4o-mini</option>}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-300 mb-1">Peso de Prioridade</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                  value={formEspecialista.peso_prioridade}
+                  onChange={(e) => setFormEspecialista({...formEspecialista, peso_prioridade: e.target.value})}
+                />
+                <p className="text-xs text-indigo-400 mt-1">
+                  Define a prioridade deste agente na fila. Agentes com maior peso agem primeiro.
+                </p>
               </div>
 
               {/* RAG Toggle */}

@@ -21,6 +21,7 @@ class EspecialistaCreate(BaseModel):
     modelo_ia: Optional[str] = "gpt-4o-mini"
     usar_rag: Optional[bool] = False
     usar_agenda: Optional[bool] = False
+    peso_prioridade: Optional[int] = Field(default=1, ge=1)
     ferramentas_ids: Optional[List[str]] = Field(default_factory=list)
 
 class FerramentaCreate(BaseModel):
@@ -52,6 +53,7 @@ async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_d
             "modelo_ia": getattr(esp, 'modelo_ia', "gpt-4o-mini"),
             "usar_rag": getattr(esp, 'usar_rag', False),
             "usar_agenda": getattr(esp, 'usar_agenda', False),
+            "peso_prioridade": int(getattr(esp, "peso_prioridade", 1) or 1),
             "ferramentas_ids": [str(f.id) for f in esp.ferramentas] if esp.ferramentas else []
         })
     return retorno
@@ -72,6 +74,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         modelo_ia=payload.modelo_ia,
         usar_rag=payload.usar_rag,
         usar_agenda=payload.usar_agenda,
+        peso_prioridade=int(payload.peso_prioridade or 1),
         ativo=True
     )
     
@@ -98,6 +101,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         "modelo_ia": getattr(novo, 'modelo_ia', 'gpt-4o-mini'),
         "usar_rag": novo.usar_rag,
         "usar_agenda": novo.usar_agenda,
+        "peso_prioridade": int(getattr(novo, "peso_prioridade", 1) or 1),
         "ferramentas_ids": [str(f.id) for f in novo.ferramentas] if novo.ferramentas else []
     }
 
@@ -141,6 +145,7 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     especialista.modelo_ia = payload.modelo_ia
     especialista.usar_rag = payload.usar_rag
     especialista.usar_agenda = payload.usar_agenda
+    especialista.peso_prioridade = int(payload.peso_prioridade or 1)
     
     
     # Atualizar ferramentas

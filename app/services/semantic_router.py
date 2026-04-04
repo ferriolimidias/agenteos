@@ -367,6 +367,7 @@ class SemanticRouterService:
                     "id": str(especialista.id),
                     "nome": str(getattr(especialista, "nome", "") or ""),
                     "modelo_ia": str(getattr(especialista, "modelo_ia", "") or "").strip(),
+                    "peso_prioridade": int(getattr(especialista, "peso_prioridade", 1) or 1),
                     "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
                     "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
                     "usar_rag": bool(getattr(especialista, "usar_rag", False)),
@@ -374,6 +375,15 @@ class SemanticRouterService:
                     "similarity": float(similarity or 0.0),
                 }
             )
+
+        # Weighted routing: primeiro peso do especialista, depois similaridade semântica.
+        candidatos.sort(
+            key=lambda item: (
+                int(item.get("peso_prioridade", 1) or 1),
+                float(item.get("similarity", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
 
         return {"termos_expandidos": query_vetorial, "candidatos": candidatos}
 

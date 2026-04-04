@@ -251,6 +251,7 @@ class Especialista(Base):
     descricao_roteamento = Column(Text, nullable=True)
     prompt_sistema = Column(Text, nullable=False)
     modelo_ia = Column(String, default="gpt-4o-mini")
+    peso_prioridade = Column(Integer, nullable=False, default=1)
     usar_rag = Column(Boolean, default=False)
     usar_agenda = Column(Boolean, nullable=False, default=False)
     ativo = Column(Boolean, default=True)
