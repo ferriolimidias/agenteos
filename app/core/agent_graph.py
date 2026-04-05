@@ -1808,17 +1808,21 @@ async def node_roteador_maestro(state: AgentState):
 
         def _score_ajustado_candidato(item: dict) -> float:
             score_base = float(item.get("similarity") or 0.0)
+            peso = int(item.get("peso_prioridade", 1) or 1)
+            # O peso atua como um bônus agressivo no score (cada ponto dá 15% de bônus)
+            score_ponderado = score_base + (peso * 0.15)
             nome_norm = _normalizar_chave_especialista(str(item.get("nome") or ""))
             if continuidade_menu_ativa and "triagem_microline" in nome_norm:
-                return min(1.0, score_base + 0.12)
+                return min(1.0, score_ponderado + 0.12)
             if continuidade_menu_ativa and "triagem" in nome_norm:
-                return min(1.0, score_base + 0.08)
-            return score_base
+                return min(1.0, score_ponderado + 0.08)
+            return score_ponderado
 
         candidatos_payload = [
             {
                 "id": str(item.get("id") or "").strip(),
                 "nome": str(item.get("nome") or "").strip(),
+                "peso_prioridade": int(item.get("peso_prioridade", 1) or 1),
                 "modelo_ia": str(item.get("modelo_ia") or "").strip(),
                 "missao": str(item.get("descricao_missao") or "").strip(),
                 "similaridade": float(item.get("similarity") or 0.0),
@@ -1846,14 +1850,11 @@ async def node_roteador_maestro(state: AgentState):
                 "Você é o Maestro do AgenteOS. "
                 f"Analise o histórico e a intenção expandida: '{termos_expandidos}'.\n"
                 "Sua missão é selecionar, dentre os candidatos abaixo, quais devem ser acionados para responder ao usuário.\n"
-                "REGRAS:\n"
-                "- Você pode selecionar MAIS DE UM especialista se a dúvida for mista.\n"
-                "- Dê prioridade absoluta a especialistas de 'Triagem' ou 'Financeiro/Pedagógico' se o contexto indicar uma escolha de menu.\n"
-                "- É OBRIGATÓRIO considerar a ÚLTIMA MENSAGEM DA IA para resolver respostas curtas do usuário (ex.: '1', '2', 'sim').\n"
-                "- Se a última mensagem da IA continha menu/opções e o usuário respondeu com número, mapeie o número para a opção correspondente.\n"
-                "- Em caso de dúvida razoável entre especialistas próximos, devolva PELO MENOS 2 IDs.\n"
-                "- Evite retornar apenas 1 ID quando houver candidatos com score ajustado semelhante.\n"
-                "- Se nenhum candidato for realmente relevante, retorne uma lista vazia.\n"
+                "REGRAS CRÍTICAS:\n"
+                "- Você DEVE dar preferência absoluta aos especialistas com maior 'peso_prioridade' (ex: 2, 3), incluindo-os sempre que o contexto for de vendas ou serviços.\n"
+                "- Se a última mensagem da IA continha menu e o usuário respondeu com número (ex: '3'), NÃO escolha apenas o agente de Triagem. VOCÊ DEVE incluir os especialistas comerciais que tratam daquela opção (Vendas, Cursos, etc).\n"
+                "- Junte especialistas na fila! Se houver um de Triagem (peso 1) e um de Vendas (peso 3), devolva os IDs de AMBOS.\n"
+                "- É OBRIGATÓRIO considerar a ÚLTIMA MENSAGEM DA IA para resolver respostas curtas.\n"
                 "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
             )
             entrada_decisao = (
@@ -1906,18 +1907,18 @@ async def node_roteador_maestro(state: AgentState):
             if esp_id and esp_id in candidatos_por_id and esp_id not in ids_combinados:
                 ids_combinados.append(esp_id)
 
-        if (not resposta_menu_numerica) and len(ids_combinados) < 2 and len(candidatos_rankeados) >= 2:
-            score_top = _score_ajustado_candidato(candidatos_rankeados[0])
-            score_segundo = _score_ajustado_candidato(candidatos_rankeados[1])
-            if score_top > 0 and (score_top - score_segundo) / score_top <= 0.20:
-                segundo_id = str(candidatos_rankeados[1].get("id") or "").strip()
-                if segundo_id and segundo_id not in ids_combinados:
-                    ids_combinados.append(segundo_id)
-
-        if resposta_menu_numerica and ids_combinados:
-            ids_combinados = ids_combinados[:1]
-
+        # Removemos os bloqueios restritivos de menu para permitir que a fila
+        # atue livremente baseada nos pesos e no LLM.
         especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_combinados if esp_id in candidatos_por_id]
+        
+        # Força a ordenação final da fila pelo MAIOR PESO para que sejam despachados primeiro
+        especialistas_match.sort(
+            key=lambda x: (
+                int(x.get("peso_prioridade", 1) or 1),
+                _score_ajustado_candidato(x)
+            ),
+            reverse=True
+        )
 
         # Fallback determinístico: resposta numérica para menu da mensagem anterior da IA.
         ultima_msg_usuario = str(ultima_mensagem or "").strip().lower()
