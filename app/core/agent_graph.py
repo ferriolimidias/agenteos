@@ -104,7 +104,6 @@ from app.core.llm_factory import normalize_model_name
 from app.core.tools import (
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
-    tool_transferir_para_humano,
     tool_consultar_tags_empresa,
 )
 from langchain_core.tools import StructuredTool, tool
@@ -1003,7 +1002,6 @@ MAP_FUNCOES_NATIVAS = {
     "transferir_para_humano": transferir_para_humano,
     "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
-    "tool_transferir_para_humano": tool_transferir_para_humano.coroutine,
     "tool_consultar_tags_empresa": tool_consultar_tags_empresa.coroutine,
 }
 
@@ -2560,70 +2558,6 @@ async def node_especialista_dinamico(state: AgentState):
                         "e converter a conversa em um compromisso marcado, utilizando as ferramentas de agenda fornecidas.\n"
                     )
 
-                # Fallback temporário para testes: injeta as novas tools em todos os especialistas dinâmicos.
-                if lead_id and empresa_id:
-                    async def _tool_consultar_tags_empresa_contextual() -> str:
-                        return await tool_consultar_tags_empresa.coroutine(
-                            empresa_id=str(empresa_id),
-                        )
-
-                    async def _tool_aplicar_tag_dinamica_contextual(tag_id: str) -> str:
-                        return await tool_aplicar_tag_dinamica.coroutine(
-                            lead_id=str(lead_id),
-                            empresa_id=str(empresa_id),
-                            tag_id=tag_id,
-                        )
-
-                    async def _tool_transferir_para_humano_contextual(motivo: Optional[str] = None) -> str:
-                        return await tool_transferir_para_humano.coroutine(
-                            lead_id=str(lead_id),
-                            empresa_id=str(empresa_id),
-                            motivo=motivo,
-                        )
-
-                    ferramentas_contextuais = [
-                        StructuredTool(
-                            name="tool_consultar_tags_empresa",
-                            description=(
-                                "Retorna a lista oficial de etiquetas com NOME e ID. "
-                                "Use isso antes de aplicar qualquer tag."
-                            ),
-                            args_schema=ToolConsultarTagsEmpresaInput,
-                            coroutine=_tool_consultar_tags_empresa_contextual,
-                        ),
-                        StructuredTool(
-                            name="tool_aplicar_tag_dinamica",
-                            description=(
-                                "Aplica uma tag oficial existente ao lead atual usando o tag_id (UUID). "
-                                "Consulte antes com tool_consultar_tags_empresa para obter IDs válidos."
-                            ),
-                            args_schema=ToolAplicarTagDinamicaInput,
-                            coroutine=_tool_aplicar_tag_dinamica_contextual,
-                        ),
-                        StructuredTool(
-                            name="tool_transferir_para_humano",
-                            description=(
-                                "Pausa o bot no lead atual e transfere o atendimento para humano. "
-                                "Quando usada, o fluxo do bot deve encerrar neste turno."
-                            ),
-                            args_schema=ToolTransferirParaHumanoInput,
-                            coroutine=_tool_transferir_para_humano_contextual,
-                        ),
-                    ]
-                    for tool_ctx in ferramentas_contextuais:
-                        nome_tool_ctx = str(getattr(tool_ctx, "name", "")).strip()
-                        if not nome_tool_ctx or nome_tool_ctx in nomes_tools_registradas:
-                            continue
-                        tools_disponiveis.append(tool_ctx)
-                        nomes_tools_registradas.add(nome_tool_ctx)
-                    descricoes_tools.extend(
-                        [
-                            "- tool_consultar_tags_empresa: retorna etiquetas oficiais com nome e ID.",
-                            "- tool_aplicar_tag_dinamica: aplica uma tag oficial ao lead atual usando tag_id (UUID).",
-                            "- tool_transferir_para_humano: pausa o bot e transfere para atendimento humano.",
-                        ]
-                    )
-
                 for conexao in (especialista_db.api_connections if especialista_db else []):
                     try:
                         nova_tool = create_dynamic_tool(conexao)
@@ -2702,22 +2636,6 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_atualizar_tags_lead_contextual
-                            elif chave_nativa == "tool_transferir_para_humano":
-                                async def _tool_transferir_para_humano_contextual(
-                                    motivo: Optional[str] = None,
-                                    _lead_id: str | None = str(lead_id) if lead_id else None,
-                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
-                                    _coroutine_native=coroutine_native,
-                                ) -> str:
-                                    if not _lead_id or not _empresa_id:
-                                        return "SISTEMA_BOT_PAUSADO"
-                                    return await _coroutine_native(
-                                        lead_id=_lead_id,
-                                        empresa_id=_empresa_id,
-                                        motivo=motivo,
-                                    )
-
-                                coroutine_native = _tool_transferir_para_humano_contextual
                             elif chave_nativa == "tool_consultar_tags_empresa":
                                 async def _tool_consultar_tags_empresa_contextual(
                                     _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
