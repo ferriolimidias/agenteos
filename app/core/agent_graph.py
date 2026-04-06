@@ -996,10 +996,18 @@ def criar_ferramenta_transferir_atendimento_contextual(
         coroutine=_tool,
     )
 
+
+def transferir_para_humano(motivo: str = "Solicitação de suporte") -> str:
+    """
+    Pausa o bot por 24 horas e marca o atendimento como 'manual'.
+    """
+    return f"SUCESSO_TRANSFERENCIA: Bot será pausado. Motivo: {motivo}"
+
+
 MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
-    "transferir_para_humano": transferir_para_humano,
+    "transferir_para_humano": transferir_para_humano,  # ADICIONE ESTA LINHA
     "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
     "tool_consultar_tags_empresa": tool_consultar_tags_empresa.coroutine,
