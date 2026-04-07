@@ -997,13 +997,6 @@ def criar_ferramenta_transferir_atendimento_contextual(
     )
 
 
-def transferir_para_humano(motivo: str = "Solicitação de suporte") -> str:
-    """
-    Pausa o bot por 24 horas e marca o atendimento como 'manual'.
-    """
-    return f"SUCESSO_TRANSFERENCIA: Bot será pausado. Motivo: {motivo}"
-
-
 MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
@@ -2655,6 +2648,24 @@ async def node_especialista_dinamico(state: AgentState):
                                     return await _coroutine_native(empresa_id=_empresa_id)
 
                                 coroutine_native = _tool_consultar_tags_empresa_contextual
+                            elif chave_nativa == "transferir_para_humano":
+                                async def _tool_transferir_para_humano_contextual(
+                                    *args,
+                                    _telefone: str | None = str(state.get("identificador_origem") or "").strip() or None,
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                    **kwargs
+                                ) -> str:
+                                    if not _telefone or not _empresa_id:
+                                        return "Erro ao transferir: contexto ausente (telefone ou empresa_id não encontrados no state)."
+                                    
+                                    # Executa a função async original que faz o update real no banco de dados
+                                    res = await _coroutine_native(telefone=_telefone, empresa_id=_empresa_id)
+                                    
+                                    # O gatilho "[SISTEMA_BOT_PAUSADO]" avisa a síntese do LangGraph para travar a fila
+                                    return str(res) + " [SISTEMA_BOT_PAUSADO]"
+
+                                coroutine_native = _tool_transferir_para_humano_contextual
 
                             nova_tool = StructuredTool(
                                 name=tool_name,
