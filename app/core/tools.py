@@ -60,26 +60,23 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
         flag_modified(lead, "tags")
 
         # 4. Recarregar as tags aplicadas do banco para avaliar ações automáticas nativas
+        # Importante: usar UUIDs nativos para evitar falha de tipagem no IN com coluna UUID.
         tags_aplicadas: list[TagCRM] = []
-        if ids_finais:
-            tags_uuids = []
-            for tag_id in ids_finais:
-                try:
-                    tags_uuids.append(uuid.UUID(str(tag_id)))
-                except (ValueError, TypeError):
-                    continue
-            if tags_uuids:
-                result_tags_aplicadas = await session.execute(
-                    select(TagCRM).where(
-                        TagCRM.empresa_id == lead.empresa_id,
-                        TagCRM.id.in_(tags_uuids),
-                    )
+        lista_de_ids_aplicados = [getattr(tag_obj, "id", None) for tag_obj in tags_encontradas]
+        lista_de_ids_aplicados = [tag_id for tag_id in lista_de_ids_aplicados if tag_id is not None]
+        if lista_de_ids_aplicados:
+            result_tags_aplicadas = await session.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == lead.empresa_id,
+                    TagCRM.id.in_(lista_de_ids_aplicados),
                 )
-                tags_aplicadas = result_tags_aplicadas.scalars().all()
+            )
+            tags_aplicadas = result_tags_aplicadas.scalars().all()
+        print(f"Tags encontradas no banco para pausa: {len(tags_aplicadas)}")
 
         # 5. Se alguma tag exigir transferência humana, pausa bot com update explícito.
         for tag in tags_aplicadas:
-            if not bool(getattr(tag, "acao_transferir_humano", False)):
+            if not tag.acao_transferir_humano:
                 continue
 
             lead.status_atendimento = "manual"
