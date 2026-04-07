@@ -58,6 +58,45 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
         # 3. Atualizar e Salvar
         lead.tags = ids_finais
         flag_modified(lead, "tags")
+
+        # 4. Recarregar as tags aplicadas do banco para avaliar ações automáticas nativas
+        tags_aplicadas: list[TagCRM] = []
+        if ids_finais:
+            tags_uuids = []
+            for tag_id in ids_finais:
+                try:
+                    tags_uuids.append(uuid.UUID(str(tag_id)))
+                except (ValueError, TypeError):
+                    continue
+            if tags_uuids:
+                result_tags_aplicadas = await session.execute(
+                    select(TagCRM).where(
+                        TagCRM.empresa_id == lead.empresa_id,
+                        TagCRM.id.in_(tags_uuids),
+                    )
+                )
+                tags_aplicadas = result_tags_aplicadas.scalars().all()
+
+        # 5. Se alguma tag exigir transferência humana, pausa bot e força instrução da síntese final
+        tag_com_transferencia = next(
+            (tag for tag in tags_aplicadas if bool(getattr(tag, "acao_transferir_humano", False))),
+            None,
+        )
+        if tag_com_transferencia:
+            lead.status_atendimento = "manual"
+            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+            await session.commit()
+            print("--- [DEBUG TOOL] Commit com pausa de bot realizado com sucesso! --- \n")
+
+            mensagem_transferencia = str(getattr(tag_com_transferencia, "mensagem_transferencia", "") or "").strip()
+            if mensagem_transferencia:
+                return (
+                    "Tags aplicadas com sucesso. [SISTEMA_BOT_PAUSADO]. "
+                    "INSTRUÇÃO CRÍTICA PARA A SÍNTESE FINAL: O bot foi pausado. "
+                    f"Você DEVE responder ao cliente EXATAMENTE com esta mensagem e nada mais: '{mensagem_transferencia}'"
+                )
+            return "Tags aplicadas com sucesso. [SISTEMA_BOT_PAUSADO]. O bot foi pausado."
+
         await session.commit()
         print("--- [DEBUG TOOL] Commit realizado com sucesso! --- \n")
 

@@ -949,6 +949,8 @@ class TagCRMBase(BaseModel):
     grupo_id: str | None = None
     disparar_conversao_ads: bool = False
     acao_fechamento: bool = False
+    acao_transferir_humano: bool = False
+    mensagem_transferencia: str | None = None
 
 
 class TagCRMCreate(TagCRMBase):
@@ -962,6 +964,8 @@ class TagCRMUpdate(BaseModel):
     grupo_id: str | None = None
     disparar_conversao_ads: bool | None = None
     acao_fechamento: bool | None = None
+    acao_transferir_humano: bool | None = None
+    mensagem_transferencia: str | None = None
 
 
 class TagCRMResponse(TagCRMBase):
@@ -1740,6 +1744,8 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
+            "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
         for tag in tags
@@ -1790,6 +1796,8 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
         instrucao_ia=(data.instrucao_ia or "").strip() or None,
         disparar_conversao_ads=bool(data.disparar_conversao_ads),
         acao_fechamento=bool(data.acao_fechamento),
+        acao_transferir_humano=bool(data.acao_transferir_humano),
+        mensagem_transferencia=(data.mensagem_transferencia or "").strip() or None,
     )
     db.add(tag)
 
@@ -1804,6 +1812,8 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
+            "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:
@@ -1856,6 +1866,10 @@ async def atualizar_tag_crm_oficial(
         tag.disparar_conversao_ads = bool(data.disparar_conversao_ads)
     if data.acao_fechamento is not None:
         tag.acao_fechamento = bool(data.acao_fechamento)
+    if data.acao_transferir_humano is not None:
+        tag.acao_transferir_humano = bool(data.acao_transferir_humano)
+    if data.mensagem_transferencia is not None:
+        tag.mensagem_transferencia = str(data.mensagem_transferencia).strip() or None
     if data.grupo_id is not None:
         if data.grupo_id == "":
             tag.grupo_id = None
@@ -1886,6 +1900,8 @@ async def atualizar_tag_crm_oficial(
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
+            "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
     except Exception as e:

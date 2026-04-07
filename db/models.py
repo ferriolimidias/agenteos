@@ -406,6 +406,8 @@ class TagCRM(Base):
     instrucao_ia = Column(Text, nullable=True)
     disparar_conversao_ads = Column(Boolean, nullable=False, default=False)
     acao_fechamento = Column(Boolean, nullable=False, default=False)
+    acao_transferir_humano = Column(Boolean, default=False, server_default=text('false'))
+    mensagem_transferencia = Column(Text, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="tags_crm")

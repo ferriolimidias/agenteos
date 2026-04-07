@@ -11,6 +11,8 @@ const initialTagForm = {
   grupo_id: "",
   disparar_conversao_ads: false,
   acao_fechamento: false,
+  acao_transferir_humano: false,
+  mensagem_transferencia: "",
 };
 
 const initialGroupForm = {
@@ -112,6 +114,8 @@ export default function GestaoTags() {
       grupo_id: tag.grupo_id || "",
       disparar_conversao_ads: Boolean(tag.disparar_conversao_ads),
       acao_fechamento: Boolean(tag.acao_fechamento),
+      acao_transferir_humano: Boolean(tag.acao_transferir_humano),
+      mensagem_transferencia: tag.mensagem_transferencia || "",
     });
     setShowModal(true);
   };
@@ -133,6 +137,7 @@ export default function GestaoTags() {
       const payload = {
         ...formData,
         grupo_id: formData.grupo_id || null,
+        mensagem_transferencia: (formData.mensagem_transferencia || "").trim() || null,
       };
       if (editingTag) {
         await api.put(`/empresas/${empresaId}/crm/tags/oficiais/${editingTag.id}`, payload);
@@ -639,6 +644,55 @@ export default function GestaoTags() {
                         />
                       </button>
                     </div>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 mt-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">
+                          Pausar bot ao aplicar esta tag (Transferir para Humano)
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Se ativado, a aplicação da tag pausa o bot por 24h e transfere o atendimento para humano.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.acao_transferir_humano}
+                        onClick={() =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            acao_transferir_humano: !prev.acao_transferir_humano,
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          formData.acao_transferir_humano ? "bg-blue-600" : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                            formData.acao_transferir_humano ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Mensagem Automática de Transferência
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={formData.mensagem_transferencia}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, mensagem_transferencia: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      placeholder="Se preenchido, o agente enviará exatamente esta mensagem ao aplicar a tag."
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Se preenchido, o agente enviará exatamente esta mensagem ao aplicar a tag.
+                    </p>
                   </div>
                 </div>
               </div>
