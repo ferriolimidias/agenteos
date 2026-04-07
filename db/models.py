@@ -14,6 +14,7 @@ from sqlalchemy import (
     Time,
     Enum,
     event,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -252,6 +253,7 @@ class Especialista(Base):
     prompt_sistema = Column(Text, nullable=False)
     modelo_ia = Column(String, default="gpt-4o-mini")
     peso_prioridade = Column(Integer, nullable=False, default=1)
+    fixo_no_roteador = Column(Boolean, default=False, server_default=text('false'))
     usar_rag = Column(Boolean, default=False)
     usar_agenda = Column(Boolean, nullable=False, default=False)
     ativo = Column(Boolean, default=True)

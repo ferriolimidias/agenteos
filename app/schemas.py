@@ -146,6 +146,7 @@ class EspecialistaBase(BaseModel):
     usar_rag: bool = False
     usar_agenda: bool = False
     peso_prioridade: int = Field(default=1, ge=1)
+    fixo_no_roteador: bool = False
     ativo: bool = True
 
 class EspecialistaCreate(EspecialistaBase):
@@ -158,6 +159,7 @@ class EspecialistaUpdate(BaseModel):
     usar_rag: bool | None = None
     usar_agenda: bool | None = None
     peso_prioridade: int | None = Field(default=None, ge=1)
+    fixo_no_roteador: bool | None = False
     ativo: bool | None = None
 
 class EspecialistaResponse(EspecialistaBase):

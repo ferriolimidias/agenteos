@@ -355,26 +355,54 @@ class SemanticRouterService:
                 stmt = stmt.where(Especialista.empresa_id == empresa_id)
 
             result = await self.db.execute(stmt)
-            rows = result.all()
+            semantic_rows = result.all()
         except Exception as exc:
             logger.warning("[SEMANTIC ROUTER] Falha na busca vetorial: %s", exc)
-            rows = []
+            semantic_rows = []
 
-        candidatos = []
-        for especialista, similarity in rows:
-            candidatos.append(
-                {
-                    "id": str(especialista.id),
-                    "nome": str(getattr(especialista, "nome", "") or ""),
-                    "modelo_ia": str(getattr(especialista, "modelo_ia", "") or "").strip(),
-                    "peso_prioridade": int(getattr(especialista, "peso_prioridade", 1) or 1),
-                    "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
-                    "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
-                    "usar_rag": bool(getattr(especialista, "usar_rag", False)),
-                    "usar_agenda": bool(getattr(especialista, "usar_agenda", False)),
-                    "similarity": float(similarity or 0.0),
-                }
+        try:
+            stmt_fixos = select(Especialista).where(
+                Especialista.ativo.is_(True),
+                Especialista.fixo_no_roteador.is_(True),
             )
+            if empresa_id:
+                stmt_fixos = stmt_fixos.where(Especialista.empresa_id == empresa_id)
+            result_fixos = await self.db.execute(stmt_fixos)
+            fixos = result_fixos.scalars().all()
+        except Exception as exc:
+            logger.warning("[SEMANTIC ROUTER] Falha ao buscar especialistas fixos: %s", exc)
+            fixos = []
+
+        candidatos_por_id: dict[str, dict[str, Any]] = {}
+
+        def _serializar_candidato(especialista: Especialista, similarity: float) -> dict[str, Any]:
+            return {
+                "id": str(especialista.id),
+                "nome": str(getattr(especialista, "nome", "") or ""),
+                "modelo_ia": str(getattr(especialista, "modelo_ia", "") or "").strip(),
+                "peso_prioridade": int(getattr(especialista, "peso_prioridade", 1) or 1),
+                "fixo_no_roteador": bool(getattr(especialista, "fixo_no_roteador", False)),
+                "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
+                "prompt_sistema": str(getattr(especialista, "prompt_sistema", "") or ""),
+                "usar_rag": bool(getattr(especialista, "usar_rag", False)),
+                "usar_agenda": bool(getattr(especialista, "usar_agenda", False)),
+                "similarity": float(similarity or 0.0),
+            }
+
+        for especialista, similarity in semantic_rows:
+            esp_id = str(getattr(especialista, "id", "") or "").strip()
+            if not esp_id:
+                continue
+            candidatos_por_id[esp_id] = _serializar_candidato(especialista, float(similarity or 0.0))
+
+        for especialista in fixos:
+            esp_id = str(getattr(especialista, "id", "") or "").strip()
+            if not esp_id:
+                continue
+            if esp_id not in candidatos_por_id:
+                candidatos_por_id[esp_id] = _serializar_candidato(especialista, 0.0)
+
+        candidatos = list(candidatos_por_id.values())
 
         # Weighted routing: primeiro peso do especialista, depois similaridade semântica.
         candidatos.sort(

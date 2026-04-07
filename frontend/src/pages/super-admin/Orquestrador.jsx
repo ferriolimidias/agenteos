@@ -21,7 +21,7 @@ export default function Orquestrador() {
   const [submitting, setSubmitting] = useState(false);
 
   // Forms
-  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
+  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
   const [formFerramenta, setFormFerramenta] = useState({ 
     nome_ferramenta: "", 
     descricao_ia: "",
@@ -115,7 +115,7 @@ export default function Orquestrador() {
       }
       setShowEspecialistaModal(false);
       setEditingEspecialistaId(null);
-      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
+      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
       fetchEspecialistas();
     } catch (err) {
       alert("Erro ao salvar especialista");
@@ -143,6 +143,7 @@ export default function Orquestrador() {
       usar_rag: esp.usar_rag || false,
       usar_agenda: esp.usar_agenda || false,
       peso_prioridade: Number(esp.peso_prioridade || 1),
+      fixo_no_roteador: esp.fixo_no_roteador || false,
       ferramentas_ids: esp.ferramentas_ids || []
     });
     setEditingEspecialistaId(esp.id);
@@ -281,7 +282,7 @@ export default function Orquestrador() {
                 <button 
                   onClick={() => {
                     setEditingEspecialistaId(null);
-                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, ferramentas_ids: [] });
+                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
                     setShowEspecialistaModal(true);
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
@@ -309,6 +310,11 @@ export default function Orquestrador() {
                           <span className="bg-indigo-900/40 border border-indigo-700 text-xs px-2 py-1 rounded-md text-indigo-300 font-semibold mt-1 ml-2 inline-block">
                             Peso: {Number(esp.peso_prioridade || 1)}
                           </span>
+                          {Boolean(esp.fixo_no_roteador) && (
+                            <span className="bg-emerald-900/40 border border-emerald-700 text-xs px-2 py-1 rounded-md text-emerald-300 font-semibold mt-1 ml-2 inline-block">
+                              Fixo no Roteador
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <button onClick={() => openEditEspecialista(esp)} className="text-gray-400 hover:text-white p-1 rounded transition-colors" title="Editar">
@@ -437,6 +443,26 @@ export default function Orquestrador() {
                 <p className="text-xs text-indigo-400 mt-1">
                   Define a prioridade deste agente na fila. Agentes com maior peso agem primeiro.
                 </p>
+              </div>
+
+              <div>
+                <label
+                  className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors"
+                  title="Se ativado, este agente será sempre enviado para a análise do Maestro no início do atendimento, independentemente do assunto."
+                >
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                    checked={formEspecialista.fixo_no_roteador}
+                    onChange={(e) => setFormEspecialista({...formEspecialista, fixo_no_roteador: e.target.checked})}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Agente Fixo no Roteador (Acionamento Obrigatório)</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Se ativado, este agente será sempre enviado para a análise do Maestro no início do atendimento, independentemente do assunto.
+                    </p>
+                  </div>
+                </label>
               </div>
 
               {/* RAG Toggle */}
