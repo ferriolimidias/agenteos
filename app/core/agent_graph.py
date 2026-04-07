@@ -2843,6 +2843,20 @@ async def node_especialista_dinamico(state: AgentState):
                             if conteudo_tool:
                                 dados_crus_partes.append(conteudo_tool)
                                 _marcar_bot_pausado_se_necessario(state, conteudo_tool)
+                                if "[SISTEMA_BOT_PAUSADO]" in str(conteudo_tool):
+                                    # Força a parada imediata da fila de agentes e joga a mensagem direto pro usuário
+                                    msg_transferencia = (
+                                        str(conteudo_tool).split("EXATAMENTE: ")[-1]
+                                        if "EXATAMENTE: " in str(conteudo_tool)
+                                        else "Atendimento transferido para humano."
+                                    )
+                                    if not isinstance(state.get("mensagens"), list):
+                                        state["mensagens"] = []
+                                    state["mensagens"].append(AIMessage(content=msg_transferencia))
+                                    state["acao_imediata"] = "RESPONDER_E_PARAR"
+                                    state["fila_agentes"] = []
+                                    state["agentes_na_fila"] = []
+                                    return state
                                 if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
                                     erros_extracao.append(conteudo_tool)
                         continue

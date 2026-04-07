@@ -77,25 +77,20 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
                 )
                 tags_aplicadas = result_tags_aplicadas.scalars().all()
 
-        # 5. Se alguma tag exigir transferência humana, pausa bot e força instrução da síntese final
-        tag_com_transferencia = next(
-            (tag for tag in tags_aplicadas if bool(getattr(tag, "acao_transferir_humano", False))),
-            None,
-        )
-        if tag_com_transferencia:
+        # 5. Se alguma tag exigir transferência humana, pausa bot com update explícito.
+        for tag in tags_aplicadas:
+            if not bool(getattr(tag, "acao_transferir_humano", False)):
+                continue
+
             lead.status_atendimento = "manual"
             lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
-            await session.commit()
+            session.add(lead)
+            await session.commit()  # OBRIGATÓRIO
+            await session.refresh(lead)
             print("--- [DEBUG TOOL] Commit com pausa de bot realizado com sucesso! --- \n")
 
-            mensagem_transferencia = str(getattr(tag_com_transferencia, "mensagem_transferencia", "") or "").strip()
-            if mensagem_transferencia:
-                return (
-                    "Tags aplicadas com sucesso. [SISTEMA_BOT_PAUSADO]. "
-                    "INSTRUÇÃO CRÍTICA PARA A SÍNTESE FINAL: O bot foi pausado. "
-                    f"Você DEVE responder ao cliente EXATAMENTE com esta mensagem e nada mais: '{mensagem_transferencia}'"
-                )
-            return "Tags aplicadas com sucesso. [SISTEMA_BOT_PAUSADO]. O bot foi pausado."
+            mensagem_transferencia = str(getattr(tag, "mensagem_transferencia", "") or "").strip()
+            return f"[SISTEMA_BOT_PAUSADO] INSTRUÇÃO CRÍTICA: Pare de responder. Diga EXATAMENTE: {mensagem_transferencia}"
 
         await session.commit()
         print("--- [DEBUG TOOL] Commit realizado com sucesso! --- \n")
