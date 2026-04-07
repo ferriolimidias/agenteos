@@ -146,8 +146,31 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) 
                 tags_finais.append(tag_id_oficial)
                 lead.tags = tags_finais
                 flag_modified(lead, "tags")
+                
+                # --- NOVA LÓGICA DE PAUSA NATIVA ---
+                if getattr(tag, "acao_transferir_humano", False):
+                    lead.status_atendimento = "manual"
+                    lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+                    session.add(lead)
+                    await session.commit()
+                    await session.refresh(lead)
+                    
+                    mensagem_transferencia = str(getattr(tag, "mensagem_transferencia", "") or "").strip()
+                    return f"[SISTEMA_BOT_PAUSADO] INSTRUÇÃO CRÍTICA: Pare de responder. Diga EXATAMENTE: {mensagem_transferencia}"
+                # -----------------------------------
+                
                 await session.commit()
                 return f"Sucesso: etiqueta '{tag.nome}' aplicada ao lead."
+            # Se a tag JÁ estava aplicada, mas exige transferência (evita que a IA ignore se repetir a tag)
+            if getattr(tag, "acao_transferir_humano", False):
+                lead.status_atendimento = "manual"
+                lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+                session.add(lead)
+                await session.commit()
+                await session.refresh(lead)
+                mensagem_transferencia = str(getattr(tag, "mensagem_transferencia", "") or "").strip()
+                return f"[SISTEMA_BOT_PAUSADO] INSTRUÇÃO CRÍTICA: Pare de responder. Diga EXATAMENTE: {mensagem_transferencia}"
+                
             return f"Informação: O lead já possui a etiqueta '{tag.nome}'."
     except Exception as e:
         return f"Falha ao aplicar tag dinâmica: {str(e)}"
