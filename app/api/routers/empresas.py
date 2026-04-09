@@ -854,7 +854,7 @@ async def deletar_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao deletar empresa: {str(e)}")
 
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
-async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(get_db)):
+async def setup_empresa(data: EmpresaSetupRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """
     Cria uma nova Empresa e seu respectivo Usuário admin (admin_empresa).
     """
@@ -898,6 +898,9 @@ async def setup_empresa(data: EmpresaSetupRequest, db: AsyncSession = Depends(ge
         await db.commit()
         await db.refresh(nova_empresa)
         await db.refresh(novo_usuario)
+        
+        # --- NOVA LINHA DE AUTOMAÇÃO AQUI ---
+        background_tasks.add_task(inicializar_dados_nova_empresa, nova_empresa.id)
         
         print(f"Setup concluído com sucesso. ID da empresa: {nova_empresa.id}")
         return {
