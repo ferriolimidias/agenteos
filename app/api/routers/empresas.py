@@ -11,6 +11,7 @@ from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_
 from typing import List
 from fastapi.responses import Response
+from langchain_openai import OpenAIEmbeddings
 
 from db.database import get_db, AsyncSessionLocal
 from sqlalchemy.orm import selectinload
@@ -35,6 +36,8 @@ from db.models import (
     HistoricoTransferencia,
     TagGroup,
     TagCRM,
+    FerramentaAPI,
+    Especialista,
     TemplateMensagem,
     is_admin_empresa_role,
     is_root_admin_email,
@@ -263,8 +266,107 @@ async def _garantir_etapa_inicial_crm(db: AsyncSession, empresa_uuid: uuid.UUID)
     await db.flush()
     return etapa_inicial.id
 
+
+FERRAMENTAS_SISTEMA = [
+    {
+        "nome_exibicao": "Aplicar Tag Dinâmica",
+        "nome_ferramenta": "tool_aplicar_tag_dinamica",
+        "descricao_ia": "Recebe o tag_id (UUID) para aplicar uma etiqueta ao lead. Obrigatório consultar o ID antes.",
+        "schema_parametros": {
+            "type": "object",
+            "properties": {"tag_id": {"type": "string", "description": "UUID da etiqueta oficial que deve ser aplicada ao lead atual."}},
+            "required": ["tag_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "nome_exibicao": "Transferir para Humano (Pausar Bot)",
+        "nome_ferramenta": "tool_transferir_para_humano",
+        "descricao_ia": "Permite que o agente pause o bot por 24 horas e coloque o lead na fila de atendimento humano.",
+        "schema_parametros": {
+            "type": "object",
+            "properties": {"motivo": {"type": "string", "description": "Resumo curto do motivo para pausar o bot e transferir para humano."}},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "nome_exibicao": "Consultar Lista de Tags",
+        "nome_ferramenta": "tool_consultar_tags_empresa",
+        "descricao_ia": "Retorna a lista oficial de etiquetas com NOME e ID. Use isso antes de aplicar qualquer tag.",
+        "schema_parametros": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+]
+
+ESPECIALISTAS_NATIVOS = {
+    "especialista_saudacao": {
+        "descricao_missao": "Atender mensagens de abertura de conversa e cumprimentos iniciais.",
+        "descricao_roteamento": "oi, olá, bom dia, boa tarde, boa noite, tudo bem, quero falar com atendente, inicio de conversa, saudação, iniciar atendimento",
+        "prompt_sistema": "Você é o especialista de saudação. Receba o cliente com cordialidade, identifique a intenção inicial e conduza para o próximo passo do atendimento."
+    },
+    "especialista_localizacao": {
+        "descricao_missao": "Fornecer o endereço completo, ponto de referência e enviar o link do Google Maps (mapa) para ajudar o cliente a chegar à unidade.",
+        "descricao_roteamento": "endereço, onde fica, mapa, link do maps, google maps, matriz, filial, ponto de referência, como chegar, me manda o mapa, referências do local, fica perto de onde, rua, avenida, bairro, cidade, localização novamente, endereço de novo, gps, rota, manda a localização",
+        "prompt_sistema": "Você é o especialista de localização. REGRAS OBRIGATÓRIAS: 1. NUNCA peça permissão para enviar o endereço ou o link, envie imediatamente. 2. Use o PONTO DE REFERÊNCIA cadastrado como guia principal. 3. Se houver um link de mapa disponível no contexto, forneça-o. 4. NUNCA invente ou gere links falsos. Se não houver link no contexto, envie apenas o endereço em texto."
+    },
+    "especialista_funcionamento": {
+        "descricao_missao": "Responder perguntas sobre dias e horários de atendimento.",
+        "descricao_roteamento": "horário de atendimento, que horas abre, que horas fecha, dias de funcionamento, vocês abrem de sábado, abrem feriado, estão abertos hoje, expediente",
+        "prompt_sistema": "Você é o especialista de funcionamento. Informe horários, dias úteis e regras de abertura com clareza."
+    }
+}
+
+
+async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
+    async with AsyncSessionLocal() as session:
+        try:
+            # 1. Injetar as ferramentas na tabela
+            for f_seed in FERRAMENTAS_SISTEMA:
+                ferramenta = FerramentaAPI(
+                    empresa_id=empresa_id,
+                    nome_ferramenta=f_seed["nome_ferramenta"],
+                    descricao_ia=f"[{f_seed['nome_exibicao']}] {f_seed['descricao_ia']}",
+                    schema_parametros=f_seed["schema_parametros"],
+                    metodo="GET"
+                )
+                session.add(ferramenta)
+            
+            # 2. Criar os Especialistas Nativos
+            embeddings = OpenAIEmbeddings()
+            for nome, dados in ESPECIALISTAS_NATIVOS.items():
+                especialista = Especialista(
+                    empresa_id=empresa_id,
+                    nome=nome,
+                    descricao_missao=dados["descricao_missao"],
+                    descricao_roteamento=dados["descricao_roteamento"],
+                    prompt_sistema=dados["prompt_sistema"],
+                    ativo=True,
+                    fixo_no_roteador=True,
+                    peso_prioridade=1
+                )
+                
+                texto_base = f"{nome} {dados['descricao_missao']} {dados['descricao_roteamento']}"
+                especialista.embedding = await embeddings.aembed_query(texto_base)
+                
+                session.add(especialista)
+                
+            await session.commit()
+            print(f"Setup automático concluído para a empresa {empresa_id}")
+        except Exception as e:
+            await session.rollback()
+            print(f"Erro ao inicializar dados fixos da empresa {empresa_id}: {e}")
+
 @router.post("/", response_model=EmpresaResponse, status_code=status.HTTP_201_CREATED)
-async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_db)):
+async def criar_empresa(
+    empresa: EmpresaCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Cria uma nova Empresa no banco de dados.
     """
@@ -280,6 +382,7 @@ async def criar_empresa(empresa: EmpresaCreate, db: AsyncSession = Depends(get_d
     try:
         await db.commit()
         await db.refresh(nova_empresa)
+        background_tasks.add_task(inicializar_dados_nova_empresa, nova_empresa.id)
         return nova_empresa
     except Exception as e:
         await db.rollback()
