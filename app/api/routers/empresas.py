@@ -318,6 +318,11 @@ ESPECIALISTAS_NATIVOS = {
         "descricao_missao": "Responder perguntas sobre dias e horários de atendimento.",
         "descricao_roteamento": "horário de atendimento, que horas abre, que horas fecha, dias de funcionamento, vocês abrem de sábado, abrem feriado, estão abertos hoje, expediente",
         "prompt_sistema": "Você é o especialista de funcionamento. Informe horários, dias úteis e regras de abertura com clareza."
+    },
+    "especialista_followup": {
+        "descricao_missao": "Gerar as mensagens automáticas de retomada de conversa e de encerramento por inatividade.",
+        "descricao_roteamento": "NÃO DEVE SER CHAMADO DIRETAMENTE PELO ROTEADOR. USO INTERNO DO SISTEMA DE DELAY.",
+        "prompt_sistema": "Você é o especialista de engajamento da empresa. Seu tom é educado, sutil e empático. Seu objetivo é reconectar com clientes que pararam de responder ou encerrar contatos inativos de forma elegante, deixando as portas sempre abertas."
     }
 }
 

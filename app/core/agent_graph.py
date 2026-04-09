@@ -3195,6 +3195,42 @@ async def _buscar_historico_lead_para_followup(canal: str, identificador_origem:
         return "", None
 
 
+async def _get_followup_prompt_base(empresa_id: str) -> tuple[str, str]:
+    """Busca o nome da empresa e o prompt personalizado do Especialista de Follow-up."""
+    import uuid as _uuid
+    from db.database import AsyncSessionLocal as _ASL
+    from db.models import Empresa as _Empresa, Especialista as _Especialista
+    from sqlalchemy import select as _sel
+
+    nome_empresa = ""
+    prompt_personalizado = ""
+    try:
+        async with _ASL() as sess:
+            emp_uuid = _uuid.UUID(empresa_id)
+            # Buscar Empresa
+            res_emp = await sess.execute(_sel(_Empresa).where(_Empresa.id == emp_uuid))
+            emp = res_emp.scalars().first()
+            if emp:
+                nome_empresa = emp.nome_empresa or ""
+            
+            # Buscar Prompt do Especialista
+            res_esp = await sess.execute(_sel(_Especialista).where(
+                _Especialista.empresa_id == emp_uuid,
+                _Especialista.nome == "especialista_followup"
+            ))
+            esp = res_esp.scalars().first()
+            if esp:
+                prompt_personalizado = esp.prompt_sistema
+    except Exception as e:
+        print(f"[FOLLOW-UP] Erro ao buscar dados no banco: {e}", flush=True)
+
+    if not prompt_personalizado:
+        nome_empresa_prompt = (nome_empresa or "").strip() or "sua empresa"
+        prompt_personalizado = f"Você é um assistente da {nome_empresa_prompt}. Seja educado e prestativo."
+
+    return nome_empresa, prompt_personalizado
+
+
 async def gerar_followup_contextual(canal: str, identificador_origem: str, empresa_id: str) -> str:
     """
     Gera um Nudge (Nível 1) — apenas as últimas 2 mensagens + nome da empresa.
@@ -3204,34 +3240,19 @@ async def gerar_followup_contextual(canal: str, identificador_origem: str, empre
     # Busca apenas as últimas 2 mensagens
     historico, _ = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=2)
 
-    import uuid as _uuid
-    from db.database import AsyncSessionLocal as _ASL
-    from db.models import Empresa as _Empresa
-    from sqlalchemy import select as _sel
-
-    nome_empresa = ""
-    try:
-        async with _ASL() as sess:
-            res_emp = await sess.execute(_sel(_Empresa).where(_Empresa.id == _uuid.UUID(empresa_id)))
-            emp = res_emp.scalars().first()
-            if emp:
-                nome_empresa = emp.nome_empresa or ""
-    except Exception as e:
-        print(f"[FOLLOW-UP] Erro ao buscar empresa: {e}", flush=True)
-
+    nome_empresa, prompt_base = await _get_followup_prompt_base(empresa_id)
     print(f"[FOLLOW-UP CONTEXTUAL] Empresa: '{nome_empresa}' | Histórico disponível: {bool(historico)}", flush=True)
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
 
-    nome_empresa_prompt = (nome_empresa or "").strip() or "sua empresa"
-    prompt = f"""Você é um assistente da {nome_empresa_prompt}. Sua única tarefa é enviar UMA frase curta e educada de acompanhamento, baseada apenas no fim da conversa. Seja sutil e não tente vender nada.
+    prompt = f"""{prompt_base}
+
+INSTRUÇÃO ATUAL (REENGANJAMENTO - NÍVEL 1): 
+O cliente parou de responder há algum tempo. Gere UMA frase curta e educada de retomada de conversa baseada no histórico abaixo.
+Seja sutil e não tente vender nada. (Exemplo de tom: "Ficou alguma dúvida sobre o que conversamos?") Máximo 15 palavras.
 
 Fim da conversa:
-{fim_conversa}
-
-Exemplo de tom: "Ficou alguma dúvida sobre o que conversamos?"
-
-Responda APENAS com o texto da frase. Máximo 15 palavras."""
+{fim_conversa}"""
 
     _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 1) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
@@ -3247,38 +3268,20 @@ async def gerar_followup_encerramento(canal: str, identificador_origem: str, emp
     print("[FOLLOW-UP ENCERRAMENTO] Iniciando Nível 2...", flush=True)
 
     historico, lead_id = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=3)
-
     import uuid as _uuid
-    from db.database import AsyncSessionLocal as _ASL
-    from db.models import Empresa as _Empresa
-    from sqlalchemy import select as _sel
 
-    nome_empresa = ""
-    try:
-        async with _ASL() as sess:
-            res_emp = await sess.execute(_sel(_Empresa).where(_Empresa.id == _uuid.UUID(empresa_id)))
-            emp = res_emp.scalars().first()
-            if emp:
-                nome_empresa = emp.nome_empresa or ""
-    except Exception as e:
-        print(f"[FOLLOW-UP ENCERRAMENTO] Erro ao buscar empresa: {e}", flush=True)
-
+    nome_empresa, prompt_base = await _get_followup_prompt_base(empresa_id)
     print(f"[FOLLOW-UP ENCERRAMENTO] Gerando prompt para empresa '{nome_empresa}'...", flush=True)
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
 
-    nome_empresa_prompt = (nome_empresa or "").strip() or "sua empresa"
-    prompt = f"""Você é um assistente da {nome_empresa_prompt}. O cliente não respondeu ao acompanhamento anterior.
+    prompt = f"""{prompt_base}
+
+INSTRUÇÃO ATUAL (ENCERRAMENTO - NÍVEL 2): 
+O cliente não respondeu à tentativa de retomada. Escreva UMA mensagem curta (máximo 2 frases) informando que o atendimento será pausado/arquivado por inatividade, mas que o consultor foi notificado e o cliente pode voltar a chamar quando quiser.
 
 Fim da conversa:
-{fim_conversa}
-
-Escreva UMA mensagem curta informando que:
-1. A conversa será arquivada.
-2. O consultor responsável foi notificado e pode dar continuidade se necessário.
-3. O cliente é sempre bem-vindo a retomar quando quiser.
-
-Seja gentil e breve. Máximo 2 frases. Responda APENAS com o texto da mensagem."""
+{fim_conversa}"""
 
     _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 2 ENCERRAMENTO) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
