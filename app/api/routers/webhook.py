@@ -2,14 +2,12 @@ import asyncio
 from fastapi import APIRouter, BackgroundTasks, Request
 from typing import Dict, Any
 import uuid
-import os
 import base64
 import re
 import unicodedata
 import tempfile
 from datetime import datetime, timedelta
 
-import httpx
 from openai import AsyncOpenAI
 
 from app.schemas import StandardMessage
@@ -129,33 +127,26 @@ def _extrair_tipo_mensagem(data_json: dict) -> str:
     return "text"
 
 
-async def _transcrever_audio(audio_base64_ou_url: str, openai_api_key: str | None = None) -> str:
-    """Transcreve áudio via Whisper com fallback resiliente."""
-    temp_audio_path: str | None = None
+async def _transcrever_audio(base64_string: str, openai_api_key: str | None = None) -> str:
+    """Transcreve áudio base64 via Whisper com fallback resiliente."""
     try:
-        bruto = str(audio_base64_ou_url or "").strip()
+        bruto = str(base64_string or "").strip()
         if not bruto:
             return "[Erro ao transcrever áudio]"
 
-        audio_bytes: bytes
-        if bruto.startswith("http://") or bruto.startswith("https://"):
-            async with httpx.AsyncClient(timeout=30) as client_http:
-                resp = await client_http.get(bruto)
-                resp.raise_for_status()
-                audio_bytes = resp.content
-        else:
-            base64_data = bruto.split(",", 1)[1] if "," in bruto else bruto
-            audio_bytes = base64.b64decode(base64_data)
+        # Remove cabeçalho data URI se existir (ex: data:audio/ogg;base64,...)
+        base64_data = bruto.split(",", 1)[1] if "," in bruto else bruto
+        audio_bytes = base64.b64decode(base64_data)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp_audio:
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".ogg") as tmp_audio:
             tmp_audio.write(audio_bytes)
-            temp_audio_path = tmp_audio.name
+            tmp_audio.flush()
 
-        client = AsyncOpenAI(api_key=openai_api_key) if openai_api_key else AsyncOpenAI()
-        with open(temp_audio_path, "rb") as audio_file:
-            transcricao = await client.audio.transcriptions.create(
+            client = AsyncOpenAI(api_key=openai_api_key) if openai_api_key else AsyncOpenAI()
+            with open(tmp_audio.name, "rb") as f:
+                transcricao = await client.audio.transcriptions.create(
                 model="whisper-1",
-                file=audio_file,
+                file=f,
                 response_format="text",
             )
         texto_transcrito = str(transcricao or "").strip()
@@ -163,12 +154,6 @@ async def _transcrever_audio(audio_base64_ou_url: str, openai_api_key: str | Non
     except Exception as exc:
         print(f"[WEBHOOK EVOLUTION] Falha na transcrição Whisper: {exc}")
         return "[Erro ao transcrever áudio]"
-    finally:
-        if temp_audio_path:
-            try:
-                os.remove(temp_audio_path)
-            except Exception:
-                pass
 
 async def get_conexao_id_por_tipo(
     session,
@@ -475,12 +460,19 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         if tipo_mensagem == "audio":
             from app.services.evolution_service import get_base64_media
 
-            media_base64_audio = None
-            try:
-                async with AsyncSessionLocal() as session:
-                    media_base64_audio = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
-            except Exception as e:
-                print(f"[WEBHOOK EVOLUTION] Erro ao baixar áudio: {e}")
+            # Prioridade 1: usa base64 já recebido no payload (evita double fetch)
+            media_base64_audio = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            ) or None
+
+            # Fallback: baixa mídia somente se base64 não vier no webhook
+            if not media_base64_audio:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        media_base64_audio = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar áudio (fallback): {e}")
 
             openai_key = None
             try:
