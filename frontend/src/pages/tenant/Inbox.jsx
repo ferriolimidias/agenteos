@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
@@ -12,7 +12,7 @@ export default function Inbox() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [isSendingMedia, setIsSendingMedia] = useState(false);
   const [destinos, setDestinos] = useState([]);
   const [grupos, setGrupos] = useState([]);
   const [tagsOficiais, setTagsOficiais] = useState([]);
@@ -41,6 +41,15 @@ export default function Inbox() {
   const leadsFetchQueuedRef = useRef(false);
   const leadsRefreshTimerRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
+
+  const scrollToBottom = () => {
+    window.setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 0);
+  };
+
+  const isPendingMessage = (msg) => String(msg?.status || "").toLowerCase() === "pending";
+  const isFailedMessage = (msg) => String(msg?.status || "").toLowerCase() === "failed";
 
   const user = getStoredUser();
   const activeEmpresaId = getActiveEmpresaId();
@@ -269,9 +278,26 @@ export default function Inbox() {
 
           if (telefoneSelecionado && telefoneEvento && telefoneSelecionado === telefoneEvento && novaMensagem) {
             setMessages((prev) => {
-              const lista = prev || [];
+              let lista = prev || [];
               const novaId = novaMensagem?.id;
               if (novaId && lista.some((msg) => msg?.id === novaId)) return lista;
+
+              // Concilia mensagem otimista pendente com confirmação real para evitar duplicação.
+              if (Boolean(novaMensagem?.from_me)) {
+                const textoNovo = String(novaMensagem?.texto || "").trim();
+                const tipoNovo = String(novaMensagem?.tipo_mensagem || "text").toLowerCase();
+                const idxTemp = lista.findIndex(
+                  (msg) =>
+                    isPendingMessage(msg) &&
+                    Boolean(msg?.from_me) &&
+                    String(msg?.texto || "").trim() === textoNovo &&
+                    String(msg?.tipo_mensagem || "text").toLowerCase() === tipoNovo
+                );
+                if (idxTemp >= 0) {
+                  lista = lista.filter((_, idx) => idx !== idxTemp);
+                }
+              }
+
               return [...lista, novaMensagem];
             });
           }
@@ -367,32 +393,38 @@ export default function Inbox() {
       from_me: true,
       tipo_mensagem: "text",
       media_url: null,
+      telefone_contato: telefone,
+      retry_type: "text",
+      status: "pending",
       criado_em: new Date().toISOString(),
     };
 
     setMessages((prev) => [...(prev || []), optimisticMessage]);
     setNewMessage("");
-    setLoading(true);
+    scrollToBottom();
     try {
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, {
         texto,
       });
-      if (selectedLeadTelefoneRef.current === telefone) {
-        await fetchMessages(telefone);
-      }
-      await fetchLeads(); // update `bot_pausado`
+      // Mantém UI livre; confirmação deve chegar por websocket.
+      void fetchLeads(); // update `bot_pausado`
     } catch (e) {
       console.error("Erro ao enviar mensagem", e);
-      if (selectedLeadTelefoneRef.current === telefone) {
-        setMessages((prev) => (prev || []).filter((msg) => msg?.id !== tempId));
-      }
-      setNewMessage(texto);
+      setMessages((prev) =>
+        (prev || []).map((msg) =>
+          msg?.id === tempId
+            ? {
+                ...msg,
+                status: "failed",
+                erro_envio: e.response?.data?.detail || "Falha ao enviar mensagem.",
+              }
+            : msg
+        )
+      );
       setToast({
         type: "error",
         message: e.response?.data?.detail || "Não foi possível enviar a mensagem.",
       });
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -410,33 +442,118 @@ export default function Inbox() {
 
   const handleSendMedia = async () => {
     if (!selectedLead || !selectedFile) return;
-    setLoading(true);
+    const telefone = selectedLead.telefone_contato;
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tipoMidia = selectedFile.type.startsWith("image/")
+      ? "image"
+      : selectedFile.type.startsWith("audio/")
+        ? "audio"
+        : "document";
+    const textoOptimista = mediaCaption?.trim()
+      ? `Enviando arquivo... ${mediaCaption.trim()}`
+      : "Enviando arquivo...";
+    const optimisticMediaMessage = {
+      id: tempId,
+      texto: textoOptimista,
+      from_me: true,
+      tipo_mensagem: tipoMidia,
+      media_url: null,
+      telefone_contato: telefone,
+      retry_type: "media",
+      status: "pending",
+      criado_em: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...(prev || []), optimisticMediaMessage]);
+    scrollToBottom();
+    setIsSendingMedia(true);
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
       formData.append("caption", mediaCaption || "");
-      await api.post(`/empresas/${empresa_id}/inbox/${selectedLead.telefone_contato}/send_media`, formData, {
+      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send_media`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       clearSelectedFile();
-      await fetchMessages(selectedLead.telefone_contato);
-      await fetchLeads();
+      void fetchLeads();
     } catch (e) {
       console.error("Erro ao enviar mídia", e);
+      setMessages((prev) =>
+        (prev || []).map((msg) =>
+          msg?.id === tempId
+            ? {
+                ...msg,
+                status: "failed",
+                erro_envio: e.response?.data?.detail || "Falha ao enviar arquivo.",
+                texto: "Falha ao enviar arquivo.",
+              }
+            : msg
+        )
+      );
       setToast({
         type: "error",
         message: e.response?.data?.detail || "Não foi possível enviar a mídia.",
       });
     } finally {
-      setLoading(false);
+      setIsSendingMedia(false);
     }
   };
 
   const handleComposerKeyDown = (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
-    if (selectedFile || loading || !newMessage.trim()) return;
+    if (selectedFile || !newMessage.trim()) return;
     handleSendMessage(event);
+  };
+
+  const handleRetryMessage = async (mensagemFalha) => {
+    if (!mensagemFalha || !selectedLead) return;
+
+    const retryType = String(mensagemFalha?.retry_type || "text").toLowerCase();
+    if (retryType !== "text") {
+      setToast({
+        type: "error",
+        message: "Retry de mídia ainda não disponível. Reenvie o arquivo manualmente.",
+      });
+      return;
+    }
+
+    const telefone = String(mensagemFalha?.telefone_contato || selectedLead?.telefone_contato || "").trim();
+    const texto = String(mensagemFalha?.texto || "").trim();
+    if (!telefone || !texto) return;
+
+    setMessages((prev) =>
+      (prev || []).map((msg) =>
+        msg?.id === mensagemFalha.id
+          ? {
+              ...msg,
+              status: "pending",
+              erro_envio: null,
+            }
+          : msg
+      )
+    );
+
+    try {
+      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, { texto });
+      void fetchLeads();
+    } catch (e) {
+      setMessages((prev) =>
+        (prev || []).map((msg) =>
+          msg?.id === mensagemFalha.id
+            ? {
+                ...msg,
+                status: "failed",
+                erro_envio: e.response?.data?.detail || "Falha ao reenviar mensagem.",
+              }
+            : msg
+        )
+      );
+      setToast({
+        type: "error",
+        message: e.response?.data?.detail || "Não foi possível reenviar a mensagem.",
+      });
+    }
   };
 
   const baixarDocumento = (base64Data, nome = "documento") => {
@@ -519,7 +636,28 @@ export default function Inbox() {
       );
     }
 
-    return <p className="text-sm whitespace-pre-wrap">{msg?.texto}</p>;
+    return (
+      <div className={isPendingMessage(msg) ? "opacity-70" : ""}>
+        <p className="text-sm whitespace-pre-wrap">{msg?.texto}</p>
+        {isPendingMessage(msg) ? (
+          <span className="mt-1 inline-flex items-center gap-1 text-[11px] text-gray-500">
+            <RefreshCw size={11} className="animate-spin" />
+            Enviando...
+          </span>
+        ) : null}
+        {isFailedMessage(msg) ? (
+          <button
+            type="button"
+            onClick={() => handleRetryMessage(msg)}
+            className="mt-1 inline-flex items-center gap-1 text-[11px] text-red-600 hover:text-red-700"
+            title={msg?.erro_envio || "Falha ao enviar"}
+          >
+            <AlertCircle size={12} />
+            Falha ao enviar. Clique para tentar novamente.
+          </button>
+        ) : null}
+      </div>
+    );
   };
 
   const handleToggleBot = async () => {
@@ -1044,12 +1182,11 @@ export default function Inbox() {
                     placeholder="Digite uma mensagem"
                     rows={1}
                     className="max-h-32 min-h-[44px] flex-1 resize-none rounded-3xl border-none bg-white px-4 py-3 text-sm outline-none shadow-sm focus:ring-0"
-                    disabled={loading}
                   />
                   <button
                     type={selectedFile ? "button" : "submit"}
                     onClick={selectedFile ? handleSendMedia : undefined}
-                    disabled={selectedFile ? loading : (!newMessage.trim() || loading)}
+                    disabled={selectedFile ? isSendingMedia : !newMessage.trim()}
                     className={`rounded-full p-3 text-white shadow-sm transition-colors ${
                       hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
                     } disabled:cursor-not-allowed disabled:opacity-80`}
