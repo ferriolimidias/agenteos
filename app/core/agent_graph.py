@@ -314,9 +314,43 @@ def _marcar_bot_pausado_se_necessario(state: "AgentState", retorno_tool: str) ->
         state["bot_foi_pausado"] = True
 
 
+def _montar_human_message_multimodal(texto: str | None, tipo_mensagem: str | None, media_url: str | None) -> HumanMessage:
+    tipo = str(tipo_mensagem or "text").strip().lower()
+    media = str(media_url or "").strip()
+    texto_base = str(texto or "").strip()
+    if tipo == "image" and media:
+        media_final = media
+        if not media_final.startswith("http://") and not media_final.startswith("https://") and not media_final.startswith("data:"):
+            media_final = f"data:image/jpeg;base64,{media_final}"
+        texto_complementar = texto_base if texto_base else "O utilizador enviou uma imagem anexa."
+        conteudo = [
+            {"type": "text", "text": texto_complementar},
+            {"type": "image_url", "image_url": {"url": media_final}},
+        ]
+        return HumanMessage(content=conteudo)
+    return HumanMessage(content=texto_base)
+
+
 def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
     saida: list[Any] = []
     for item in mensagens:
+        if isinstance(item, dict):
+            role = str(item.get("role") or item.get("papel") or "").strip().lower()
+            texto_dict = str(item.get("text") or item.get("texto") or item.get("content") or "").strip()
+            if not texto_dict:
+                continue
+            if role in {"assistant", "assistente", "ai"}:
+                saida.append(AIMessage(content=texto_dict))
+            else:
+                saida.append(
+                    _montar_human_message_multimodal(
+                        texto_dict,
+                        str(item.get("tipo_mensagem") or "text"),
+                        str(item.get("media_url") or ""),
+                    )
+                )
+            continue
+
         texto = str(item or "").strip()
         if not texto:
             continue
@@ -325,6 +359,52 @@ def _to_chat_messages(mensagens: list[Any]) -> list[Any]:
         else:
             saida.append(HumanMessage(content=_strip_role_prefix(texto)))
     return saida
+
+
+async def _obter_ultima_mensagem_inbound_multimodal(
+    empresa_id: Any,
+    identificador_origem: str | None,
+    fallback_texto: str | None,
+) -> HumanMessage:
+    texto_fallback = str(fallback_texto or "").strip()
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+        telefone = str(identificador_origem or "").strip()
+        if not telefone:
+            return HumanMessage(content=texto_fallback)
+
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.empresa_id == empresa_uuid,
+                    CRMLead.telefone_contato == telefone,
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                return HumanMessage(content=texto_fallback)
+
+            result_msg = await session.execute(
+                select(MensagemHistorico)
+                .where(
+                    MensagemHistorico.lead_id == lead.id,
+                    MensagemHistorico.from_me.is_(False),
+                )
+                .order_by(MensagemHistorico.criado_em.desc())
+                .limit(1)
+            )
+            ultima = result_msg.scalars().first()
+            if not ultima:
+                return HumanMessage(content=texto_fallback)
+
+            return _montar_human_message_multimodal(
+                str(getattr(ultima, "texto", "") or ""),
+                str(getattr(ultima, "tipo_mensagem", "text") or "text"),
+                str(getattr(ultima, "media_url", "") or ""),
+            )
+    except Exception as exc:
+        logger.debug("[MULTIMODAL] Fallback para texto simples na última mensagem: %s", exc)
+        return HumanMessage(content=texto_fallback)
 
 async def disparar_webhook_saida(lead_id: str):
     import uuid
@@ -748,9 +828,14 @@ NÃO redija mensagem para o cliente final."""
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    mensagem_usuario_atual = await _obter_ultima_mensagem_inbound_multimodal(
+        empresa_id=empresa_id,
+        identificador_origem=str(state.get("identificador_origem") or ""),
+        fallback_texto=ultima_mensagem,
+    )
     mensagens = [
         SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt)),
-        HumanMessage(content=ultima_mensagem),
+        mensagem_usuario_atual,
     ]
     dados_crus_tags: list[str] = []
     fontes_tags: list[str] = []
@@ -2821,9 +2906,14 @@ async def node_especialista_dinamico(state: AgentState):
 
                 especialista = SimpleNamespace(prompt_sistema=prompt_completo)
                 system_msg = SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, especialista.prompt_sistema))
+                mensagem_usuario_atual = await _obter_ultima_mensagem_inbound_multimodal(
+                    empresa_id=empresa_id,
+                    identificador_origem=str(state.get("identificador_origem") or ""),
+                    fallback_texto=ultima_mensagem,
+                )
                 mensagens = [
                     system_msg,
-                    HumanMessage(content=ultima_mensagem),
+                    mensagem_usuario_atual,
                 ]
                 for _ in range(5):
                     logger.info(

@@ -6,7 +6,11 @@ import os
 import base64
 import re
 import unicodedata
+import tempfile
 from datetime import datetime, timedelta
+
+import httpx
+from openai import AsyncOpenAI
 
 from app.schemas import StandardMessage
 from app.api.utils import handle_debouncer
@@ -123,6 +127,48 @@ def _extrair_tipo_mensagem(data_json: dict) -> str:
     if message.get("documentMessage") or message.get("videoMessage"):
         return "document"
     return "text"
+
+
+async def _transcrever_audio(audio_base64_ou_url: str, openai_api_key: str | None = None) -> str:
+    """Transcreve áudio via Whisper com fallback resiliente."""
+    temp_audio_path: str | None = None
+    try:
+        bruto = str(audio_base64_ou_url or "").strip()
+        if not bruto:
+            return "[Erro ao transcrever áudio]"
+
+        audio_bytes: bytes
+        if bruto.startswith("http://") or bruto.startswith("https://"):
+            async with httpx.AsyncClient(timeout=30) as client_http:
+                resp = await client_http.get(bruto)
+                resp.raise_for_status()
+                audio_bytes = resp.content
+        else:
+            base64_data = bruto.split(",", 1)[1] if "," in bruto else bruto
+            audio_bytes = base64.b64decode(base64_data)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            temp_audio_path = tmp_audio.name
+
+        client = AsyncOpenAI(api_key=openai_api_key) if openai_api_key else AsyncOpenAI()
+        with open(temp_audio_path, "rb") as audio_file:
+            transcricao = await client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="text",
+            )
+        texto_transcrito = str(transcricao or "").strip()
+        return texto_transcrito or "[Erro ao transcrever áudio]"
+    except Exception as exc:
+        print(f"[WEBHOOK EVOLUTION] Falha na transcrição Whisper: {exc}")
+        return "[Erro ao transcrever áudio]"
+    finally:
+        if temp_audio_path:
+            try:
+                os.remove(temp_audio_path)
+            except Exception:
+                pass
 
 async def get_conexao_id_por_tipo(
     session,
@@ -427,117 +473,59 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             print("DEBUG: Formato de mensagem desconhecido")
 
         if tipo_mensagem == "audio":
-             async def transcribe_audio():
-                 try:
-                     from app.services.evolution_service import get_base64_media
-                     from openai import AsyncOpenAI
-                     
-                     async with AsyncSessionLocal() as session:
-                         base64_data = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
-                         
-                         openai_key = None
-                         result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                         empresa = result.scalars().first()
-                         if empresa and empresa.credenciais_canais:
-                             openai_key = empresa.credenciais_canais.get("openai_api_key")
-                             
-                 except Exception as e:
-                     print(f"[WEBHOOK EVOLUTION] Erro ao transcrever áudio: {e}")
-                     texto_transcrito = "[Áudio recebido, mas falha na transcrição]"
-                     should_proc = await save_history_and_check_pause(
-                        empresa_id,
-                        telefone,
-                        texto_transcrito,
-                        fromMe,
-                        conexao_id,
-                        nome_contato=push_name,
-                        profile_pic_url=profile_pic_url,
-                     )
-                     if should_proc:
-                         msg = StandardMessage(
-                             empresa_id=empresa_id,
-                             canal="evolution",
-                             identificador_origem=telefone,
-                             conexao_id=conexao_id,
-                             nome_contato=push_name,
-                             texto_mensagem=texto_transcrito,
-                             is_human_agent=False,
-                         )
-                         await handle_debouncer(msg, background_tasks=background_tasks)
-                     return
-                     
-                 if not base64_data:
-                     print("[WEBHOOK EVOLUTION] Não foi possível baixar áudio da Evolution.")
-                     await save_history_and_check_pause(
-                        empresa_id,
-                        telefone,
-                        "[Áudio não pôde ser baixado]",
-                        fromMe,
-                        conexao_id,
-                        nome_contato=push_name,
-                        tipo_mensagem="audio",
-                        media_url=None,
-                        profile_pic_url=profile_pic_url,
-                     )
-                     texto_transcrito = "[Áudio não pôde ser baixado]"
-                 else:
-                     await save_history_and_check_pause(
-                        empresa_id,
-                        telefone,
-                        "[Áudio]",
-                        fromMe,
-                        conexao_id,
-                        nome_contato=push_name,
-                        tipo_mensagem="audio",
-                        media_url=base64_data,
-                        profile_pic_url=profile_pic_url,
-                     )
-                     try:
-                         if "," in base64_data:
-                             base64_data = base64_data.split(",")[1]
-                         audio_bytes = base64.b64decode(base64_data)
-                         
-                         temp_audio_path = f"/tmp/audio_{uuid.uuid4()}.ogg"
-                         with open(temp_audio_path, "wb") as f:
-                             f.write(audio_bytes)
-                             
-                         client = AsyncOpenAI(api_key=openai_key) if openai_key else AsyncOpenAI()
-                         with open(temp_audio_path, "rb") as audio_file:
-                             transcript = await client.audio.transcriptions.create(
-                                 model="whisper-1", 
-                                 file=audio_file,
-                                 response_format="text"
-                             )
-                             
-                         os.remove(temp_audio_path)
-                         texto_transcrito = f"[Áudio Transcrito]: {transcript}"
-                     except Exception as e:
-                         print(f"[WEBHOOK EVOLUTION] Erro no Whisper: {e}")
-                         texto_transcrito = "[Erro na Transcrição Whisper]"
+            from app.services.evolution_service import get_base64_media
 
-                 should_proc = await save_history_and_check_pause(
-                    empresa_id,
-                    telefone,
-                    texto_transcrito,
-                    fromMe,
-                    conexao_id,
+            media_base64_audio = None
+            try:
+                async with AsyncSessionLocal() as session:
+                    media_base64_audio = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+            except Exception as e:
+                print(f"[WEBHOOK EVOLUTION] Erro ao baixar áudio: {e}")
+
+            openai_key = None
+            try:
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                    empresa = result.scalars().first()
+                    if empresa and empresa.credenciais_canais:
+                        openai_key = empresa.credenciais_canais.get("openai_api_key")
+            except Exception as e:
+                print(f"[WEBHOOK EVOLUTION] Erro ao buscar credencial OpenAI: {e}")
+
+            if media_base64_audio:
+                transcricao = await _transcrever_audio(media_base64_audio, openai_api_key=openai_key)
+                if transcricao == "[Erro ao transcrever áudio]":
+                    texto_transcrito = transcricao
+                else:
+                    texto_transcrito = f"[Áudio Transcrito]: {transcricao}"
+            else:
+                texto_transcrito = "[Erro ao transcrever áudio]"
+
+            should_process = await save_history_and_check_pause(
+                empresa_id,
+                telefone,
+                texto_transcrito,
+                fromMe,
+                conexao_id,
+                nome_contato=push_name,
+                tipo_mensagem="audio",
+                media_url=media_base64_audio,
+                gclid=gclid,
+                fbclid=fbclid,
+                profile_pic_url=profile_pic_url,
+            )
+            if should_process:
+                msg = StandardMessage(
+                    empresa_id=empresa_id,
+                    canal="evolution",
+                    identificador_origem=telefone,
+                    conexao_id=conexao_id,
                     nome_contato=push_name,
-                    profile_pic_url=profile_pic_url,
-                 )
-                 if should_proc:
-                     msg = StandardMessage(
-                         empresa_id=empresa_id,
-                         canal="evolution",
-                         identificador_origem=telefone,
-                         conexao_id=conexao_id,
-                         nome_contato=push_name,
-                         texto_mensagem=texto_transcrito,
-                         is_human_agent=False,
-                     )
-                     await handle_debouncer(msg, background_tasks=background_tasks)
-                 
-             background_tasks.add_task(transcribe_audio)
-             return {"status": "received", "message": "Transcription in background"}
+                    texto_mensagem=texto_transcrito,
+                    is_human_agent=False,
+                )
+                background_tasks.add_task(handle_debouncer, msg, background_tasks)
+            return {"status": "received", "message": "Processed"}
 
         media_base64 = None
         if tipo_mensagem in {"image", "document"}:
