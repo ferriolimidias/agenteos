@@ -30,6 +30,8 @@ export default function Inbox() {
   const [mediaCaption, setMediaCaption] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState(null);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState("");
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const wsRef = useRef(null);
@@ -402,6 +404,14 @@ export default function Inbox() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (recordedAudioUrl) {
+        URL.revokeObjectURL(recordedAudioUrl);
+      }
+    };
+  }, [recordedAudioUrl]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -526,6 +536,14 @@ export default function Inbox() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const clearRecordedAudioPreview = () => {
+    if (recordedAudioUrl) {
+      URL.revokeObjectURL(recordedAudioUrl);
+    }
+    setRecordedAudioBlob(null);
+    setRecordedAudioUrl("");
+  };
+
   const handleSendMedia = async () => {
     if (!selectedLead || !selectedFile) return;
     const ok = await sendMediaFile(selectedFile, mediaCaption);
@@ -542,6 +560,7 @@ export default function Inbox() {
     }
 
     try {
+      clearRecordedAudioPreview();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
       const recorder = new MediaRecorder(stream);
@@ -560,8 +579,9 @@ export default function Inbox() {
         try {
           if (shouldSend && audioChunksRef.current.length > 0) {
             const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-            const file = new File([blob], "audio_record.webm", { type: "audio/webm" });
-            await sendMediaFile(file, "");
+            const previewUrl = URL.createObjectURL(blob);
+            setRecordedAudioBlob(blob);
+            setRecordedAudioUrl(previewUrl);
           }
         } finally {
           audioChunksRef.current = [];
@@ -604,6 +624,17 @@ export default function Inbox() {
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => track.stop());
       audioStreamRef.current = null;
+    }
+  };
+
+  const handleSendRecordedAudio = async () => {
+    if (!recordedAudioBlob) return;
+    const file = new File([recordedAudioBlob], "audio_record.webm", {
+      type: recordedAudioBlob.type || "audio/webm",
+    });
+    const ok = await sendMediaFile(file, "");
+    if (ok) {
+      clearRecordedAudioPreview();
     }
   };
 
@@ -1302,11 +1333,32 @@ export default function Inbox() {
                           type="button"
                           onClick={() => stopRecording(true)}
                           className="rounded-full bg-emerald-600 p-2 text-white transition-colors hover:bg-emerald-700"
-                          title="Enviar áudio"
+                          title="Finalizar gravação"
                         >
                           <Send size={16} />
                         </button>
                       </div>
+                    </div>
+                  ) : recordedAudioUrl ? (
+                    <div className="flex flex-1 items-center gap-2 rounded-3xl bg-white px-3 py-2 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={clearRecordedAudioPreview}
+                        className="rounded-full p-2 text-red-600 transition-colors hover:bg-red-50"
+                        title="Descartar áudio"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <audio src={recordedAudioUrl} controls className="h-10 flex-1" />
+                      <button
+                        type="button"
+                        onClick={handleSendRecordedAudio}
+                        disabled={isSendingMedia}
+                        className="rounded-full bg-emerald-600 p-2 text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
+                        title="Enviar áudio"
+                      >
+                        <Send size={16} />
+                      </button>
                     </div>
                   ) : (
                     <>
