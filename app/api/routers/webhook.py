@@ -520,7 +520,29 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             return {"status": "received", "message": "Processed"}
 
         media_base64 = None
-        if tipo_mensagem in {"image", "document"}:
+        if tipo_mensagem == "image":
+            # Prioridade 1: base64 já enviado diretamente no payload do webhook.
+            media_payload = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            )
+            if media_payload:
+                if media_payload.startswith("data:image"):
+                    media_base64 = media_payload
+                else:
+                    media_base64 = f"data:image/jpeg;base64,{media_payload}"
+
+            # Fallback: tenta baixar mídia apenas se não veio base64 no payload.
+            if not media_base64:
+                try:
+                    from app.services.evolution_service import get_base64_media
+
+                    async with AsyncSessionLocal() as session:
+                        media_base64 = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar imagem (fallback): {e}")
+
+        elif tipo_mensagem == "document":
             try:
                 from app.services.evolution_service import get_base64_media
 

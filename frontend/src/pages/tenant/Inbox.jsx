@@ -465,14 +465,29 @@ export default function Inbox() {
     const media = msg?.media_url;
 
     if (tipo === "image" && media) {
+      let imgSrc = "";
+      if (media.startsWith("http")) {
+        imgSrc = media;
+      } else if (media.startsWith("data:image")) {
+        imgSrc = media;
+      } else {
+        imgSrc = `data:image/jpeg;base64,${media}`;
+      }
+
       return (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-1">
           <img
-            src={`data:image/jpeg;base64,${media}`}
-            alt="Imagem recebida"
-            className="max-h-64 max-w-xs rounded-lg object-cover"
+            src={imgSrc}
+            alt="Imagem enviada"
+            className="max-w-[250px] max-h-[300px] object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+            onError={(e) => {
+              console.error("Erro ao renderizar imagem no Inbox. Verifique o src no Network tab.");
+              e.target.src = "https://placehold.co/250x200/e2e8f0/64748b?text=Erro+na+Imagem";
+            }}
           />
-          {msg?.texto ? <p className="text-sm whitespace-pre-wrap">{msg.texto}</p> : null}
+          {msg?.texto && msg.texto !== "[Imagem]" ? (
+            <span className="text-sm mt-1 whitespace-pre-wrap">{msg.texto}</span>
+          ) : null}
         </div>
       );
     }
