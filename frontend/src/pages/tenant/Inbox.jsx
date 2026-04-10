@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { AlertCircle, ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
@@ -28,6 +28,8 @@ export default function Inbox() {
   const [toast, setToast] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [mediaCaption, setMediaCaption] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const wsRef = useRef(null);
@@ -41,11 +43,23 @@ export default function Inbox() {
   const leadsFetchQueuedRef = useRef(false);
   const leadsRefreshTimerRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingIntervalRef = useRef(null);
+  const audioStreamRef = useRef(null);
+  const shouldSendRecordingRef = useRef(true);
 
   const scrollToBottom = () => {
     window.setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 0);
+  };
+
+  const formatRecordingTime = (totalSeconds) => {
+    const secs = Math.max(0, Number(totalSeconds || 0));
+    const mm = String(Math.floor(secs / 60)).padStart(2, "0");
+    const ss = String(secs % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
   };
 
   const isPendingMessage = (msg) => String(msg?.status || "").toLowerCase() === "pending";
@@ -376,6 +390,17 @@ export default function Inbox() {
     };
   }, [activeEmpresaId]);
 
+  useEffect(() => () => {
+    if (recordingIntervalRef.current) {
+      window.clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -428,30 +453,19 @@ export default function Inbox() {
     }
   };
 
-  const handleSelectFile = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setSelectedFile(file);
-  };
-
-  const clearSelectedFile = () => {
-    setSelectedFile(null);
-    setMediaCaption("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleSendMedia = async () => {
-    if (!selectedLead || !selectedFile) return;
+  const sendMediaFile = async (file, caption = "") => {
+    if (!selectedLead || !file) return false;
     const telefone = selectedLead.telefone_contato;
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tipoMidia = selectedFile.type.startsWith("image/")
+    const tipoMidia = file.type.startsWith("image/")
       ? "image"
-      : selectedFile.type.startsWith("audio/")
+      : file.type.startsWith("audio/")
         ? "audio"
         : "document";
-    const textoOptimista = mediaCaption?.trim()
-      ? `Enviando arquivo... ${mediaCaption.trim()}`
-      : "Enviando arquivo...";
+    const textoBaseEnvio = tipoMidia === "audio" ? "Enviando áudio..." : "Enviando arquivo...";
+    const textoOptimista = caption?.trim()
+      ? `${textoBaseEnvio} ${caption.trim()}`
+      : textoBaseEnvio;
     const optimisticMediaMessage = {
       id: tempId,
       texto: textoOptimista,
@@ -469,13 +483,13 @@ export default function Inbox() {
     setIsSendingMedia(true);
     try {
       const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("caption", mediaCaption || "");
+      formData.append("file", file);
+      formData.append("caption", caption || "");
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send_media`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      clearSelectedFile();
       void fetchLeads();
+      return true;
     } catch (e) {
       console.error("Erro ao enviar mídia", e);
       setMessages((prev) =>
@@ -485,7 +499,7 @@ export default function Inbox() {
                 ...msg,
                 status: "failed",
                 erro_envio: e.response?.data?.detail || "Falha ao enviar arquivo.",
-                texto: "Falha ao enviar arquivo.",
+                texto: tipoMidia === "audio" ? "Falha ao enviar áudio." : "Falha ao enviar arquivo.",
               }
             : msg
         )
@@ -494,8 +508,102 @@ export default function Inbox() {
         type: "error",
         message: e.response?.data?.detail || "Não foi possível enviar a mídia.",
       });
+      return false;
     } finally {
       setIsSendingMedia(false);
+    }
+  };
+
+  const handleSelectFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+  };
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    setMediaCaption("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleSendMedia = async () => {
+    if (!selectedLead || !selectedFile) return;
+    const ok = await sendMediaFile(selectedFile, mediaCaption);
+    if (ok) {
+      clearSelectedFile();
+    }
+  };
+
+  const startRecording = async () => {
+    if (!selectedLead) return;
+    if (!navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      alert("Seu navegador não suporta gravação de áudio.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      shouldSendRecordingRef.current = true;
+
+      recorder.ondataavailable = (event) => {
+        if (event?.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const shouldSend = shouldSendRecordingRef.current;
+        try {
+          if (shouldSend && audioChunksRef.current.length > 0) {
+            const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+            const file = new File([blob], "audio_record.webm", { type: "audio/webm" });
+            await sendMediaFile(file, "");
+          }
+        } finally {
+          audioChunksRef.current = [];
+          if (audioStreamRef.current) {
+            audioStreamRef.current.getTracks().forEach((track) => track.stop());
+            audioStreamRef.current = null;
+          }
+          mediaRecorderRef.current = null;
+        }
+      };
+
+      recorder.start();
+      setRecordingTime(0);
+      setIsRecording(true);
+      if (recordingIntervalRef.current) {
+        window.clearInterval(recordingIntervalRef.current);
+      }
+      recordingIntervalRef.current = window.setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Erro ao iniciar gravação:", err);
+      alert("Não foi possível acessar o microfone. Verifique as permissões do navegador.");
+    }
+  };
+
+  const stopRecording = (send = true) => {
+    shouldSendRecordingRef.current = Boolean(send);
+    setIsRecording(false);
+    setRecordingTime(0);
+    if (recordingIntervalRef.current) {
+      window.clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
     }
   };
 
@@ -1175,24 +1283,73 @@ export default function Inbox() {
                   >
                     <Paperclip size={18} />
                   </button>
-                  <textarea
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyDown={handleComposerKeyDown}
-                    placeholder="Digite uma mensagem"
-                    rows={1}
-                    className="max-h-32 min-h-[44px] flex-1 resize-none rounded-3xl border-none bg-white px-4 py-3 text-sm outline-none shadow-sm focus:ring-0"
-                  />
-                  <button
-                    type={selectedFile ? "button" : "submit"}
-                    onClick={selectedFile ? handleSendMedia : undefined}
-                    disabled={selectedFile ? isSendingMedia : !newMessage.trim()}
-                    className={`rounded-full p-3 text-white shadow-sm transition-colors ${
-                      hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
-                    } disabled:cursor-not-allowed disabled:opacity-80`}
-                  >
-                    <Send size={18} />
-                  </button>
+                  {isRecording ? (
+                    <div className="flex flex-1 items-center justify-between gap-3 rounded-3xl bg-white px-4 py-3 shadow-sm">
+                      <div className="flex items-center gap-2 text-sm text-gray-700">
+                        <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
+                        <span className="font-medium">{formatRecordingTime(recordingTime)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => stopRecording(false)}
+                          className="rounded-full p-2 text-red-600 transition-colors hover:bg-red-50"
+                          title="Cancelar gravação"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => stopRecording(true)}
+                          className="rounded-full bg-emerald-600 p-2 text-white transition-colors hover:bg-emerald-700"
+                          title="Enviar áudio"
+                        >
+                          <Send size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <textarea
+                        value={newMessage}
+                        onChange={(e) => setNewMessage(e.target.value)}
+                        onKeyDown={handleComposerKeyDown}
+                        placeholder="Digite uma mensagem"
+                        rows={1}
+                        className="max-h-32 min-h-[44px] flex-1 resize-none rounded-3xl border-none bg-white px-4 py-3 text-sm outline-none shadow-sm focus:ring-0"
+                      />
+                      {selectedFile ? (
+                        <button
+                          type="button"
+                          onClick={handleSendMedia}
+                          disabled={isSendingMedia}
+                          className={`rounded-full p-3 text-white shadow-sm transition-colors ${
+                            hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
+                          } disabled:cursor-not-allowed disabled:opacity-80`}
+                        >
+                          <Send size={18} />
+                        </button>
+                      ) : newMessage.trim() ? (
+                        <button
+                          type="submit"
+                          className={`rounded-full p-3 text-white shadow-sm transition-colors ${
+                            hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
+                          } disabled:cursor-not-allowed disabled:opacity-80`}
+                        >
+                          <Send size={18} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={startRecording}
+                          className="rounded-full bg-white p-3 text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                          title="Gravar áudio"
+                        >
+                          <Mic size={18} />
+                        </button>
+                      )}
+                    </>
+                  )}
                 </form>
               </div>
             </footer>
