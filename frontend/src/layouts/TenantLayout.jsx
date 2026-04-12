@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, Link, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, ArrowRightLeft, Megaphone, Tag } from "lucide-react";
+import { LayoutDashboard, Users, Brain, Calendar, LogOut, Bot, MessageSquare, Webhook, ArrowRightLeft, Megaphone, Tag, Target } from "lucide-react";
 import { BuildingOfficeIcon } from "@heroicons/react/24/outline";
 import axios from "axios";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
@@ -112,6 +112,10 @@ export default function TenantLayout() {
           <Link to="/painel/unidades" className="flex items-center space-x-3 text-blue-100 hover:text-white hover:bg-blue-800 px-3 py-2 rounded-lg transition-colors">
             <BuildingOfficeIcon className="h-5 w-5" />
             <span>Endereços / Filiais</span>
+          </Link>
+          <Link to="/painel/conversoes" className="flex items-center space-x-3 text-blue-100 hover:text-white hover:bg-blue-800 px-3 py-2 rounded-lg transition-colors">
+            <Target size={20} />
+            <span>Conversões</span>
           </Link>
         </nav>
         
