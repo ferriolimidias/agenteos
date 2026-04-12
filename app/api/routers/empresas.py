@@ -3,9 +3,11 @@ import io
 import csv
 import json
 import uuid
+import hashlib
 from datetime import datetime
 import pdfplumber
 import traceback
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_
@@ -1037,6 +1039,10 @@ class HistoricoTransferenciaResponse(BaseModel):
 
 class TransferenciaManualRequest(BaseModel):
     destino_id: str
+
+
+class MetaCAPITestRequest(BaseModel):
+    test_event_code: str | None = None
 
 
 class TagGroupBase(BaseModel):
@@ -2633,6 +2639,78 @@ async def transferir_lead_manual(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=resultado)
 
     return {"success": True, "detail": resultado}
+
+
+@router.post("/{empresa_id}/teste-meta-capi", status_code=status.HTTP_200_OK)
+async def teste_meta_capi(
+    empresa_id: str,
+    data: MetaCAPITestRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result_empresa = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = result_empresa.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+
+    pixel_id = str(getattr(empresa, "meta_pixel_id", "") or "").strip()
+    access_token = str(getattr(empresa, "meta_access_token", "") or "").strip()
+    if not pixel_id or not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="meta_pixel_id e meta_access_token são obrigatórios para testar a Meta CAPI.",
+        )
+
+    telefone_ficticio = "5511999999999"
+    telefone_hash = hashlib.sha256(telefone_ficticio.encode("utf-8")).hexdigest()
+    test_event_code = str(getattr(data, "test_event_code", "") or "").strip() or None
+
+    payload_meta: dict[str, Any] = {
+        "data": [
+            {
+                "event_name": "Purchase",
+                "event_time": int(datetime.utcnow().timestamp()),
+                "action_source": "system_generated",
+                "user_data": {
+                    "ph": [telefone_hash],
+                },
+                "custom_data": {
+                    "currency": "BRL",
+                    "value": 1.00,
+                },
+            }
+        ],
+        "access_token": access_token,
+    }
+    if test_event_code:
+        payload_meta["test_event_code"] = test_event_code
+
+    url = f"https://graph.facebook.com/v19.0/{pixel_id}/events"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(url, json=payload_meta)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detalhe = ""
+        try:
+            detalhe = exc.response.text
+        except Exception:
+            detalhe = str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Meta recusou o evento de teste: {detalhe}",
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Falha de comunicação com a Meta: {str(exc)}",
+        )
+
+    return {"status": "success", "message": "Evento de teste enviado à Meta."}
 
 
 @router.post("/{empresa_id}/leads/importar", status_code=status.HTTP_201_CREATED)
