@@ -1476,6 +1476,34 @@ async def node_atendente(state: AgentState):
     identificador = state.get("identificador_origem")
     canal = state.get("canal")
     lead_id = state.get("lead_id")
+
+    # Failsafe de memória: se o histórico não veio no estado, tenta reconstruir
+    # diretamente do banco para evitar amnésia de contexto.
+    if not str(historico_bd or "").strip() and lead_id:
+        try:
+            lead_uuid = uuid.UUID(str(lead_id))
+            async with AsyncSessionLocal() as session:
+                result_hist = await session.execute(
+                    select(MensagemHistorico)
+                    .where(MensagemHistorico.lead_id == lead_uuid)
+                    .order_by(MensagemHistorico.criado_em.desc())
+                    .limit(10)
+                )
+                mensagens_hist = list(reversed(result_hist.scalars().all()))
+                linhas_hist: list[str] = []
+                for msg_hist in mensagens_hist:
+                    texto_hist = str(getattr(msg_hist, "texto", "") or "").strip()
+                    if not texto_hist:
+                        continue
+                    papel = "Assistente" if bool(getattr(msg_hist, "from_me", False)) else "Cliente"
+                    linhas_hist.append(f"{papel}: {texto_hist}")
+                historico_reconstruido = "\n".join(linhas_hist).strip()
+                if historico_reconstruido:
+                    state["historico_bd"] = historico_reconstruido
+                    historico_bd = historico_reconstruido
+        except Exception as e:
+            logger.warning("[NODE ATENDENTE] Failsafe de histórico falhou para lead_id=%s: %s", lead_id, e)
+
     ja_respondeu = "Assistente:" in str(historico_bd or "")
     # TODO: Implementar reset de sessão por tempo (ex: 12h).
     is_primeira_interacao = not ja_respondeu
@@ -1578,6 +1606,12 @@ async def node_atendente(state: AgentState):
             "(ex: Posso te mostrar?). Se você tem a informação (como preços, cursos ou bolsas), "
             "ENVIE IMEDIATAMENTE. Se faltar contexto para buscar, faça a pergunta de forma direta. "
             "Proibido usar excesso de confirmações como Perfeito, Que ótimo, seguidas."
+        )
+        blocos.append(
+            "TRATAMENTO DE MENSAGENS AUTOMÁTICAS: Se você encontrar no histórico mensagens de ausência automática do WhatsApp "
+            "(ex: 'Agradecemos sua mensagem. Não estamos disponíveis...', 'Neste momento não podemos atender', etc), "
+            "IGNORE-AS COMPLETAMENTE. Elas são disparos de robôs e não representam a resposta ou vontade do cliente. "
+            "Mantenha o seu funil de vendas baseado apenas na última mensagem real digitada pelo humano."
         )
 
         formatacao_base = (
