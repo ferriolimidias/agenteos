@@ -44,10 +44,16 @@ class EmpresaUpdate(BaseModel):
     limite_certeza: float | None = None
     limite_duvida: float | None = None
     max_agentes_desempate: int | None = None
+    meta_capi_ativo: bool | None = None
+    meta_pixel_id: str | None = None
+    meta_access_token: str | None = None
 
 class EmpresaResponse(EmpresaBase):
     id: UUID4
     conexao_disparo_id: UUID4 | None = None
+    meta_capi_ativo: bool | None = None
+    meta_pixel_id: str | None = None
+    meta_access_token: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

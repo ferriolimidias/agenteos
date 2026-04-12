@@ -100,6 +100,9 @@ class Empresa(Base):
     followup_ativo = Column(Boolean, default=False)
     followup_espera_nivel_1_minutos = Column(Integer, default=20)
     followup_espera_nivel_2_minutos = Column(Integer, default=10)
+    meta_capi_ativo = Column(Boolean, default=False)
+    meta_pixel_id = Column(String, nullable=True)
+    meta_access_token = Column(String, nullable=True)
     # Coleta de dados do lead
     coletar_nome = Column(Boolean, default=True)
 

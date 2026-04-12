@@ -788,6 +788,12 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         if data.max_agentes_desempate < 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_agentes_desempate deve ser >= 1")
         empresa.max_agentes_desempate = data.max_agentes_desempate
+    if data.meta_capi_ativo is not None:
+        empresa.meta_capi_ativo = bool(data.meta_capi_ativo)
+    if data.meta_pixel_id is not None:
+        empresa.meta_pixel_id = str(data.meta_pixel_id).strip() or None
+    if data.meta_access_token is not None:
+        empresa.meta_access_token = str(data.meta_access_token).strip() or None
     if data.conexao_disparo_id is not None:
         if data.conexao_disparo_id == "":
             empresa.conexao_disparo_id = None
