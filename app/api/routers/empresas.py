@@ -2670,13 +2670,17 @@ async def teste_meta_capi(
         )
 
     url = f"https://graph.facebook.com/v19.0/{empresa.meta_pixel_id}/events?access_token={empresa.meta_access_token}"
+    test_event_code = str(getattr(request, "test_event_code", "") or "").strip() or None
+    if test_event_code:
+        url += f"&test_event_code={test_event_code}"
 
     payload = {
         "data": [
             {
                 "event_name": "Purchase",
                 "event_time": int(time.time()),
-                "action_source": "system_generated",
+                "action_source": "website",
+                "event_source_url": "https://agenteos.com",
                 "user_data": {
                     "ph": [hashlib.sha256(b"555484390411").hexdigest()],
                 },
@@ -2687,9 +2691,6 @@ async def teste_meta_capi(
             }
         ],
     }
-    test_event_code = str(getattr(request, "test_event_code", "") or "").strip() or None
-    if test_event_code:
-        payload["test_event_code"] = test_event_code
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
