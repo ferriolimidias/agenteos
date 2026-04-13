@@ -110,8 +110,21 @@ export default function Crm() {
   };
 
   const handleConversionTrigger = async (leadId, previousTags, nextTags) => {
-    const prevSet = new Set((previousTags || []).map((tag) => String(tag || "").trim().toLowerCase()));
-    const novasTags = (nextTags || []).filter((tag) => !prevSet.has(String(tag || "").trim().toLowerCase()));
+    // Extrai o ID ou Nome de cada tag para comparação, seja objeto ou string
+    const getTagValue = (t) => {
+      if (!t) return "";
+      if (typeof t === "object") return String(t.id || t.nome || "").toLowerCase();
+      return String(t).toLowerCase();
+    };
+
+    const prevValues = (previousTags || []).map(getTagValue).filter(Boolean);
+    const prevSet = new Set(prevValues);
+
+    // Filtra apenas o que realmente entrou de novo
+    const novasTags = (nextTags || []).filter((tag) => {
+      const val = getTagValue(tag);
+      return val && !prevSet.has(val);
+    });
     const novaTagConversao = novasTags.find((tag) => isConversionTag(tag));
     if (!novaTagConversao) return;
 
