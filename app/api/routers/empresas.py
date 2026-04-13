@@ -4,6 +4,7 @@ import csv
 import json
 import uuid
 import hashlib
+import time
 from datetime import datetime
 import pdfplumber
 import traceback
@@ -2647,7 +2648,7 @@ async def transferir_lead_manual(
 @router.post("/{empresa_id}/teste-meta-capi", status_code=status.HTTP_200_OK)
 async def teste_meta_capi(
     empresa_id: str,
-    data: MetaCAPITestRequest | None = None,
+    request: MetaCAPITestRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -2668,18 +2669,16 @@ async def teste_meta_capi(
             detail="meta_pixel_id e meta_access_token são obrigatórios para testar a Meta CAPI.",
         )
 
-    telefone_ficticio = "5511999999999"
-    telefone_hash = hashlib.sha256(telefone_ficticio.encode("utf-8")).hexdigest()
-    test_event_code = str(getattr(data, "test_event_code", "") or "").strip() or None
+    url = f"https://graph.facebook.com/v19.0/{empresa.meta_pixel_id}/events?access_token={empresa.meta_access_token}"
 
-    payload_meta: dict[str, Any] = {
+    payload = {
         "data": [
             {
                 "event_name": "Purchase",
-                "event_time": int(datetime.utcnow().timestamp()),
+                "event_time": int(time.time()),
                 "action_source": "system_generated",
                 "user_data": {
-                    "ph": [telefone_hash],
+                    "ph": [hashlib.sha256(b"555484390411").hexdigest()],
                 },
                 "custom_data": {
                     "currency": "BRL",
@@ -2687,25 +2686,24 @@ async def teste_meta_capi(
                 },
             }
         ],
-        "access_token": access_token,
     }
+    test_event_code = str(getattr(request, "test_event_code", "") or "").strip() or None
     if test_event_code:
-        payload_meta["test_event_code"] = test_event_code
+        payload["test_event_code"] = test_event_code
 
-    url = f"https://graph.facebook.com/v19.0/{pixel_id}/events"
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, json=payload_meta)
+            response = await client.post(url, json=payload)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        detalhe = ""
+        detalhe: object
         try:
-            detalhe = exc.response.text
+            detalhe = exc.response.json()
         except Exception:
-            detalhe = str(exc)
+            detalhe = exc.response.text if getattr(exc, "response", None) else str(exc)
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Meta recusou o evento de teste: {detalhe}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detalhe,
         )
     except httpx.HTTPError as exc:
         raise HTTPException(
