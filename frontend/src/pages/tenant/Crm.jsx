@@ -120,10 +120,6 @@ export default function Crm() {
   };
 
   const handleConversionTrigger = async (leadId, previousTags, nextTags) => {
-    console.log("--- Diagnóstico de Conversão ---");
-    console.log("Tags anteriores:", previousTags);
-    console.log("Novas tags:", nextTags);
-
     const getTagValue = (t) => {
       if (!t) return "";
       if (typeof t === "object") return String(t.id || "").toLowerCase();
@@ -133,50 +129,53 @@ export default function Crm() {
     const prevValues = (previousTags || []).map(getTagValue).filter(Boolean);
     const prevSet = new Set(prevValues);
 
-    const novasTagsDetectadas = (nextTags || []).filter((tag) => {
+    const novasTags = (nextTags || []).filter((tag) => {
       const val = getTagValue(tag);
       return val && !prevSet.has(val);
     });
 
-    console.log("Tags que o sistema identificou como NOVAS:", novasTagsDetectadas);
+    const tagConversaoDetectada = novasTags.find((id) => isConversionTag(id, availableTags));
+    if (!tagConversaoDetectada) return true;
 
-    const novaTagConversao = novasTagsDetectadas.find((tagId) => isConversionTag(tagId, availableTags));
     const leadAtual = findLeadById(leadId);
+    const dispararCapiMeta = async (valorFinal) => {
+      await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
+        valor: valorFinal,
+        moeda: "BRL",
+        telefone: leadAtual?.telefone_contato || leadAtual?.telefone,
+        test_event_code: null,
+      });
+      showToast("Conversão enviada para a Meta!");
+    };
 
-    if (novaTagConversao) {
-      console.log("Sucesso! Tag de conversão detectada:", novaTagConversao);
-      const valorStr = window.prompt("QUAL O VALOR DA VENDA? (Use apenas números)");
-
-      if (valorStr !== null && valorStr !== "") {
-        const valorLimpo = parseFloat(valorStr.replace(",", "."));
-        if (!Number.isFinite(valorLimpo) || valorLimpo < 0) {
-          alert("Valor inválido para conversão.");
-          return;
-        }
-        // Chama a API aqui...
-        try {
-          await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
-            valor: valorLimpo,
-            moeda: "BRL",
-            telefone: leadAtual?.telefone_contato || leadAtual?.telefone,
-            test_event_code: null,
-          });
-          alert("Conversão enviada com sucesso!");
-        } catch (err) {
-          console.error("Erro ao enviar para Meta:", err);
-        }
+    const valorDigitado = window.prompt("💰 VENDA DETECTADA! Qual o valor da conversão? (Ex: 150.00)");
+    if (valorDigitado) {
+      const valorFinal = parseFloat(valorDigitado.replace(",", "."));
+      if (!Number.isFinite(valorFinal) || valorFinal < 0) {
+        alert("Valor inválido para conversão.");
+        return false;
       }
-    } else {
-      console.log("Nenhuma tag de conversão detectada entre as novas tags.");
+      try {
+        await dispararCapiMeta(valorFinal);
+      } catch (err) {
+        console.error("Erro ao enviar para Meta:", err);
+        alert("Não foi possível enviar a conversão para a Meta.");
+      }
+      return true;
     }
+
+    const salvarSemConversao = window.confirm("Deseja salvar sem enviar a conversão para a Meta?");
+    return salvarSemConversao;
   };
 
   const handleLeadTagsChange = async (leadId, nextTags) => {
     const leadAtual = findLeadById(leadId);
     const tagsAnteriores = normalizeLeadTags(leadAtual?.tags);
+    const podeSalvar = await handleConversionTrigger(leadId, tagsAnteriores, nextTags);
+    if (!podeSalvar) return;
+
     await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
     updateLeadInState(leadId, { tags: nextTags });
-    await handleConversionTrigger(leadId, tagsAnteriores, nextTags);
   };
 
   const handleLeadSave = async (leadId, updates) => {
