@@ -93,14 +93,15 @@ export default function Crm() {
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
 
-  const isConversionTag = (tagValue) => {
-    const raw = String(tagValue || "").trim();
-    if (!raw) return false;
-    const oficial = availableTags.find(
-      (tag) => String(tag?.id || "").trim() === raw || String(tag?.nome || "").trim().toLowerCase() === raw.toLowerCase()
-    );
-    const nomeReferencia = oficial?.nome || raw;
-    const text = normalizeSearchText(nomeReferencia);
+  const isConversionTag = (tag, allTags) => {
+    const tagObj =
+      typeof tag === "object"
+        ? tag
+        : (allTags || []).find(
+            (t) => String(t?.id || "").trim() === String(tag || "").trim() || String(t?.nome || "").trim() === String(tag || "").trim()
+          );
+    if (!tagObj) return false;
+    const text = normalizeSearchText(tagObj?.nome || "");
     return text.includes("conversao") || text.includes("venda");
   };
 
@@ -125,7 +126,7 @@ export default function Crm() {
       const val = getTagValue(tag);
       return val && !prevSet.has(val);
     });
-    const novaTagConversao = novasTags.find((tag) => isConversionTag(tag));
+    const novaTagConversao = novasTags.find((tagId) => isConversionTag(tagId, availableTags));
     if (!novaTagConversao) return;
 
     const valorInput = window.prompt("Qual o valor desta conversão?");
