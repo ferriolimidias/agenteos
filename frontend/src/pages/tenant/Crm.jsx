@@ -29,6 +29,7 @@ export default function Crm() {
   const [importSelectedTags, setImportSelectedTags] = useState([]);
   const [importSaving, setImportSaving] = useState(false);
   const [importInfo, setImportInfo] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
@@ -78,9 +79,73 @@ export default function Crm() {
     setSelectedLead((prev) => (prev?.id === leadId ? { ...prev, ...updates } : prev));
   };
 
+  const findLeadById = (leadId) => {
+    for (const etapa of funil?.etapas || []) {
+      const lead = (etapa?.leads || []).find((item) => item?.id === leadId);
+      if (lead) return lead;
+    }
+    return selectedLead?.id === leadId ? selectedLead : null;
+  };
+
+  const normalizeSearchText = (value) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+  const isConversionTag = (tagValue) => {
+    const raw = String(tagValue || "").trim();
+    if (!raw) return false;
+    const oficial = availableTags.find(
+      (tag) => String(tag?.id || "").trim() === raw || String(tag?.nome || "").trim().toLowerCase() === raw.toLowerCase()
+    );
+    const nomeReferencia = oficial?.nome || raw;
+    const text = normalizeSearchText(nomeReferencia);
+    return text.includes("conversao") || text.includes("venda");
+  };
+
+  const showToast = (message) => {
+    setToastMessage(message);
+    window.setTimeout(() => setToastMessage(""), 2800);
+  };
+
+  const handleConversionTrigger = async (leadId, previousTags, nextTags) => {
+    const prevSet = new Set((previousTags || []).map((tag) => String(tag || "").trim().toLowerCase()));
+    const novasTags = (nextTags || []).filter((tag) => !prevSet.has(String(tag || "").trim().toLowerCase()));
+    const novaTagConversao = novasTags.find((tag) => isConversionTag(tag));
+    if (!novaTagConversao) return;
+
+    const valorInput = window.prompt("Qual o valor desta conversão?");
+    if (valorInput === null) return;
+    const valorNormalizado = Number(String(valorInput).replace(",", ".").trim());
+    if (!Number.isFinite(valorNormalizado) || valorNormalizado < 0) {
+      alert("Valor inválido para conversão.");
+      return;
+    }
+
+    const lead = findLeadById(leadId);
+    const telefoneLead = String(lead?.telefone_contato || lead?.telefone || "").trim() || null;
+
+    try {
+      await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
+        valor: valorNormalizado,
+        moeda: "BRL",
+        telefone: telefoneLead,
+        test_event_code: null,
+      });
+      showToast("Conversão enviada para a Meta!");
+    } catch (err) {
+      console.error("Erro ao disparar conversão para Meta:", err);
+      alert("Não foi possível enviar a conversão para a Meta.");
+    }
+  };
+
   const handleLeadTagsChange = async (leadId, nextTags) => {
+    const leadAtual = findLeadById(leadId);
+    const tagsAnteriores = normalizeLeadTags(leadAtual?.tags);
     await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
     updateLeadInState(leadId, { tags: nextTags });
+    await handleConversionTrigger(leadId, tagsAnteriores, nextTags);
   };
 
   const handleLeadSave = async (leadId, updates) => {
@@ -180,6 +245,12 @@ export default function Crm() {
 
   return (
     <div className="flex h-full flex-col space-y-6">
+      {toastMessage ? (
+        <div className="fixed right-4 top-4 z-[70] rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 shadow-lg">
+          {toastMessage}
+        </div>
+      ) : null}
+
       <div className="flex flex-shrink-0 items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">

@@ -1047,6 +1047,9 @@ class TransferenciaManualRequest(BaseModel):
 
 class MetaCAPITestRequest(BaseModel):
     test_event_code: str | None = None
+    valor: float = 1.00
+    moeda: str = "BRL"
+    telefone: str | None = None
 
 
 class TagGroupBase(BaseModel):
@@ -2651,6 +2654,8 @@ async def teste_meta_capi(
     request: MetaCAPITestRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    request = request or MetaCAPITestRequest()
+
     try:
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
@@ -2674,6 +2679,10 @@ async def teste_meta_capi(
     if test_event_code:
         url += f"&test_event_code={test_event_code}"
 
+    telefone_base = str(getattr(request, "telefone", "") or "").strip()
+    telefone_para_hash = telefone_base if telefone_base else "555484390411"
+    telefone_hash = hashlib.sha256(telefone_para_hash.encode("utf-8")).hexdigest()
+
     payload = {
         "data": [
             {
@@ -2682,11 +2691,11 @@ async def teste_meta_capi(
                 "action_source": "website",
                 "event_source_url": "https://agenteos.com",
                 "user_data": {
-                    "ph": [hashlib.sha256(b"555484390411").hexdigest()],
+                    "ph": [telefone_hash],
                 },
                 "custom_data": {
-                    "currency": "BRL",
-                    "value": 1.00,
+                    "currency": str(getattr(request, "moeda", "BRL") or "BRL").strip().upper(),
+                    "value": float(getattr(request, "valor", 1.00) or 1.00),
                 },
             }
         ],
@@ -2696,6 +2705,7 @@ async def teste_meta_capi(
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
+            resposta_meta = response.json()
     except httpx.HTTPStatusError as exc:
         detalhe: object
         try:
@@ -2712,7 +2722,11 @@ async def teste_meta_capi(
             detail=f"Falha de comunicação com a Meta: {str(exc)}",
         )
 
-    return {"status": "success", "message": "Evento de teste enviado à Meta."}
+    return {
+        "status": "success",
+        "message": "Evento de teste enviado à Meta.",
+        "fbtrace_id": resposta_meta.get("fbtrace_id"),
+    }
 
 
 @router.post("/{empresa_id}/leads/importar", status_code=status.HTTP_201_CREATED)
