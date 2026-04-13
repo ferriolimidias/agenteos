@@ -890,8 +890,60 @@ export default function Inbox() {
   };
 
   const handleLeadTagsChange = async (leadId, nextTags) => {
-    await api.put(`/empresas/${empresa_id}/crm/leads/${leadId}`, { tags: nextTags });
-    updateLeadInState(leadId, { tags: nextTags });
+    const leadAtual = leads.find((l) => l.id === leadId);
+    if (!leadAtual) return;
+
+    // Detecta se uma tag nova foi adicionada
+    const idsAntigos = (leadAtual.tags || []).map((t) => (typeof t === "object" ? String(t.id) : String(t)));
+    const idsNovos = (nextTags || []).map((t) => (typeof t === "object" ? String(t.id) : String(t)));
+    const idsAdicionados = idsNovos.filter((id) => !idsAntigos.includes(id));
+
+    let tagDeVenda = null;
+    for (const id of idsAdicionados) {
+      const info = tagsOficiais.find((t) => String(t.id) === String(id));
+      if (info) {
+        const nome = (info.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (info.disparar_conversao_ads || nome.includes("pago") || nome.includes("venda") || nome.includes("conversao")) {
+          tagDeVenda = info;
+          break;
+        }
+      }
+    }
+
+    if (tagDeVenda) {
+      // Pequeno timeout para permitir que a UI (checkbox) renderize antes do prompt travar a thread
+      await new Promise((r) => setTimeout(r, 50));
+
+      const valorStr = window.prompt(`💰 VENDA DETECTADA (${tagDeVenda.nome}) no Live Chat!\nDigite o valor da conversão (Ex: 150.00):`);
+
+      if (valorStr) {
+        const valorFormatado = parseFloat(valorStr.replace(",", "."));
+        if (!Number.isNaN(valorFormatado)) {
+          // Atualiza o valor localmente no lead
+          updateLeadInState(leadId, { valor_conversao: valorFormatado });
+
+          try {
+            await api.post(`/empresas/${empresa_id}/teste-meta-capi`, {
+              valor: valorFormatado,
+              moeda: "BRL",
+              telefone: leadAtual.telefone_contato || leadAtual.telefone,
+              test_event_code: null,
+            });
+            if (setToast) setToast({ type: "success", message: "Conversão enviada à Meta com sucesso!" });
+          } catch (e) {
+            console.error("Erro na CAPI:", e);
+          }
+        }
+      }
+    }
+
+    // Salva as tags normalmente
+    try {
+      await api.put(`/empresas/${empresa_id}/crm/leads/${leadId}`, { tags: nextTags });
+      updateLeadInState(leadId, { tags: nextTags });
+    } catch (err) {
+      console.error("Erro ao salvar tags no Inbox:", err);
+    }
   };
 
   const handleTransferirManual = async () => {
