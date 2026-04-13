@@ -93,69 +93,55 @@ export default function Crm() {
   };
 
   const handleLeadTagsChange = async (leadId, nextTags) => {
-    // 1. Localiza o lead e extrai as tags atuais (IDs)
-    const leads = (funil?.etapas || []).flatMap((etapa) => etapa?.leads || []);
-    const leadAtual = leads.find((l) => l.id === leadId) || findLeadById(leadId);
-    const tagsAntigas = leadAtual?.tags || [];
+    const leadAtual = findLeadById(leadId);
+    if (!leadAtual) return;
+    const tagsSelecionadas = nextTags || [];
+    const payloadLead = { tags: tagsSelecionadas };
 
-    // 2. Identifica IDs de tags que foram ADICIONADOS agora
-    // Garantimos que estamos comparando strings/IDs puros
-    const idsAntigos = tagsAntigas.map((t) => (typeof t === "object" ? t.id : String(t)));
-    const idsNovos = (nextTags || []).map((t) => (typeof t === "object" ? t.id : String(t)));
+    // Descobre quais tags foram adicionadas (comparando as novas com as antigas do lead)
+    const idsAntigos = (leadAtual.tags || []).map((t) => (typeof t === "object" ? String(t.id) : String(t)));
+    const idsNovos = tagsSelecionadas.map((t) => (typeof t === "object" ? String(t.id) : String(t)));
     const idsAdicionados = idsNovos.filter((id) => !idsAntigos.includes(id));
 
-    console.log("IDs Adicionados:", idsAdicionados);
-
-    // 3. Verifica se alguma das tags adicionadas é de conversão
-    let tagDeVendaEncontrada = null;
-
+    let tagDeVenda = null;
     for (const id of idsAdicionados) {
-      // Busca a informação da tag na lista global availableTags
       const info = availableTags.find((t) => String(t.id) === String(id));
       if (info) {
         const nome = (info.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        // Critérios: Flag no banco OU nomes específicos
         if (info.disparar_conversao_ads || nome.includes("pago") || nome.includes("venda") || nome.includes("conversao")) {
-          tagDeVendaEncontrada = info;
+          tagDeVenda = info;
           break;
         }
       }
     }
 
-    // 4. Se encontrou uma venda, ABRE O PROMPT (Bloqueante)
-    if (tagDeVendaEncontrada) {
-      console.log("Conversão detectada na tag:", tagDeVendaEncontrada.nome);
-      const valorDigitado = window.prompt(`💰 VENDA DETECTADA (${tagDeVendaEncontrada.nome})!\nDigite o valor da conversão (Ex: 150.00):`);
-
-      if (valorDigitado !== null && valorDigitado !== "") {
-        const valorFormatado = parseFloat(valorDigitado.replace(",", "."));
-
+    if (tagDeVenda) {
+      const valorStr = window.prompt(`💰 VENDA DETECTADA (${tagDeVenda.nome})!\nDigite o valor da conversão (Ex: 150.00):`);
+      if (valorStr) {
+        const valorFormatado = parseFloat(valorStr.replace(",", "."));
         if (!Number.isNaN(valorFormatado)) {
-          try {
-            // Envia para a Meta CAPI
-            await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
+          payloadLead.valor_conversao = valorFormatado;
+          updateLeadInState(leadId, { valor_conversao: valorFormatado });
+          api
+            .post(`/empresas/${empresaId}/teste-meta-capi`, {
               valor: valorFormatado,
               moeda: "BRL",
-              telefone: leadAtual?.telefone_contato || leadAtual?.telefone,
+              telefone: leadAtual.telefone_contato || leadAtual.telefone,
               test_event_code: null,
-            });
-            showToast("Conversão enviada para a Meta!");
-          } catch (err) {
-            console.error("Erro ao enviar para Meta:", err);
-            alert("Erro ao enviar conversão para Meta.");
-          }
+            })
+            .then(() => console.log("CAPI Enviada"))
+            .catch((e) => console.error("Erro CAPI", e));
         }
       }
     }
 
-    // 5. SALVAMENTO FINAL NO BANCO DE DADOS
+    // envio (PUT) para API
     try {
       await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, {
-        tags: nextTags,
+        ...payloadLead,
       });
 
-      // Atualiza o estado local (ajuste conforme a sua função de update)
-      updateLeadInState(leadId, { tags: nextTags });
+      updateLeadInState(leadId, payloadLead);
       showToast("Tags atualizadas com sucesso!");
     } catch (error) {
       console.error("Erro ao salvar tags no banco:", error);
