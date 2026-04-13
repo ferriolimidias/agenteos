@@ -442,6 +442,9 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "limite_certeza": empresa.limite_certeza if getattr(empresa, "limite_certeza", None) is not None else 0.65,
         "limite_duvida": empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45,
         "max_agentes_desempate": empresa.max_agentes_desempate if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
+        "meta_capi_ativo": bool(getattr(empresa, "meta_capi_ativo", False)),
+        "meta_pixel_id": str(getattr(empresa, "meta_pixel_id", "") or "").strip() or None,
+        "meta_access_token": str(getattr(empresa, "meta_access_token", "") or "").strip() or None,
     }
 
 
@@ -791,7 +794,7 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_agentes_desempate deve ser >= 1")
         empresa.max_agentes_desempate = data.max_agentes_desempate
     if data.meta_capi_ativo is not None:
-        empresa.meta_capi_ativo = bool(data.meta_capi_ativo)
+        empresa.meta_capi_ativo = data.meta_capi_ativo
     if data.meta_pixel_id is not None:
         empresa.meta_pixel_id = str(data.meta_pixel_id).strip() or None
     if data.meta_access_token is not None:

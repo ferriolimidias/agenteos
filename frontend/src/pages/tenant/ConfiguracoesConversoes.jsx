@@ -41,9 +41,9 @@ export default function ConfiguracoesConversoes() {
         meta_pixel_id: metaPixelId || null,
         meta_access_token: metaAccessToken || null,
       };
+      console.log("[Configurações Conversões] Payload:", payload);
       await api.put(`/empresas/${empresa_id}`, payload);
       alert("Configurações guardadas com sucesso.");
-      console.log("[Configurações Conversões] Payload:", payload);
     } catch (err) {
       console.error("Erro ao guardar configurações de conversão:", err);
       alert("Não foi possível guardar as configurações.");
