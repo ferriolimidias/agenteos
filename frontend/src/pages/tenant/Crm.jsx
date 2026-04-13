@@ -94,7 +94,10 @@ export default function Crm() {
 
   const handleLeadTagsChange = async (leadId, nextTags) => {
     try {
+      // Salva na API
       await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
+      
+      // Atualiza o estado local apenas com a mudança (o updateLeadInState já faz o merge seguro)
       updateLeadInState(leadId, { tags: nextTags });
       showToast("Tags atualizadas com sucesso!");
     } catch (error) {
@@ -105,11 +108,13 @@ export default function Crm() {
 
   const handleLeadSave = async (leadId, updates) => {
     try {
+      // Salva as edições do modal na API
       await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
       
-      // Atualização segura e limpa (sem mesclar res.data inteiro)
+      // Atualização cirúrgica e segura do estado visual (SEM usar res.data)
       updateLeadInState(leadId, updates);
 
+      // Fecha o modal se aplicável
       if (selectedLead && selectedLead.id === leadId) {
         setSelectedLead(null);
       }
