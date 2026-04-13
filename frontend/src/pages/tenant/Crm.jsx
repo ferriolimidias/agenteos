@@ -87,95 +87,80 @@ export default function Crm() {
     return selectedLead?.id === leadId ? selectedLead : null;
   };
 
-  const normalizeSearchText = (value) =>
-    String(value || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase();
-
-  const isConversionTag = (tag, allTags) => {
-    // 1. Tenta encontrar o objeto da tag pelo ID ou pelo Próprio Objeto
-    const tagObj = typeof tag === "object" ? tag : (allTags || []).find((t) => t.id === tag);
-
-    if (!tagObj) return false;
-
-    // 2. Normaliza o nome para ignorar acentos e maiúsculas
-    const nome = (tagObj.nome || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, ""); // Remove acentos (ex: conversão -> conversao)
-
-    // 3. Verifica se tem a flag do banco OU as palavras-chave
-    return (
-      tagObj.disparar_conversao_ads === true ||
-      nome.includes("conversao") ||
-      nome.includes("venda") ||
-      nome.includes("pago")
-    );
-  };
-
   const showToast = (message) => {
     setToastMessage(message);
     window.setTimeout(() => setToastMessage(""), 2800);
   };
 
-  const handleConversionTrigger = async (leadId, previousTags, nextTags) => {
-    const getTagValue = (t) => {
-      if (!t) return "";
-      if (typeof t === "object") return String(t.id || "").toLowerCase();
-      return String(t).toLowerCase();
-    };
+  const handleLeadTagsChange = async (leadId, nextTags) => {
+    // 1. Localiza o lead e extrai as tags atuais (IDs)
+    const leads = (funil?.etapas || []).flatMap((etapa) => etapa?.leads || []);
+    const leadAtual = leads.find((l) => l.id === leadId) || findLeadById(leadId);
+    const tagsAntigas = leadAtual?.tags || [];
 
-    const prevValues = (previousTags || []).map(getTagValue).filter(Boolean);
-    const prevSet = new Set(prevValues);
+    // 2. Identifica IDs de tags que foram ADICIONADOS agora
+    // Garantimos que estamos comparando strings/IDs puros
+    const idsAntigos = tagsAntigas.map((t) => (typeof t === "object" ? t.id : String(t)));
+    const idsNovos = (nextTags || []).map((t) => (typeof t === "object" ? t.id : String(t)));
+    const idsAdicionados = idsNovos.filter((id) => !idsAntigos.includes(id));
 
-    const novasTags = (nextTags || []).filter((tag) => {
-      const val = getTagValue(tag);
-      return val && !prevSet.has(val);
-    });
+    console.log("IDs Adicionados:", idsAdicionados);
 
-    const tagConversaoDetectada = novasTags.find((id) => isConversionTag(id, availableTags));
-    if (!tagConversaoDetectada) return true;
+    // 3. Verifica se alguma das tags adicionadas é de conversão
+    let tagDeVendaEncontrada = null;
 
-    const leadAtual = findLeadById(leadId);
-    const dispararCapiMeta = async (valorFinal) => {
-      await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
-        valor: valorFinal,
-        moeda: "BRL",
-        telefone: leadAtual?.telefone_contato || leadAtual?.telefone,
-        test_event_code: null,
-      });
-      showToast("Conversão enviada para a Meta!");
-    };
-
-    const valorDigitado = window.prompt("💰 VENDA DETECTADA! Qual o valor da conversão? (Ex: 150.00)");
-    if (valorDigitado) {
-      const valorFinal = parseFloat(valorDigitado.replace(",", "."));
-      if (!Number.isFinite(valorFinal) || valorFinal < 0) {
-        alert("Valor inválido para conversão.");
-        return false;
+    for (const id of idsAdicionados) {
+      // Busca a informação da tag na lista global availableTags
+      const info = availableTags.find((t) => String(t.id) === String(id));
+      if (info) {
+        const nome = (info.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        // Critérios: Flag no banco OU nomes específicos
+        if (info.disparar_conversao_ads || nome.includes("pago") || nome.includes("venda") || nome.includes("conversao")) {
+          tagDeVendaEncontrada = info;
+          break;
+        }
       }
-      try {
-        await dispararCapiMeta(valorFinal);
-      } catch (err) {
-        console.error("Erro ao enviar para Meta:", err);
-        alert("Não foi possível enviar a conversão para a Meta.");
-      }
-      return true;
     }
 
-    const salvarSemConversao = window.confirm("Deseja salvar sem enviar a conversão para a Meta?");
-    return salvarSemConversao;
-  };
+    // 4. Se encontrou uma venda, ABRE O PROMPT (Bloqueante)
+    if (tagDeVendaEncontrada) {
+      console.log("Conversão detectada na tag:", tagDeVendaEncontrada.nome);
+      const valorDigitado = window.prompt(`💰 VENDA DETECTADA (${tagDeVendaEncontrada.nome})!\nDigite o valor da conversão (Ex: 150.00):`);
 
-  const handleLeadTagsChange = async (leadId, nextTags) => {
-    const leadAtual = findLeadById(leadId);
-    const tagsAnteriores = normalizeLeadTags(leadAtual?.tags);
-    const podeSalvar = await handleConversionTrigger(leadId, tagsAnteriores, nextTags);
-    if (!podeSalvar) return;
+      if (valorDigitado !== null && valorDigitado !== "") {
+        const valorFormatado = parseFloat(valorDigitado.replace(",", "."));
 
-    await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
-    updateLeadInState(leadId, { tags: nextTags });
+        if (!Number.isNaN(valorFormatado)) {
+          try {
+            // Envia para a Meta CAPI
+            await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
+              valor: valorFormatado,
+              moeda: "BRL",
+              telefone: leadAtual?.telefone_contato || leadAtual?.telefone,
+              test_event_code: null,
+            });
+            showToast("Conversão enviada para a Meta!");
+          } catch (err) {
+            console.error("Erro ao enviar para Meta:", err);
+            alert("Erro ao enviar conversão para Meta.");
+          }
+        }
+      }
+    }
+
+    // 5. SALVAMENTO FINAL NO BANCO DE DADOS
+    try {
+      await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, {
+        tags: nextTags,
+      });
+
+      // Atualiza o estado local (ajuste conforme a sua função de update)
+      updateLeadInState(leadId, { tags: nextTags });
+      showToast("Tags atualizadas com sucesso!");
+    } catch (error) {
+      console.error("Erro ao salvar tags no banco:", error);
+      alert("Erro ao salvar tags.");
+    }
   };
 
   const handleLeadSave = async (leadId, updates) => {
