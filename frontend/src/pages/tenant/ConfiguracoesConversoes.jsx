@@ -8,8 +8,10 @@ export default function ConfiguracoesConversoes() {
   const [ativarMetaCAPI, setAtivarMetaCAPI] = useState(false);
   const [metaPixelId, setMetaPixelId] = useState("");
   const [metaAccessToken, setMetaAccessToken] = useState("");
+  const [testEventCode, setTestEventCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
 
   useEffect(() => {
     const fetchConfiguracoes = async () => {
@@ -49,6 +51,22 @@ export default function ConfiguracoesConversoes() {
       alert("Não foi possível guardar as configurações.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleTestConversion = async () => {
+    if (!empresa_id) return;
+    setIsTesting(true);
+    try {
+      await api.post(`/empresas/${empresa_id}/teste-meta-capi`, {
+        test_event_code: testEventCode || null,
+      });
+      alert("Evento de teste enviado com sucesso para a Meta!");
+    } catch (error) {
+      console.error("Erro ao testar Meta CAPI:", error);
+      alert("Erro ao enviar evento. Verifique as chaves e tente novamente.");
+    } finally {
+      setIsTesting(false);
     }
   };
 
@@ -142,16 +160,48 @@ export default function ConfiguracoesConversoes() {
             </div>
           )}
 
-          <footer className="flex justify-end border-t border-gray-100 px-6 py-4">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={isSaving || isLoading || !empresa_id}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : null}
-              {isSaving ? "Guardando..." : "Guardar Configurações"}
-            </button>
+          <footer className="border-t border-gray-100 px-6 py-4">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={isSaving || isLoading || !empresa_id}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSaving ? <Loader2 size={16} className="animate-spin" /> : null}
+                {isSaving ? "Guardando..." : "Guardar Configurações"}
+              </button>
+            </div>
+
+            {ativarMetaCAPI ? (
+              <div className="mt-4">
+                <hr className="my-6 border-gray-200" />
+                <h3 className="text-sm font-semibold text-gray-900">Área de Teste (Opcional)</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Para testar a ligação, aceda ao Gerenciador de Eventos da Meta, vá ao separador
+                  &quot;Testar eventos&quot; e copie o código gerado.
+                </p>
+
+                <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center">
+                  <input
+                    type="text"
+                    value={testEventCode}
+                    onChange={(e) => setTestEventCode(e.target.value)}
+                    placeholder="TEST12345"
+                    className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500 md:max-w-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestConversion}
+                    disabled={isTesting || isLoading || !empresa_id}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isTesting ? <Loader2 size={16} className="animate-spin" /> : null}
+                    {isTesting ? "A enviar..." : "Disparar Evento de Teste"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </footer>
         </section>
       </div>
