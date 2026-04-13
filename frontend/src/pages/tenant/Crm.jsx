@@ -164,12 +164,72 @@ export default function Crm() {
   };
 
   const handleLeadSave = async (leadId, updates) => {
-    const res = await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
-    updateLeadInState(leadId, {
-      ...updates,
-      tags: res.data?.tags || updates.tags,
-      valor_conversao: res.data?.valor_conversao ?? updates.valor_conversao,
-    });
+    // 1. Guarda o lead original para não perder dados (Nome, Etapa, etc.)
+    const leads = (funil?.etapas || []).flatMap((etapa) => etapa?.leads || []);
+    const leadOriginal = leads.find((l) => l.id === leadId);
+    if (!leadOriginal) return;
+
+    // 2. Verifica se houve alteração nas TAGS
+    if (updates.tags) {
+      const tagsAntigas = leadOriginal.tags || [];
+      const idsAntigos = tagsAntigas.map((t) => (typeof t === "object" ? String(t.id) : String(t)));
+      const idsNovos = updates.tags.map((t) => (typeof t === "object" ? String(t.id) : String(t)));
+      const idsAdicionados = idsNovos.filter((id) => !idsAntigos.includes(id));
+
+      for (const id of idsAdicionados) {
+        const info = availableTags.find((t) => String(t.id) === String(id));
+        if (info) {
+          const nome = (info.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+          // Verifica se é uma tag de conversão
+          if (info.disparar_conversao_ads || nome.includes("pago") || nome.includes("venda") || nome.includes("conversao")) {
+            // 3. BLOQUEIO: Pede o valor da venda
+            const valorStr = window.prompt(`💰 VENDA DETECTADA (${info.nome})!\nDigite o valor da conversão (Ex: 150.00):`);
+
+            if (valorStr !== null && valorStr !== "") {
+              const valorFormatado = parseFloat(valorStr.replace(",", "."));
+              if (!Number.isNaN(valorFormatado)) {
+                updates.valor_conversao = valorFormatado; // Guarda o valor no perfil do lead
+
+                // Dispara CAPI da Meta imediatamente
+                try {
+                  await api.post(`/empresas/${empresaId}/teste-meta-capi`, {
+                    valor: valorFormatado,
+                    moeda: "BRL",
+                    telefone: leadOriginal.telefone_contato || leadOriginal.telefone,
+                    test_event_code: null,
+                  });
+                  console.log("Conversão enviada para a Meta!");
+                } catch (err) {
+                  console.error("Erro ao enviar para a Meta CAPI:", err);
+                }
+              }
+            }
+            break; // Garante que só pede o valor uma vez
+          }
+        }
+      }
+    }
+
+    // 4. Salva no banco de dados
+    try {
+      const res = await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
+
+      // 5. ATUALIZAÇÃO SEGURA DO ESTADO (Impede o lead de sumir do Kanban)
+      updateLeadInState(leadId, {
+        ...leadOriginal,
+        ...updates,
+        ...(res.data || {}),
+      });
+
+      // Fecha o modal
+      if (selectedLead && selectedLead.id === leadId) {
+        setSelectedLead(null);
+      }
+    } catch (err) {
+      console.error("Erro ao salvar lead:", err);
+      alert("Erro ao salvar as alterações do lead.");
+    }
   };
 
   const handleDeleteLead = async (leadId) => {
