@@ -94,15 +94,24 @@ export default function Crm() {
       .toLowerCase();
 
   const isConversionTag = (tag, allTags) => {
-    const tagObj =
-      typeof tag === "object"
-        ? tag
-        : (allTags || []).find(
-            (t) => String(t?.id || "").trim() === String(tag || "").trim() || String(t?.nome || "").trim() === String(tag || "").trim()
-          );
+    // 1. Tenta encontrar o objeto da tag pelo ID ou pelo Próprio Objeto
+    const tagObj = typeof tag === "object" ? tag : (allTags || []).find((t) => t.id === tag);
+
     if (!tagObj) return false;
-    const text = normalizeSearchText(tagObj?.nome || "");
-    return text.includes("conversao") || text.includes("venda");
+
+    // 2. Normaliza o nome para ignorar acentos e maiúsculas
+    const nome = (tagObj.nome || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, ""); // Remove acentos (ex: conversão -> conversao)
+
+    // 3. Verifica se tem a flag do banco OU as palavras-chave
+    return (
+      tagObj.disparar_conversao_ads === true ||
+      nome.includes("conversao") ||
+      nome.includes("venda") ||
+      nome.includes("pago")
+    );
   };
 
   const showToast = (message) => {
