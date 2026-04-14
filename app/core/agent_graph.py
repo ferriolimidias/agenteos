@@ -2434,13 +2434,27 @@ async def node_especialista_saudacao(state: AgentState):
             logger.error("[NODE ESPECIALISTA SAUDACAO] Falha ao carregar empresa %s: %s", empresa_id, e)
 
     hora_atual = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M")
+    
+    # Validação do momento da conversa
+    primeiro_contato = _is_primeiro_contato(state)
+    
+    if primeiro_contato:
+        regra_mensagem_base = (
+            "MENSAGEM BASE DA EMPRESA OBRIGATÓRIA (COPIE-A LITERALMENTE):\n"
+            f"{saudacao_base_empresa}\n\n"
+            "REGRA CRÍTICA: Você DEVE incluir a MENSAGEM BASE DA EMPRESA na sua resposta final exatamente como ela está escrita. Se ela contiver um menu numérico, não o resuma e não altere a estrutura.\n"
+        )
+    else:
+        regra_mensagem_base = (
+            "REGRA CRÍTICA: O cliente enviou uma saudação ou mensagem curta no MEIO de uma conversa em andamento.\n"
+            "NÃO reenvie a mensagem de boas-vindas padrão nem o menu inicial. Responda de forma natural, curta e empática, baseando-se no contexto das mensagens anteriores.\n"
+        )
+
     prompt_saudacao = (
         f"{prompt_painel}\n\n"
         "--- DADOS DE SISTEMA OBRIGATÓRIOS (USE-OS PARA RESPONDER O CLIENTE) ---\n"
         f"Agora são {hora_atual}.\n"
-        "MENSAGEM BASE DA EMPRESA OBRIGATÓRIA (COPIE-A LITERALMENTE):\n"
-        f"{saudacao_base_empresa}\n\n"
-        "REGRA CRÍTICA: Você DEVE incluir a MENSAGEM BASE DA EMPRESA na sua resposta final exatamente como ela está escrita. Se ela contiver um menu numérico, não o resuma e não altere a estrutura.\n"
+        f"{regra_mensagem_base}"
         f"Considere este histórico global apenas para leitura contextual: {historico_global}.\n"
         "-----------------------------------------------------------------------\n"
     )
@@ -2453,7 +2467,7 @@ async def node_especialista_saudacao(state: AgentState):
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
         logger.exception("[NODE ESPECIALISTA SAUDACAO] Falha ao invocar LLM: %s", e)
-        resposta_texto = saudacao_base_empresa or "Olá! Seja bem-vindo(a)."
+        resposta_texto = saudacao_base_empresa or "Olá! Seja bem-vindo(a)." if primeiro_contato else "Olá! Como posso ajudar?"
 
     respostas_existentes = state.get("respostas_especialistas") or []
     if not isinstance(respostas_existentes, list):
