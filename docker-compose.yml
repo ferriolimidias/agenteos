@@ -8,6 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-agent_os}
+      TZ: America/Sao_Paulo
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -53,6 +54,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       EVOLUTION_API_URL: ${EVOLUTION_API_URL}
       EVOLUTION_API_TOKEN: ${EVOLUTION_API_TOKEN}
+      TZ: America/Sao_Paulo
 
   frontend:
     build:
@@ -66,6 +68,8 @@ services:
       - 1.1.1.1
     depends_on:
       - backend
+    environment:
+      TZ: America/Sao_Paulo
     ports:
       - "127.0.0.1:8080:80"
 
