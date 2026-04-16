@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import redis.asyncio as redis
+from db.database import engine
+from db.manual_migrations import ensure_empresas_prompt_columns
 
 from app.api.routers import empresas
 from app.api.routers import agentes
@@ -28,6 +30,7 @@ redis_client: redis.Redis = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
+    await ensure_empresas_prompt_columns(engine)
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     redis_client = redis.from_url(redis_url, decode_responses=True)
     yield

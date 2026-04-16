@@ -1,0 +1,8 @@
+ALTER TABLE empresas
+ADD COLUMN IF NOT EXISTS condutor_prompt TEXT;
+
+ALTER TABLE empresas
+ADD COLUMN IF NOT EXISTS condutor_ativo BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE empresas
+ADD COLUMN IF NOT EXISTS atendente_prompt TEXT;
