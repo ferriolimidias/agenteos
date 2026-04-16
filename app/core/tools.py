@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, TagCRM
-from app.services.tag_crm_service import processar_disparo_conversao_ads_para_tags
+from app.services.tag_crm_service import processar_disparo_conversao_ads_para_tags, sync_tag_etapa_lead
 
 
 def _normalizar_tags(tags: list[str] | None) -> list[str]:
@@ -55,15 +55,50 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
         ids_finais = [str(t.id) for t in tags_encontradas]
         print(f"IDs que serão gravados: {ids_finais}")
 
+        # 2.1 Regra de exclusividade para tags de etapa de funil.
+        # Se houver nova tag de etapa_funil, remove quaisquer outras tags
+        # desse tipo já existentes no lead e mantém somente a primeira etapa
+        # recebida na entrada atual.
+        tags_existentes_ids = [str(item).strip() for item in (lead.tags if isinstance(lead.tags, list) else []) if str(item).strip()]
+        tags_etapa_novas = [tag for tag in tags_encontradas if str(getattr(tag, "tipo", "") or "").strip().lower() == "etapa_funil"]
+        if tags_etapa_novas:
+            result_tags_empresa = await session.execute(select(TagCRM).where(TagCRM.empresa_id == lead.empresa_id))
+            tags_empresa = result_tags_empresa.scalars().all()
+            tags_empresa_por_id = {str(tag.id): tag for tag in tags_empresa}
+
+            tags_existentes_sem_etapa = []
+            for tag_id in tags_existentes_ids:
+                tag_obj = tags_empresa_por_id.get(tag_id)
+                if tag_obj and str(getattr(tag_obj, "tipo", "") or "").strip().lower() == "etapa_funil":
+                    continue
+                tags_existentes_sem_etapa.append(tag_id)
+
+            primeira_etapa_nova_id = str(tags_etapa_novas[0].id)
+            ids_novos_sem_outras_etapas: list[str] = []
+            etapa_incluida = False
+            for tag_obj in tags_encontradas:
+                tag_id = str(tag_obj.id)
+                if str(getattr(tag_obj, "tipo", "") or "").strip().lower() == "etapa_funil":
+                    if etapa_incluida or tag_id != primeira_etapa_nova_id:
+                        continue
+                    etapa_incluida = True
+                ids_novos_sem_outras_etapas.append(tag_id)
+            ids_finais = tags_existentes_sem_etapa + ids_novos_sem_outras_etapas
+
         # 3. Atualizar e Salvar
         lead.tags = ids_finais
         flag_modified(lead, "tags")
+        await sync_tag_etapa_lead(str(lead.id), session=session, preferencia="tag_to_crm")
 
         # 4. Recarregar as tags aplicadas do banco para avaliar ações automáticas nativas
         # Importante: usar UUIDs nativos para evitar falha de tipagem no IN com coluna UUID.
         tags_aplicadas: list[TagCRM] = []
-        lista_de_ids_aplicados = [getattr(tag_obj, "id", None) for tag_obj in tags_encontradas]
-        lista_de_ids_aplicados = [tag_id for tag_id in lista_de_ids_aplicados if tag_id is not None]
+        lista_de_ids_aplicados: list[uuid.UUID] = []
+        for tag_id in ids_finais:
+            try:
+                lista_de_ids_aplicados.append(uuid.UUID(str(tag_id)))
+            except (ValueError, TypeError):
+                continue
         if lista_de_ids_aplicados:
             result_tags_aplicadas = await session.execute(
                 select(TagCRM).where(
@@ -146,6 +181,7 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) 
                 tags_finais.append(tag_id_oficial)
                 lead.tags = tags_finais
                 flag_modified(lead, "tags")
+                await sync_tag_etapa_lead(str(lead.id), session=session, preferencia="tag_to_crm")
                 
                 # --- NOVA LÓGICA DE PAUSA NATIVA ---
                 if getattr(tag, "acao_transferir_humano", False):
@@ -162,6 +198,7 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) 
                 await session.commit()
                 return f"Sucesso: etiqueta '{tag.nome}' aplicada ao lead."
             # Se a tag JÁ estava aplicada, mas exige transferência (evita que a IA ignore se repetir a tag)
+            await sync_tag_etapa_lead(str(lead.id), session=session, preferencia="tag_to_crm")
             if getattr(tag, "acao_transferir_humano", False):
                 lead.status_atendimento = "manual"
                 lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)

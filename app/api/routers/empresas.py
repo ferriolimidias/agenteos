@@ -48,7 +48,7 @@ from db.models import (
     normalize_user_email,
 )
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
@@ -56,6 +56,7 @@ from app.services.ads_integration_service import notificar_conversao_ads
 from app.services.tag_crm_service import (
     listar_tags_oficiais_ou_existentes,
     normalizar_tags,
+    sync_tag_etapa_lead,
 )
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 
@@ -986,10 +987,17 @@ class CRMEtapaResponse(BaseModel):
     leads: List[CRMLeadResponse]
 
 
+class CRMColunaTagResponse(BaseModel):
+    coluna: str
+    ordem: int
+    leads: List[CRMLeadResponse]
+
+
 class CRMFunilResponse(BaseModel):
     funil_id: str
     funil_nome: str
     etapas: List[CRMEtapaResponse]
+    colunas_tags: List[CRMColunaTagResponse] = Field(default_factory=list)
 
 
 class CRMEtapaUpdateRequest(BaseModel):
@@ -1075,6 +1083,9 @@ class TagGroupResponse(TagGroupBase):
 class TagCRMBase(BaseModel):
     nome: str
     cor: str = "#2563eb"
+    tipo: Literal["etapa_funil", "comportamento"] = "comportamento"
+    ordem: int | None = None
+    ativa_no_funil: bool = False
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool = False
@@ -1090,6 +1101,9 @@ class TagCRMCreate(TagCRMBase):
 class TagCRMUpdate(BaseModel):
     nome: str | None = None
     cor: str | None = None
+    tipo: Literal["etapa_funil", "comportamento"] | None = None
+    ordem: int | None = None
+    ativa_no_funil: bool | None = None
     instrucao_ia: str | None = None
     grupo_id: str | None = None
     disparar_conversao_ads: bool | None = None
@@ -1471,14 +1485,32 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
             )
             funil = result.scalars().first()
 
+        try:
+            empresa_uuid = uuid.UUID(str(empresa_id))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
         # Ordena as etapas pela ordem
         etapas_ordenadas = sorted(funil.etapas, key=lambda x: x.ordem)
-        tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, empresa_id)
+        tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, empresa_uuid)
+
+        def _serializar_lead(lead: CRMLead) -> dict[str, Any]:
+            return {
+                "id": str(lead.id),
+                "nome_contato": lead.nome_contato,
+                "telefone": lead.telefone_contato,
+                "historico_resumo": lead.historico_resumo,
+                "tags": _montar_tags_front(lead.tags, tags_por_id, tags_por_nome),
+                "dados_adicionais": lead.dados_adicionais or {},
+                "valor_conversao": lead.valor_conversao,
+                "criado_em": lead.criado_em.isoformat() if lead.criado_em else None,
+            }
 
         resposta: dict = {
             "funil_id": str(funil.id),
             "funil_nome": funil.nome,
-            "etapas": []
+            "etapas": [],
+            "colunas_tags": [],
         }
 
         for etapa in etapas_ordenadas:
@@ -1487,20 +1519,52 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
                 "nome": etapa.nome,
                 "tipo": etapa.tipo,
                 "ordem": etapa.ordem,
-                "leads": [
-                    {
-                        "id": str(lead.id),
-                        "nome_contato": lead.nome_contato,
-                        "telefone": lead.telefone_contato,
-                        "historico_resumo": lead.historico_resumo,
-                        "tags": _montar_tags_front(lead.tags, tags_por_id, tags_por_nome),
-                        "dados_adicionais": lead.dados_adicionais or {},
-                        "valor_conversao": lead.valor_conversao,
-                        "criado_em": lead.criado_em.isoformat() if lead.criado_em else None
-                    } for lead in etapa.leads
-                ]
+                "leads": [_serializar_lead(lead) for lead in etapa.leads],
             }
             resposta["etapas"].append(etapa_dict)
+
+        result_tags_funil = await db.execute(
+            select(TagCRM)
+            .where(
+                TagCRM.empresa_id == empresa_uuid,
+                TagCRM.tipo == "etapa_funil",
+                TagCRM.ativa_no_funil == True,
+            )
+            .order_by(TagCRM.ordem.asc(), TagCRM.nome.asc())
+        )
+        tags_funil_ativas = result_tags_funil.scalars().all()
+
+        leads_por_id: dict[str, CRMLead] = {}
+        for etapa in etapas_ordenadas:
+            for lead in etapa.leads:
+                leads_por_id[str(lead.id)] = lead
+
+        if tags_funil_ativas:
+            for indice, tag_funil in enumerate(tags_funil_ativas, start=1):
+                leads_coluna: list[dict[str, Any]] = []
+                tag_id = str(tag_funil.id)
+                for lead in leads_por_id.values():
+                    tags_ids = _normalizar_tags_lead_para_ids(lead.tags, tags_por_id, tags_por_nome)
+                    if tag_id in tags_ids:
+                        leads_coluna.append(_serializar_lead(lead))
+
+                resposta["colunas_tags"].append(
+                    {
+                        "coluna": str(tag_funil.nome or ""),
+                        "ordem": int(tag_funil.ordem) if tag_funil.ordem is not None else indice,
+                        "leads": leads_coluna,
+                    }
+                )
+        else:
+            # Fallback incremental: sem tags de funil novas, mantém visualização por etapas legado.
+            for etapa in etapas_ordenadas:
+                resposta["colunas_tags"].append(
+                    {
+                        "coluna": str(etapa.nome or ""),
+                        "ordem": int(getattr(etapa, "ordem", 0) or 0),
+                        "leads": [_serializar_lead(lead) for lead in etapa.leads],
+                    }
+                )
 
         return resposta
 
@@ -1870,6 +1934,9 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "id": str(tag.id),
             "nome": tag.nome,
             "cor": tag.cor or "#2563eb",
+            "tipo": str(getattr(tag, "tipo", "comportamento") or "comportamento"),
+            "ordem": getattr(tag, "ordem", None),
+            "ativa_no_funil": bool(getattr(tag, "ativa_no_funil", False)),
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
@@ -1923,6 +1990,9 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
         grupo_id=grupo_uuid,
         nome=nome_limpo,
         cor=_normalizar_cor_tag(data.cor),
+        tipo=str(data.tipo or "comportamento"),
+        ordem=data.ordem,
+        ativa_no_funil=bool(data.ativa_no_funil),
         instrucao_ia=(data.instrucao_ia or "").strip() or None,
         disparar_conversao_ads=bool(data.disparar_conversao_ads),
         acao_fechamento=bool(data.acao_fechamento),
@@ -1938,6 +2008,9 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "id": str(tag.id),
             "nome": tag.nome,
             "cor": tag.cor,
+            "tipo": str(getattr(tag, "tipo", "comportamento") or "comportamento"),
+            "ordem": getattr(tag, "ordem", None),
+            "ativa_no_funil": bool(getattr(tag, "ativa_no_funil", False)),
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
@@ -1990,6 +2063,12 @@ async def atualizar_tag_crm_oficial(
         tag.nome = nome_limpo
     if data.cor is not None:
         tag.cor = _normalizar_cor_tag(data.cor)
+    if data.tipo is not None:
+        tag.tipo = str(data.tipo or "comportamento")
+    if data.ordem is not None:
+        tag.ordem = data.ordem
+    if data.ativa_no_funil is not None:
+        tag.ativa_no_funil = bool(data.ativa_no_funil)
     if data.instrucao_ia is not None:
         tag.instrucao_ia = str(data.instrucao_ia).strip() or None
     if data.disparar_conversao_ads is not None:
@@ -2026,6 +2105,9 @@ async def atualizar_tag_crm_oficial(
             "id": str(tag.id),
             "nome": tag.nome,
             "cor": tag.cor,
+            "tipo": str(getattr(tag, "tipo", "comportamento") or "comportamento"),
+            "ordem": getattr(tag, "ordem", None),
+            "ativa_no_funil": bool(getattr(tag, "ativa_no_funil", False)),
             "instrucao_ia": tag.instrucao_ia,
             "grupo_id": str(tag.grupo_id) if tag.grupo_id else None,
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
@@ -2517,8 +2599,10 @@ async def atualizar_lead_crm(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
     mover_para_fechado = False
+    etapa_alterada_no_payload = False
 
     if data.etapa_id is not None:
+        etapa_alterada_no_payload = True
         if data.etapa_id == "":
             lead.etapa_id = None
         else:
@@ -2603,6 +2687,15 @@ async def atualizar_lead_crm(
         etapa_fechado = result_etapa_fechamento.scalars().first()
         if etapa_fechado:
             lead.etapa_id = etapa_fechado.id
+            etapa_alterada_no_payload = True
+
+    if etapa_alterada_no_payload:
+        # Compatibilidade incremental: quando o CRM legado move etapa,
+        # sincroniza a tag de etapa_funil correspondente.
+        await sync_tag_etapa_lead(str(lead.id), session=db, preferencia="crm_to_tag")
+    elif data.tags is not None:
+        # Quando tags são alteradas diretamente, mantém etapa_id legado alinhado.
+        await sync_tag_etapa_lead(str(lead.id), session=db, preferencia="tag_to_crm")
 
     try:
         await db.commit()

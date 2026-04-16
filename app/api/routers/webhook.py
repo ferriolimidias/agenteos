@@ -3,6 +3,7 @@ from fastapi import APIRouter, BackgroundTasks, Request
 from typing import Dict, Any
 import uuid
 import base64
+import json
 import re
 import unicodedata
 import tempfile
@@ -96,9 +97,39 @@ def _extrair_rastreio_ads_e_limpar_texto(texto: str | None) -> tuple[str, str | 
 
 def extrair_conteudo_mensagem(data_json: dict) -> str:
     message = (data_json or {}).get("message", {}) or {}
+
+    def _texto_interactive_response() -> str | None:
+        interactive = message.get("interactiveResponseMessage") or {}
+        if not isinstance(interactive, dict):
+            return None
+
+        native = interactive.get("nativeFlowResponseMessage") or {}
+        if isinstance(native, dict):
+            for chave in ("name", "id", "title", "description"):
+                valor = native.get(chave)
+                if valor:
+                    return str(valor)
+
+            params_raw = native.get("paramsJson") or native.get("params")
+            if params_raw:
+                try:
+                    params = json.loads(params_raw) if isinstance(params_raw, str) else params_raw
+                except Exception:
+                    params = {}
+                if isinstance(params, dict):
+                    for chave in ("id", "title", "description", "value", "text", "selectedDisplayText"):
+                        valor = params.get(chave)
+                        if valor:
+                            return str(valor)
+        return None
+
     texto = (
         message.get("conversation")
         or (message.get("extendedTextMessage", {}) or {}).get("text")
+        or (message.get("templateButtonReplyMessage", {}) or {}).get("selectedDisplayText")
+        or (message.get("buttonsResponseMessage", {}) or {}).get("selectedDisplayText")
+        or (message.get("listResponseMessage", {}) or {}).get("title")
+        or _texto_interactive_response()
         or (message.get("imageMessage", {}) or {}).get("caption")
         or (message.get("videoMessage", {}) or {}).get("caption")
     )

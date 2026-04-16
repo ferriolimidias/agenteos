@@ -1293,6 +1293,10 @@ class AgentState(TypedDict):
     total_msgs_historico: Optional[int]
     primeiro_contato: Optional[bool]
     especialista_corrente: Optional[EspecialistaSelecionadoState]
+    etapa_funil: Optional[str]
+    etapas_concluidas: List[str]
+    objetivo_atual: Optional[str]
+    proxima_acao: Optional[str]
 
 class AnaliseRoteador(BaseModel):
     termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
