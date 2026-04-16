@@ -62,10 +62,17 @@ export default function Empresas() {
     limite_certeza: 0.65,
     limite_duvida: 0.45,
     max_agentes_desempate: 3,
+    atendente_prompt: "",
+    condutor_ativo: false,
+    condutor_prompt: "",
   });
   const [loadingConfigIA, setLoadingConfigIA] = useState(false);
   const [savingConfigIA, setSavingConfigIA] = useState(false);
   const [modelosDisponiveis, setModelosDisponiveis] = useState([]);
+  const [etapasFunil, setEtapasFunil] = useState([]);
+  const [loadingEtapasFunil, setLoadingEtapasFunil] = useState(false);
+  const [salvandoEtapaFunil, setSalvandoEtapaFunil] = useState(false);
+  const [novaEtapaNome, setNovaEtapaNome] = useState("");
 
   const fetchEmpresas = async () => {
     try {
@@ -85,6 +92,89 @@ export default function Empresas() {
       setModelosDisponiveis(res.data);
     } catch (err) {
       console.error("Erro ao buscar modelos de IA:", err);
+    }
+  };
+
+  const fetchEtapasFunil = async (empresaId) => {
+    if (!empresaId) return;
+    try {
+      setLoadingEtapasFunil(true);
+      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
+      const tags = Array.isArray(res.data) ? res.data : [];
+      const etapas = tags
+        .filter((tag) => tag?.tipo === "etapa_funil")
+        .sort((a, b) => {
+          const ordemA = Number.isFinite(Number(a?.ordem)) ? Number(a.ordem) : 9999;
+          const ordemB = Number.isFinite(Number(b?.ordem)) ? Number(b.ordem) : 9999;
+          if (ordemA !== ordemB) return ordemA - ordemB;
+          return String(a?.nome || "").localeCompare(String(b?.nome || ""));
+        });
+      setEtapasFunil(etapas);
+    } catch (err) {
+      console.error("Erro ao carregar etapas do funil:", err);
+      setEtapasFunil([]);
+    } finally {
+      setLoadingEtapasFunil(false);
+    }
+  };
+
+  const handleCriarEtapaFunil = async () => {
+    const nome = String(novaEtapaNome || "").trim();
+    if (!empresaSelecionada?.id || !nome) return;
+    try {
+      setSalvandoEtapaFunil(true);
+      const maiorOrdem = etapasFunil.reduce((acc, item) => {
+        const ordem = Number(item?.ordem);
+        return Number.isFinite(ordem) ? Math.max(acc, ordem) : acc;
+      }, 0);
+      await api.post(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais`, {
+        nome,
+        tipo: "etapa_funil",
+        ativa_no_funil: true,
+        ordem: maiorOrdem + 1,
+      });
+      setNovaEtapaNome("");
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao criar etapa do funil:", err);
+      alert("Erro ao criar etapa do funil.");
+    } finally {
+      setSalvandoEtapaFunil(false);
+    }
+  };
+
+  const handleEditarEtapaFunil = async (etapa) => {
+    if (!empresaSelecionada?.id || !etapa?.id) return;
+    const novoNome = window.prompt("Nome da etapa:", etapa.nome || "");
+    if (novoNome === null) return;
+    const nomeLimpo = String(novoNome || "").trim();
+    if (!nomeLimpo) return;
+    const novaOrdemRaw = window.prompt("Ordem da etapa:", String(etapa.ordem ?? ""));
+    if (novaOrdemRaw === null) return;
+    const novaOrdem = parseInt(novaOrdemRaw, 10);
+    try {
+      await api.put(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`, {
+        nome: nomeLimpo,
+        tipo: "etapa_funil",
+        ativa_no_funil: true,
+        ordem: Number.isFinite(novaOrdem) ? novaOrdem : etapa.ordem,
+      });
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao editar etapa do funil:", err);
+      alert("Erro ao editar etapa do funil.");
+    }
+  };
+
+  const handleExcluirEtapaFunil = async (etapa) => {
+    if (!empresaSelecionada?.id || !etapa?.id) return;
+    if (!window.confirm(`Excluir a etapa "${etapa.nome}"?`)) return;
+    try {
+      await api.delete(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`);
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao excluir etapa do funil:", err);
+      alert("Erro ao excluir etapa do funil.");
     }
   };
 
@@ -253,7 +343,11 @@ export default function Empresas() {
         limite_certeza: typeof res.data.limite_certeza === "number" ? res.data.limite_certeza : 0.65,
         limite_duvida: typeof res.data.limite_duvida === "number" ? res.data.limite_duvida : 0.45,
         max_agentes_desempate: typeof res.data.max_agentes_desempate === "number" ? res.data.max_agentes_desempate : 3,
+        atendente_prompt: res.data.atendente_prompt || "",
+        condutor_ativo: !!res.data.condutor_ativo,
+        condutor_prompt: res.data.condutor_prompt || "",
       });
+      await fetchEtapasFunil(emp.id);
     } catch (err) {
       console.error(err);
       alert("Erro ao carregar configurações do Agente.");
@@ -965,6 +1059,115 @@ export default function Empresas() {
                             className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
                           />
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Prompt do Atendente
+                    </h3>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">
+                        Prompt estratégico do Atendente
+                      </label>
+                      <textarea
+                        value={configIAData.atendente_prompt || ""}
+                        onChange={(e) => setConfigIAData({ ...configIAData, atendente_prompt: e.target.value })}
+                        rows={5}
+                        placeholder="Defina aqui a estratégia de tom, condução, venda, não repetição e uso de contexto do funil."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Agente Condutor de Funil
+                    </h3>
+                    <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-xl cursor-pointer hover:border-indigo-500 transition-colors">
+                      <input
+                        type="checkbox"
+                        className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                        checked={!!configIAData.condutor_ativo}
+                        onChange={(e) => setConfigIAData({ ...configIAData, condutor_ativo: e.target.checked })}
+                      />
+                      <div>
+                        <p className="text-sm font-semibold text-white">Ativar condutor estratégico</p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          O condutor interpreta o funil e injeta contexto para os especialistas sem responder o cliente.
+                        </p>
+                      </div>
+                    </label>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Prompt do Condutor</label>
+                      <textarea
+                        value={configIAData.condutor_prompt || ""}
+                        onChange={(e) => setConfigIAData({ ...configIAData, condutor_prompt: e.target.value })}
+                        rows={4}
+                        placeholder="Ex: Você é o condutor de funil. Defina etapa atual, objetivo e próxima ação com base no histórico e tags."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Etapas do Funil (Tags)
+                    </h3>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={novaEtapaNome}
+                        onChange={(e) => setNovaEtapaNome(e.target.value)}
+                        placeholder="Nome da nova etapa"
+                        className="flex-1 bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCriarEtapaFunil}
+                        disabled={salvandoEtapaFunil || !String(novaEtapaNome || "").trim()}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        + Nova Etapa
+                      </button>
+                    </div>
+
+                    {loadingEtapasFunil ? (
+                      <p className="text-sm text-gray-400">Carregando etapas...</p>
+                    ) : etapasFunil.length === 0 ? (
+                      <p className="text-sm text-gray-500">Nenhuma etapa de funil cadastrada.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {etapasFunil.map((etapa) => (
+                          <div
+                            key={etapa.id}
+                            className="flex items-center justify-between gap-3 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm text-white truncate">{etapa.nome}</p>
+                              <p className="text-xs text-gray-400">Ordem: {etapa.ordem ?? "-"}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleEditarEtapaFunil(etapa)}
+                                className="text-gray-300 hover:text-indigo-400 transition-colors p-1"
+                                title="Editar etapa"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleExcluirEtapaFunil(etapa)}
+                                className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                                title="Excluir etapa"
+                              >
+                                <Trash size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

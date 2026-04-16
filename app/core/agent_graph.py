@@ -87,6 +87,7 @@ from db.models import (
     AgendaConfiguracao,
     AgendamentoLocal,
     EmpresaUnidade,
+    TagCRM,
 )
 from sqlalchemy import select, update, and_
 from sqlalchemy.orm import selectinload
@@ -1303,6 +1304,12 @@ class AnaliseRoteador(BaseModel):
     handoff_requested: bool = Field(description="True se o usuário pediu explicitamente para falar com humano ou atendente.")
 
 
+class AnaliseCondutor(BaseModel):
+    etapa_funil: str | None = Field(default=None, description="Nome da etapa atual do funil.")
+    objetivo_atual: str | None = Field(default=None, description="Objetivo estratégico atual da conversa.")
+    proxima_acao: str | None = Field(default=None, description="Próxima ação recomendada para os especialistas.")
+
+
 class ExtracaoEspecialista(BaseModel):
     model_config = {"extra": "forbid"}
     dados: StrictStr = Field(description="Dados crus extraidos pelo especialista.")
@@ -1464,26 +1471,19 @@ async def node_capturar_nome(state: AgentState):
     return state
 
 async def node_atendente(state: AgentState):
-    print(f"[NODE ATENDENTE] Iniciando processamento...")
+    print("[NODE ATENDENTE] Iniciando processamento...")
     import uuid
     from langchain_core.messages import SystemMessage
 
-    # 1. Inicialização de Variáveis Locais (Prevenção de UnboundLocalError)
     empresa_id = state.get("empresa_id")
     lead_id = state.get("lead_id")
-    historico_bd = state.get("historico_bd", "")
-    respostas_especialistas = state.get("respostas_especialistas", [])
-    especialistas_selecionados = state.get("especialistas_selecionados", []) or []
+    historico_bd = str(state.get("historico_bd") or "")
+    respostas_especialistas = state.get("respostas_especialistas", []) or []
     super_contexto_especialistas = str(state.get("super_contexto_especialistas", "") or "").strip()
     mensagens_estado = state.get("mensagens") or []
     mensagens_recentes = mensagens_estado[-MAX_MSGS_CONTEXT:]
-    identificador = state.get("identificador_origem")
-    canal = state.get("canal")
-    lead_id = state.get("lead_id")
 
-    # Failsafe de memória: se o histórico não veio no estado, tenta reconstruir
-    # diretamente do banco para evitar amnésia de contexto.
-    if not str(historico_bd or "").strip() and lead_id:
+    if not historico_bd.strip() and lead_id:
         try:
             lead_uuid = uuid.UUID(str(lead_id))
             async with AsyncSessionLocal() as session:
@@ -1494,7 +1494,7 @@ async def node_atendente(state: AgentState):
                     .limit(10)
                 )
                 mensagens_hist = list(reversed(result_hist.scalars().all()))
-                linhas_hist: list[str] = []
+                linhas_hist = []
                 for msg_hist in mensagens_hist:
                     texto_hist = str(getattr(msg_hist, "texto", "") or "").strip()
                     if not texto_hist:
@@ -1508,214 +1508,6 @@ async def node_atendente(state: AgentState):
         except Exception as e:
             logger.warning("[NODE ATENDENTE] Failsafe de histórico falhou para lead_id=%s: %s", lead_id, e)
 
-    ja_respondeu = "Assistente:" in str(historico_bd or "")
-    # TODO: Implementar reset de sessão por tempo (ex: 12h).
-    is_primeira_interacao = not ja_respondeu
-
-    # Carrega configuração da empresa para garantir injeção de contexto no prompt.
-    empresa = None
-    saudacao_configurada = ""
-    ia_instrucoes_personalizadas = ""
-    ia_personalidade = ""
-    ia_regras_negocio = ""
-    if empresa_id:
-        try:
-            empresa_uuid = uuid.UUID(str(empresa_id))
-            async with AsyncSessionLocal() as session:
-                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                empresa = result_empresa.scalars().first()
-        except Exception as e:
-            logger.error("[NODE ATENDENTE] Falha ao carregar empresa %s: %s", empresa_id, e)
-            empresa = None
-    else:
-        logger.error("[NODE ATENDENTE] Estado sem empresa_id; não foi possível carregar configurações da empresa.")
-
-    if empresa:
-        saudacao_configurada = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
-        ia_instrucoes_personalizadas = str(getattr(empresa, "ia_instrucoes_personalizadas", "") or "").strip()
-        ia_personalidade = str(getattr(empresa, "ia_personalidade", "") or "").strip()
-        ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
-
-    if not empresa or not any([
-        saudacao_configurada,
-        ia_instrucoes_personalizadas,
-        ia_personalidade,
-        ia_regras_negocio,
-    ]):
-        logger.error(
-            "[NODE ATENDENTE] Dados da empresa vazios ou incompletos para empresa_id=%s "
-            "(saudacao=%s, instrucoes=%s, personalidade=%s, regras=%s)",
-            empresa_id,
-            bool(saudacao_configurada),
-            bool(ia_instrucoes_personalizadas),
-            bool(ia_personalidade),
-            bool(ia_regras_negocio),
-        )
-    
-    # Helper para montar bloco de contexto XML
-    def _resposta_indica_conclusao(texto: str) -> bool:
-        t = str(texto or "").lower()
-        sinais = [
-            "venda conclu",
-            "pedido conclu",
-            "compra conclu",
-            "atendimento finalizado",
-            "atendimento conclu",
-            "agendamento confirmado",
-            "agendamento conclu",
-        ]
-        return any(s in t for s in sinais)
-
-    def _bloco_xml(historico: str, respostas: list[str]) -> str:
-        hist_content = historico.strip() if historico and historico.strip() \
-            else "(nenhuma interacao anterior registrada)"
-        esp_content = "\n".join(respostas).strip() if respostas \
-            else "(nenhuma resposta de especialista neste turno)"
-        return (
-            f"<historico_conversa>\n{hist_content}\n</historico_conversa>\n\n"
-            f"<respostas_especialistas>\n{esp_content}\n</respostas_especialistas>"
-        )
-
-    def _montar_system_prompt_modular(incluir_especialistas: bool = False) -> str:
-        blocos: list[str] = []
-
-        nome_agente = str(getattr(empresa, "nome_agente", "") or "").strip() or "Assistente Virtual"
-        nome_empresa_prompt = str(getattr(empresa, "nome_empresa", "") or "").strip() or "Empresa"
-
-        agora = datetime.now()
-        dias_semana = [
-            "segunda-feira",
-            "terça-feira",
-            "quarta-feira",
-            "quinta-feira",
-            "sexta-feira",
-            "sábado",
-            "domingo",
-        ]
-        dia_da_semana = dias_semana[agora.weekday()]
-        data_formatada = agora.strftime("%d/%m/%Y")
-        hora_formatada = agora.strftime("%H:%M")
-        blocos.append(f"Contexto temporal: Hoje é {dia_da_semana}, {data_formatada} às {hora_formatada}.")
-
-        personalidade_prompt = ia_personalidade or "(não configurada)"
-        regras_prompt = ia_regras_negocio or "(não configuradas)"
-
-        blocos.append(
-            "Diretriz de roteamento de sistema: Se o cliente pedir para falar com atendente humano, "
-            "ou se a conversa chegar ao fim natural (fechamento), acione o [Especialista de Sistema / Ferramenta de Roteamento] "
-            "e avise o cliente amigavelmente que a ação está sendo tomada."
-        )
-        blocos.append(
-            "DIRETRIZ DE OBJETIVIDADE: NUNCA peça permissão para enviar uma informação ou oferta "
-            "(ex: Posso te mostrar?). Se você tem a informação (como preços, cursos ou bolsas), "
-            "ENVIE IMEDIATAMENTE. Se faltar contexto para buscar, faça a pergunta de forma direta. "
-            "Proibido usar excesso de confirmações como Perfeito, Que ótimo, seguidas."
-        )
-        blocos.append(
-            "TRATAMENTO DE MENSAGENS AUTOMÁTICAS: Se você encontrar no histórico mensagens de ausência automática do WhatsApp "
-            "(ex: 'Agradecemos sua mensagem. Não estamos disponíveis...', 'Neste momento não podemos atender', etc), "
-            "IGNORE-AS COMPLETAMENTE. Elas são disparos de robôs e não representam a resposta ou vontade do cliente. "
-            "Mantenha o seu funil de vendas baseado apenas na última mensagem real digitada pelo humano."
-        )
-
-        formatacao_base = (
-            "DIRETRIZ DE FORMATAÇÃO (CRÍTICO): Você está se comunicando exclusivamente pelo WhatsApp. "
-            "NUNCA use formatação Markdown padrão.\n"
-            "- Proibido usar ** para negrito. Use apenas um asterisco: *texto*.\n"
-            "- Proibido usar # ou ## para títulos.\n"
-            "- Para itálico, use _texto_."
-        )
-        blocos.append(formatacao_base)
-
-        blocos.append(f"Identidade da IA: Você é {nome_agente}, assistente virtual da {nome_empresa_prompt}.")
-
-        if incluir_especialistas and respostas_especialistas:
-            respostas_texto = "\n".join([str(r) for r in respostas_especialistas if str(r).strip()])
-            blocos.append(
-                "[INFORMAÇÕES DE CONSULTA OBTIDAS PELO ESPECIALISTA]\n"
-                f"{respostas_texto}\n"
-                "[FIM DAS INFORMAÇÕES DE CONSULTA]\n\n"
-                "REGRA: As informações acima são apenas para sua consulta. "
-                "Você DEVE manter sua Persona e Diretrizes Primárias. "
-                "Use os dados acima para formular sua resposta com suas próprias palavras, "
-                "mantendo o tom de voz amigável e conversacional."
-            )
-
-        blocos.append(
-            "AS INSTRUÇÕES A SEGUIR SÃO SOBERANAS E OBRIGATÓRIAS. ELAS SOBREPÕEM-SE A QUALQUER REGRA ANTERIOR. "
-            "SE HOUVER UM MENU OU SCRIPT ABAIXO, VOCÊ DEVE SEGUI-LO À RISCA SEM ALTERAR A ESTRUTURA, "
-            "NOMENCLATURA OU QUANTIDADE DE OPÇÕES."
-        )
-        blocos.append(
-            "[SOBERANIA] Diretrizes de Atendimento e Regras de Negócio:\n"
-            f"- Diretrizes de Atendimento e Estratégia de Vendas: {regras_prompt}.\n"
-            f"- Identidade e Tom de Voz da IA: {personalidade_prompt}."
-        )
-
-        return "\n\n".join(blocos).strip()
-
-    # ── FASE DE SÍNTESE (Voltando dos Especialistas) ─────────────────────────────
-    if respostas_especialistas:
-        print(f"[NODE ATENDENTE] Fase de Síntese: Consolidando {len(respostas_especialistas)} resposta(s)...")
-
-        bloco_xml_sintese = _bloco_xml(historico_bd, respostas_especialistas)
-
-        prompt_sintese = f"""{_montar_system_prompt_modular(incluir_especialistas=True)}
-
-{bloco_xml_sintese}
-
-<instrucao_final>
-Você recebeu os DADOS CRUS dos especialistas em <respostas_especialistas> (formato JSON com "dados", "fontes", "erros").
-Sua tarefa é ANALISAR CUIDADOSAMENTE essas respostas, cruzar com o histórico recente e formular a resposta final ao cliente assumindo a persona da empresa.
-
-REGRAS DE ANÁLISE E SÍNTESE:
-1. DESPEDIDA DE TRANSFERÊNCIA: Se algum especialista retornar "SISTEMA_BOT_PAUSADO", "AGUARDANDO_HUMANO" ou indicar que a transferência foi feita, você DEVE encerrar sua resposta avisando educadamente que um atendente humano assumirá a conversa em instantes. Não faça mais perguntas se a transferência ocorreu.
-2. COESÃO ABSOLUTA: Mescle as informações de múltiplos especialistas (ex: endereço + curso + horário) em um texto fluido e contínuo. Não repita saudações a cada frase. Pareça uma única mente brilhante respondendo a tudo.
-3. CAMUFLAGEM TÉCNICA: NUNCA mencione que você consultou "especialistas", "JSON", "ferramentas", "APIs" ou "banco de dados". Entregue a informação como se você mesma soubesse.
-4. INTEGRIDADE DE LINKS: Se os especialistas trouxerem URLs (ex: Google Maps), cole-as EXATAMENTE como chegaram. Nunca abrevie ou invente links.
-5. TRATAMENTO DE FALHAS: Se algum especialista disser que não achou a informação, seja empática. Diga que não localizou aquele detalhe no momento, forneça os dados que você conseguiu e sugira ajuda da equipe.
-
-Super-contexto das regras de negócio dos especialistas envolvidos:
-<super_contexto_especialistas>
-{super_contexto_especialistas or '(sem super-contexto consolidado)'}
-</super_contexto_especialistas>
-
-Responda em uma única mensagem clara.
-Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
-ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
-</instrucao_final>"""
-
-        _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (SINTESE) ---\n{prompt_sintese}", flush=True)
-        mensagens_para_llm = [
-            SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_sintese))
-        ] + _to_chat_messages(mensagens_recentes)
-        llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke(mensagens_para_llm)
-
-        state["resposta_final"] = resposta.content
-        status_conv = "ABERTA"
-        if state.get("handoff_requested"):
-            status_conv = "HANDOFF"
-        elif _resposta_indica_conclusao(str(getattr(resposta, "content", "") or "")):
-            status_conv = "FINALIZADA"
-        state["status_conversa"] = status_conv
-        pendentes = list(state.get("acoes_sistema_pendentes") or [])
-        executadas = list(state.get("acoes_sistema_executadas") or [])
-        if status_conv == "HANDOFF" and "transferir_atendimento" not in pendentes and "transferir_atendimento" not in executadas:
-            pendentes.append("transferir_atendimento")
-        if status_conv == "FINALIZADA" and "fechar_conversa" not in pendentes and "fechar_conversa" not in executadas:
-            pendentes.append("fechar_conversa")
-        state["acoes_sistema_pendentes"] = pendentes
-        state["respostas_especialistas"] = []
-        state["especialistas_identificados"] = []
-        state["especialistas_selecionados"] = []
-        state["fila_agentes"] = []
-        state["super_contexto_especialistas"] = ""
-        state["roteamento_tentado"] = False
-
-        return state
-
-    # ── FASE INICIAL (Fluxo único via roteamento + resposta principal) ───────────
     roteamento_tentado = bool(state.get("roteamento_tentado"))
     if not roteamento_tentado:
         print("[NODE ATENDENTE] Primeira passagem: encaminhando para roteamento sem responder ainda.")
@@ -1727,47 +1519,69 @@ ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
         state["super_contexto_especialistas"] = ""
         return state
 
-    print("[NODE ATENDENTE] Sem respostas de especialistas; gerando resposta final no LLM principal.")
-    bloco_xml_direto = _bloco_xml(historico_bd, [])
-    prompt_resposta_direta = f"""{_montar_system_prompt_modular(incluir_especialistas=False)}
+    empresa = None
+    if empresa_id:
+        try:
+            empresa_uuid = uuid.UUID(str(empresa_id))
+            async with AsyncSessionLocal() as session:
+                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                empresa = result_empresa.scalars().first()
+        except Exception as e:
+            logger.error("[NODE ATENDENTE] Falha ao carregar empresa %s: %s", empresa_id, e)
 
-{bloco_xml_direto}
+    prompt_base_config = str(getattr(empresa, "atendente_prompt", "") or "").strip()
+    if not prompt_base_config:
+        prompt_base_config = (
+            "Você é o atendente da empresa.\n"
+            "Use o histórico, o contexto de funil e os dados de especialistas para responder o cliente.\n"
+            "Mantenha consistência com as configurações da empresa e com o contexto recebido."
+        )
 
-<instrucao_final>
-Você deve responder diretamente à solicitação do cliente com base no seu conhecimento, no histórico recente e nas diretrizes da empresa.
+    bloco_historico = historico_bd.strip() or "(sem histórico disponível)"
+    bloco_especialistas = "\n".join([str(item) for item in respostas_especialistas if str(item).strip()]).strip()
+    if not bloco_especialistas:
+        bloco_especialistas = "(sem respostas de especialistas neste turno)"
 
-REGRAS DE RESPOSTA DIRETA:
-1. TOM E PERSONA: Assuma completamente a identidade da empresa. Seja cordial, resolutiva e empática.
-2. CONCISÃO E CLAREZA: Vá direto ao ponto. Use listas em bullet points se necessário, e emojis com moderação para manter a leveza.
-3. LIMITES DE CONHECIMENTO: Se o cliente perguntar algo que exija ação no sistema interno (ex: transferências, agendamentos complexos ou financeiro) e você não tiver uma ferramenta direta para isso, informe educadamente que você acionará o departamento responsável.
-4. NUNCA mencione que você é uma IA, um LLM, ou que está lendo um "prompt".
+    etapa_funil = str(state.get("etapa_funil") or "").strip() or "(não definida)"
+    objetivo_atual = str(state.get("objetivo_atual") or "").strip() or "(não definido)"
+    proxima_acao = str(state.get("proxima_acao") or "").strip() or "(não definida)"
 
-Responda em uma única mensagem clara.
-Siga RIGOROSAMENTE a "Identidade e Tom de Voz da IA" e a "DIRETRIZ DE FORMATAÇÃO (CRÍTICO)".
-ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
-</instrucao_final>"""
+    prompt_final = f"""{prompt_base_config}
 
-    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE (RESPOSTA DIRETA) ---\n{prompt_resposta_direta}", flush=True)
-    mensagens_para_llm = [
-        SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_resposta_direta))
-    ] + _to_chat_messages(mensagens_recentes)
+<contexto_funil>
+etapa_funil: {etapa_funil}
+objetivo_atual: {objetivo_atual}
+proxima_acao: {proxima_acao}
+</contexto_funil>
+
+<historico_conversa>
+{bloco_historico}
+</historico_conversa>
+
+<respostas_especialistas>
+{bloco_especialistas}
+</respostas_especialistas>
+
+<super_contexto_especialistas>
+{super_contexto_especialistas or "(sem super-contexto)"}
+</super_contexto_especialistas>
+"""
+
+    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE ---\n{prompt_final}", flush=True)
+    mensagens_para_llm = [SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_final))] + _to_chat_messages(mensagens_recentes)
     llm = await get_llm(empresa_id)
     resposta = await llm.ainvoke(mensagens_para_llm)
 
-    state["resposta_final"] = resposta.content
-    status_conv = "ABERTA"
-    if state.get("handoff_requested"):
-        status_conv = "HANDOFF"
-    elif _resposta_indica_conclusao(str(getattr(resposta, "content", "") or "")):
-        status_conv = "FINALIZADA"
+    state["resposta_final"] = str(getattr(resposta, "content", "") or "").strip()
+    status_conv = "HANDOFF" if state.get("handoff_requested") else "ABERTA"
     state["status_conversa"] = status_conv
+
     pendentes = list(state.get("acoes_sistema_pendentes") or [])
     executadas = list(state.get("acoes_sistema_executadas") or [])
     if status_conv == "HANDOFF" and "transferir_atendimento" not in pendentes and "transferir_atendimento" not in executadas:
         pendentes.append("transferir_atendimento")
-    if status_conv == "FINALIZADA" and "fechar_conversa" not in pendentes and "fechar_conversa" not in executadas:
-        pendentes.append("fechar_conversa")
     state["acoes_sistema_pendentes"] = pendentes
+
     state["especialistas_identificados"] = []
     state["respostas_especialistas"] = []
     state["especialistas_selecionados"] = []
@@ -1775,6 +1589,136 @@ ATENÇÃO MÁXIMA: Respeite ABSOLUTAMENTE a seção [SOBERANIA]
     state["super_contexto_especialistas"] = ""
     state["roteamento_tentado"] = False
     return state
+
+
+async def node_agente_condutor(state: AgentState):
+    """
+    Camada estratégica de condução de funil.
+    Não responde ao cliente, não chama tools e não altera fila de especialistas.
+    """
+    empresa_id = str(state.get("empresa_id") or "").strip()
+    lead_id = str(state.get("lead_id") or "").strip()
+    if not empresa_id:
+        return state
+
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except (ValueError, TypeError):
+        return state
+
+    historico = str(state.get("historico_bd") or "").strip() or "(sem histórico)"
+    historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
+    ultima_mensagem = _ultima_mensagem_cliente(state)
+
+    async with AsyncSessionLocal() as session:
+        result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+        empresa = result_empresa.scalars().first()
+        if not empresa:
+            return state
+
+        condutor_ativo = bool(getattr(empresa, "condutor_ativo", False))
+        condutor_prompt = str(getattr(empresa, "condutor_prompt", "") or "").strip()
+
+        tags_lead_nomes: list[str] = []
+        etapa_atual_por_tag: str | None = None
+        if lead_id:
+            try:
+                lead_uuid = uuid.UUID(lead_id)
+            except (ValueError, TypeError):
+                lead_uuid = None
+            if lead_uuid:
+                result_lead = await session.execute(
+                    select(CRMLead).where(
+                        CRMLead.id == lead_uuid,
+                        CRMLead.empresa_id == empresa_uuid,
+                    )
+                )
+                lead = result_lead.scalars().first()
+                if lead:
+                    tags_ids = [str(item).strip() for item in (lead.tags if isinstance(lead.tags, list) else []) if str(item).strip()]
+                    tags_uuid = []
+                    for item in tags_ids:
+                        try:
+                            tags_uuid.append(uuid.UUID(item))
+                        except (ValueError, TypeError):
+                            continue
+                    if tags_uuid:
+                        result_tags = await session.execute(
+                            select(TagCRM).where(
+                                TagCRM.empresa_id == empresa_uuid,
+                                TagCRM.id.in_(tags_uuid),
+                            )
+                        )
+                        tags_objs = result_tags.scalars().all()
+                        for tag in tags_objs:
+                            nome_tag = str(getattr(tag, "nome", "") or "").strip()
+                            if nome_tag:
+                                tags_lead_nomes.append(nome_tag)
+                            if (
+                                etapa_atual_por_tag is None
+                                and str(getattr(tag, "tipo", "") or "").strip().lower() == "etapa_funil"
+                            ):
+                                etapa_atual_por_tag = nome_tag or None
+
+        # Fallback: sem condutor ativo ou sem prompt configurado, preserva etapa derivada das tags.
+        if not condutor_ativo or not condutor_prompt:
+            if etapa_atual_por_tag:
+                etapa_anterior = str(state.get("etapa_funil") or "").strip() or None
+                if etapa_anterior and etapa_anterior != etapa_atual_por_tag:
+                    concluidas = list(state.get("etapas_concluidas") or [])
+                    if etapa_anterior not in concluidas:
+                        concluidas.append(etapa_anterior)
+                        state["etapas_concluidas"] = concluidas
+                state["etapa_funil"] = etapa_atual_por_tag
+            return state
+
+        prompt_sistema = (
+            f"{condutor_prompt}\n\n"
+            "Instrução técnica: retorne somente os campos estruturados "
+            "'etapa_funil', 'objetivo_atual' e 'proxima_acao'."
+        )
+        contexto_usuario = (
+            f"Historico completo:\n{historico}\n\n"
+            f"Historico curto:\n{historico_curto}\n\n"
+            f"Ultima mensagem do cliente:\n{ultima_mensagem}\n\n"
+            f"Tags atuais do lead:\n{tags_lead_nomes or ['(sem tags)']}\n\n"
+            f"Etapa atual detectada por tags:\n{etapa_atual_por_tag or '(não definida)'}\n"
+        )
+
+        try:
+            modelo_condutor = str(getattr(empresa, "modelo_roteador", "") or "").strip() or "gpt-4o-mini"
+            llm = await get_llm(empresa_id, modelo_ia=modelo_condutor)
+            llm_struct = llm.with_structured_output(AnaliseCondutor)
+            analise = await llm_struct.ainvoke(
+                [
+                    ("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)),
+                    ("user", contexto_usuario),
+                ]
+            )
+            etapa_nova = str(getattr(analise, "etapa_funil", "") or "").strip() or etapa_atual_por_tag or None
+            objetivo_novo = str(getattr(analise, "objetivo_atual", "") or "").strip() or None
+            proxima_acao_nova = str(getattr(analise, "proxima_acao", "") or "").strip() or None
+
+            etapa_anterior = str(state.get("etapa_funil") or "").strip() or None
+            if etapa_nova and etapa_anterior and etapa_nova != etapa_anterior:
+                concluidas = list(state.get("etapas_concluidas") or [])
+                if etapa_anterior not in concluidas:
+                    concluidas.append(etapa_anterior)
+                    state["etapas_concluidas"] = concluidas
+
+            if etapa_nova:
+                state["etapa_funil"] = etapa_nova
+            if objetivo_novo is not None:
+                state["objetivo_atual"] = objetivo_novo
+            if proxima_acao_nova is not None:
+                state["proxima_acao"] = proxima_acao_nova
+        except Exception as exc:
+            logger.warning("[NODE CONDUTOR] Falha ao interpretar contexto de funil: %s", exc)
+            if etapa_atual_por_tag:
+                state["etapa_funil"] = etapa_atual_por_tag
+
+    return state
+
 
 async def node_roteador_maestro(state: AgentState):
     print("[NODE ROTEADOR] Roteamento semântico via embeddings...")
@@ -2581,15 +2525,8 @@ async def node_especialista_dinamico(state: AgentState):
                 "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
                 "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
                 "NÃO redija mensagens para o cliente final.\n"
-                "REGRA DE SEGURANÇA: NUNCA invente ou crie links de Google Maps ou URLs falsas (como '/0'). "
-                "Se o usuário pedir o mapa e você não tiver essa informação exata, diga que não tem o link no momento.\n"
                 "Você recebe o histórico curto APENAS para leitura e contexto. "
                 "NÃO altere memória e não assuma persona de atendimento final.\n"
-                "ORDEM OBRIGATÓRIA DE FERRAMENTAS PARA TRANSFERÊNCIA:\n"
-                "1) aplique tags de intenção/setor primeiro;\n"
-                "2) registre dados da resposta de confirmação de transferência;\n"
-                "3) só então acione a transferência para humano.\n"
-                "Nunca acione transferência antes das tags de intenção.\n"
                 f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
             )
 
@@ -2907,6 +2844,21 @@ async def node_especialista_dinamico(state: AgentState):
                 erros_extracao.append(f"Falha na ETAPA 1 (ferramentas): {e}")
 
             system_message_adicional = f"\n{contexto_empresa}"
+            contexto_funil_partes = []
+            etapa_funil = str(state.get("etapa_funil") or "").strip()
+            objetivo_atual = str(state.get("objetivo_atual") or "").strip()
+            proxima_acao = str(state.get("proxima_acao") or "").strip()
+            if etapa_funil:
+                contexto_funil_partes.append(f"Etapa atual: {etapa_funil}")
+            if objetivo_atual:
+                contexto_funil_partes.append(f"Objetivo: {objetivo_atual}")
+            if proxima_acao:
+                contexto_funil_partes.append(f"Próxima ação: {proxima_acao}")
+            if contexto_funil_partes:
+                system_message_adicional += (
+                    "\n\n[CONTEXTO DO FUNIL]\n"
+                    + "\n".join(contexto_funil_partes)
+                )
             if descricoes_tools:
                 system_message_adicional += "\n\nFerramentas disponíveis:\n" + "\n".join(descricoes_tools)
                 system_message_adicional += "\nUse-as quando necessário para obter dados técnicos."
@@ -3110,6 +3062,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("node_crm", node_crm)
 workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_atendente", node_atendente)
+workflow.add_node("node_agente_condutor", node_agente_condutor)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("especialista_funcionamento", node_especialista_funcionamento)
 workflow.add_node("especialista_localizacao", node_especialista_localizacao)
@@ -3136,17 +3089,19 @@ def router_atendente(state: AgentState):
         if state.get("acoes_sistema_pendentes"):
             return "node_acao_sistema"
         return END
-    return "node_roteador_maestro"
+    return "node_agente_condutor"
 
 workflow.add_conditional_edges(
     "node_atendente",
     router_atendente,
     {
         END: END,
-        "node_roteador_maestro": "node_roteador_maestro",
+        "node_agente_condutor": "node_agente_condutor",
         "node_acao_sistema": "node_acao_sistema",
     }
 )
+
+workflow.add_edge("node_agente_condutor", "node_roteador_maestro")
 
 def router_maestro(state: AgentState):
     # Curto-circuito para parar a fila se houve transferência

@@ -81,6 +81,9 @@ class Empresa(Base):
     # Fonte oficial: usa a coluna legada "ia_identidade" com o novo nome semântico.
     ia_personalidade = Column("ia_identidade", Text, nullable=True)
     ia_regras_negocio = Column(Text, nullable=True)
+    atendente_prompt = Column(Text, nullable=True)
+    condutor_prompt = Column(Text, nullable=True)
+    condutor_ativo = Column(Boolean, nullable=False, default=False)
     # Deprecated por Prompt Bloat:
     # ia_estrategia_vendas = Column(Text, nullable=True)
     # ia_formatacao_whatsapp = Column(Text, nullable=True)

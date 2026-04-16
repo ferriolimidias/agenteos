@@ -74,6 +74,9 @@ class IAConfigResponse(BaseModel):
     max_agentes_desempate: int = 3
     informacoes_adicionais: str | None = None
     coletar_nome: bool = True
+    atendente_prompt: str | None = None
+    condutor_prompt: str | None = None
+    condutor_ativo: bool = False
 
 
 class IAConfigUpdateRequest(BaseModel):
@@ -92,6 +95,9 @@ class IAConfigUpdateRequest(BaseModel):
     max_agentes_desempate: int | None = None
     informacoes_adicionais: str | None = None
     coletar_nome: bool | None = None
+    atendente_prompt: str | None = None
+    condutor_prompt: str | None = None
+    condutor_ativo: bool | None = None
 
 
 class EmpresaSetupRequest(BaseModel):
