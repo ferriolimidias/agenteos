@@ -1529,7 +1529,11 @@ async def node_atendente(state: AgentState):
         except Exception as e:
             logger.error("[NODE ATENDENTE] Falha ao carregar empresa %s: %s", empresa_id, e)
 
-    prompt_base_config = str(getattr(empresa, "atendente_prompt", "") or "").strip()
+    ia_personalidade = str(getattr(empresa, "ia_personalidade", "") or "").strip()
+    ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
+    prompt_base_config = "\n\n".join(
+        [bloco for bloco in [ia_personalidade, ia_regras_negocio] if bloco]
+    ).strip()
     if not prompt_base_config:
         prompt_base_config = (
             "Você é o atendente da empresa.\n"

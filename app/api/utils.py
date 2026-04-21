@@ -862,13 +862,13 @@ async def get_orchestrator_system_prompt(empresa_id: str | None, is_primeira_men
                 result = await session.execute(select(Empresa).where(Empresa.id == emp_uuid))
                 empresa = result.scalars().first()
                 if empresa:
-                    # 1. Instruções do Agente
-                    if empresa.ia_instrucoes_personalizadas:
-                        context_xml += f"<instrucoes_agente>\n{empresa.ia_instrucoes_personalizadas}\n</instrucoes_agente>\n"
-                    
-                    # 2. Identidade e tom
+                    # 1. Identidade e tom
                     if getattr(empresa, "ia_personalidade", None):
                         context_xml += f"<identidade_tom_ia>\n{empresa.ia_personalidade}\n</identidade_tom_ia>\n"
+
+                    # 2. Diretrizes e regras do atendente
+                    if getattr(empresa, "ia_regras_negocio", None):
+                        context_xml += f"<diretrizes_regras_ia>\n{empresa.ia_regras_negocio}\n</diretrizes_regras_ia>\n"
                     
                     # 3. Contexto Institucional
                     context_inst = f"Nome da Empresa: {empresa.nome_empresa}\n"

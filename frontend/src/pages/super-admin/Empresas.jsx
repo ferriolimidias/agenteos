@@ -1065,24 +1065,6 @@ export default function Empresas() {
 
                   <div className="pt-4 border-t border-gray-800 space-y-4">
                     <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
-                      Prompt do Atendente
-                    </h3>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">
-                        Prompt estratégico do Atendente
-                      </label>
-                      <textarea
-                        value={configIAData.atendente_prompt || ""}
-                        onChange={(e) => setConfigIAData({ ...configIAData, atendente_prompt: e.target.value })}
-                        rows={5}
-                        placeholder="Defina aqui a estratégia de tom, condução, venda, não repetição e uso de contexto do funil."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-800 space-y-4">
-                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
                       Agente Condutor de Funil
                     </h3>
                     <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-xl cursor-pointer hover:border-indigo-500 transition-colors">
@@ -1174,12 +1156,12 @@ export default function Empresas() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">
-                      Identidade e Tom de Voz
+                      Personalidade / Tom de Voz
                     </label>
                     <textarea
                       value={configIAData.ia_personalidade}
                       onChange={(e) => setConfigIAData({...configIAData, ia_personalidade: e.target.value})}
-                      rows={4}
+                      rows={8}
                       placeholder="Ex: Você é a Gabi, consultora da clínica. Fale de forma acolhedora, empática e use emojis curtos."
                       className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
                     />
@@ -1187,12 +1169,12 @@ export default function Empresas() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">
-                      Diretrizes de Atendimento e Vendas
+                      Diretrizes e Regras do Atendente
                     </label>
                     <textarea
                       value={configIAData.ia_regras_negocio}
                       onChange={(e) => setConfigIAData({...configIAData, ia_regras_negocio: e.target.value})}
-                      rows={4}
+                      rows={8}
                       placeholder="Ex: Nunca dê descontos. Sempre tente descobrir o curso de interesse. Responda dúvidas de forma direta."
                       className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
                     />

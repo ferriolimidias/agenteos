@@ -8,7 +8,6 @@ class EmpresaBase(BaseModel):
     area_atuacao: str | None = None
     logo_url: str | None = None
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
-    ia_instrucoes_personalizadas: str | None = None
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     disparo_delay_min: int = 3
@@ -35,7 +34,6 @@ class EmpresaUpdate(BaseModel):
     nome_empresa: str | None = None
     area_atuacao: str | None = None
     logo_url: str | None = None
-    ia_instrucoes_personalizadas: str | None = None
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     conexao_disparo_id: str | None = None
@@ -59,7 +57,6 @@ class EmpresaResponse(EmpresaBase):
 
 
 class IAConfigResponse(BaseModel):
-    ia_instrucoes_personalizadas: str | None = None
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     nome_agente: str | None = None
@@ -80,7 +77,6 @@ class IAConfigResponse(BaseModel):
 
 
 class IAConfigUpdateRequest(BaseModel):
-    ia_instrucoes_personalizadas: str | None = None
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     nome_agente: str | None = None

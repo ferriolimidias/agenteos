@@ -383,7 +383,6 @@ async def criar_empresa(
         nome_empresa=empresa.nome_empresa,
         logo_url=empresa.logo_url,
         credenciais_canais=empresa.credenciais_canais,
-        ia_instrucoes_personalizadas=empresa.ia_instrucoes_personalizadas,
         ia_personalidade=empresa.ia_personalidade,
         ia_regras_negocio=empresa.ia_regras_negocio,
     )
@@ -435,7 +434,6 @@ async def obter_empresa(empresa_id: str, db: AsyncSession = Depends(get_db)):
         "area_atuacao": empresa.area_atuacao,
         "logo_url": empresa.logo_url,
         "credenciais_canais": empresa.credenciais_canais or {},
-        "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas,
         "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
         "conexao_disparo_id": empresa.conexao_disparo_id,
@@ -658,7 +656,6 @@ async def get_ia_config(
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     return {
-        "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
         "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
         "nome_agente": empresa.nome_agente,
@@ -691,8 +688,6 @@ async def put_ia_config(
     empresa = result.scalars().first()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
-    if data.ia_instrucoes_personalizadas is not None:
-        empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
     if data.ia_personalidade is not None:
         empresa.ia_personalidade = data.ia_personalidade
     if data.ia_regras_negocio is not None:
@@ -742,7 +737,6 @@ async def put_ia_config(
         await db.commit()
         await db.refresh(empresa)
         return {
-            "ia_instrucoes_personalizadas": empresa.ia_instrucoes_personalizadas, 
             "ia_personalidade": getattr(empresa, "ia_personalidade", None),
             "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
             "nome_agente": empresa.nome_agente,
@@ -781,8 +775,6 @@ async def atualizar_empresa(empresa_id: str, data: EmpresaUpdate, db: AsyncSessi
         empresa.area_atuacao = data.area_atuacao
     if data.logo_url is not None:
         empresa.logo_url = data.logo_url
-    if data.ia_instrucoes_personalizadas is not None:
-        empresa.ia_instrucoes_personalizadas = data.ia_instrucoes_personalizadas
     if data.ia_personalidade is not None:
         empresa.ia_personalidade = data.ia_personalidade
     if data.ia_regras_negocio is not None:
