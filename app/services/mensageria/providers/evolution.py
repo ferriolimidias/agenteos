@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from typing import Any
 import traceback
@@ -73,6 +74,7 @@ class EvolutionProvider(BaseProvider):
             or cfg.get("api_url")
             or cfg.get("base_url")
             or cfg.get("url")
+            or os.getenv("EVOLUTION_API_URL")
             or ""
         ).strip().rstrip("/")
         evolution_apikey = str(

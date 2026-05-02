@@ -4,6 +4,8 @@ services:
     pull_policy: always
     container_name: agent_os_db
     restart: always
+    networks:
+      - agenteos_network
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -11,6 +13,7 @@ services:
       TZ: America/Sao_Paulo
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts/init.sql:/docker-entrypoint-initdb.d/01-init-evolution-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent_os}"]
       interval: 10s
@@ -23,6 +26,8 @@ services:
     pull_policy: always
     container_name: agent_os_redis
     restart: always
+    networks:
+      - agenteos_network
     volumes:
       - redis_data:/data
     healthcheck:
@@ -36,6 +41,8 @@ services:
     build: .
     container_name: agent_os_backend
     restart: always
+    networks:
+      - agenteos_network
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -63,16 +70,66 @@ services:
       pull: true
     container_name: agent_os_frontend
     restart: always
+    networks:
+      - agenteos_network
     dns:
       - 8.8.8.8
       - 1.1.1.1
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     environment:
       TZ: America/Sao_Paulo
     ports:
       - "127.0.0.1:8080:80"
 
+  evolution:
+    image: marcusth81/evolution-buttons:latest
+    pull_policy: always
+    command: ["node", "./dist/src/main.js"]
+    container_name: agent_os_evolution
+    restart: always
+    networks:
+      - agenteos_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      SERVER_URL: http://evolution:8080
+      WEBHOOK_GLOBAL_URL: http://backend:8000/api/webhook
+      LANGUAGE: pt-BR
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1025062854"
+      CONFIG_SESSION_PHONE_CLIENT: "Ferrioli Mídias"
+      CONFIG_SESSION_PHONE_NAME: Safari
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_TOKEN}
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/evolution_db?schema=public
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/10
+      S3_ENABLED: "true"
+      S3_ACCESS_KEY: ${EVOLUTION_S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${EVOLUTION_S3_SECRET_KEY}
+      S3_BUCKET: ${EVOLUTION_S3_BUCKET:-evolution}
+      S3_PORT: ${EVOLUTION_S3_PORT:-443}
+      S3_ENDPOINT: ${EVOLUTION_S3_ENDPOINT}
+      S3_USE_SSL: "${EVOLUTION_S3_USE_SSL:-true}"
+      S3_REGION: ${EVOLUTION_S3_REGION:-eu-south}
+      TZ: America/Sao_Paulo
+    # Escuta na porta 8080 dentro da rede agenteos_network (proxy: http://evolution:8080).
+    # Não publique 8080 no host se o frontend já usa 127.0.0.1:8080:80 — haveria conflito.
+
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  agenteos_network:
+    driver: bridge

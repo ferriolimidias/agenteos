@@ -1508,17 +1508,6 @@ async def node_atendente(state: AgentState):
         except Exception as e:
             logger.warning("[NODE ATENDENTE] Failsafe de histórico falhou para lead_id=%s: %s", lead_id, e)
 
-    roteamento_tentado = bool(state.get("roteamento_tentado"))
-    if not roteamento_tentado:
-        print("[NODE ATENDENTE] Primeira passagem: encaminhando para roteamento sem responder ainda.")
-        state["roteamento_tentado"] = True
-        state["saudacao_processada"] = False
-        state["saudacao_pendente"] = False
-        state["resposta_final"] = None
-        state["respostas_especialistas"] = []
-        state["super_contexto_especialistas"] = ""
-        return state
-
     empresa = None
     if empresa_id:
         try:
@@ -1918,9 +1907,13 @@ async def node_roteador_maestro(state: AgentState):
                 state.get("empresa_id"),
                 modelo_ia=modelo_maestro,
             )
+            etapa_funil_ctx = str(state.get("etapa_funil") or "").strip() or "(não definida)"
+            objetivo_ctx = str(state.get("objetivo_atual") or "").strip() or "(não definido)"
+            proxima_acao_ctx = str(state.get("proxima_acao") or "").strip() or "(não definida)"
             prompt_decisao = (
                 "Você é o Maestro do AgenteOS. "
                 f"Analise o histórico e a intenção expandida: '{termos_expandidos}'.\n"
+                "O Condutor já analisou o funil neste turno: use obrigatoriamente o bloco CONTEXTO_CONDUTOR para alinhar a escolha dos especialistas.\n"
                 "Sua missão é selecionar, dentre os candidatos abaixo, quais devem ser acionados para responder ao usuário.\n"
                 "REGRAS CRÍTICAS:\n"
                 "- Você DEVE dar preferência absoluta aos especialistas com maior 'peso_prioridade' (ex: 2, 3), incluindo-os sempre que o contexto for de vendas ou serviços.\n"
@@ -1930,6 +1923,10 @@ async def node_roteador_maestro(state: AgentState):
                 "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
             )
             entrada_decisao = (
+                "CONTEXTO_CONDUTOR (definido neste turno, antes do Maestro):\n"
+                f"- etapa_funil: {etapa_funil_ctx}\n"
+                f"- objetivo_atual: {objetivo_ctx}\n"
+                f"- proxima_acao: {proxima_acao_ctx}\n\n"
                 "HISTORICO_CURTO_ULTIMAS_5_MENSAGENS:\n"
                 f"{historico_curto_roteador or '(sem histórico)'}\n\n"
                 "ULTIMOS_3_TURNOS_CONSOLIDADOS:\n"
@@ -3058,7 +3055,7 @@ def router_crm(state: AgentState):
         return END
     if state.get("nome_contato") is None:
         return "capturar_nome"
-    return "node_atendente"
+    return "node_agente_condutor"
 
 # 3. Desenhar o Grafo
 workflow = StateGraph(AgentState)
@@ -3068,9 +3065,6 @@ workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_agente_condutor", node_agente_condutor)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
-workflow.add_node("especialista_funcionamento", node_especialista_funcionamento)
-workflow.add_node("especialista_localizacao", node_especialista_localizacao)
-workflow.add_node("node_especialista_saudacao", node_especialista_saudacao)
 workflow.add_node("node_acao_sistema", node_acao_sistema)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
 
@@ -3082,27 +3076,24 @@ workflow.add_conditional_edges(
     {
         END: END,
         "capturar_nome": "node_capturar_nome",
-        "node_atendente": "node_atendente"
-    }
+        "node_agente_condutor": "node_agente_condutor",
+    },
 )
 
 workflow.add_edge("node_capturar_nome", END)
 
 def router_atendente(state: AgentState):
-    if state.get("resposta_final"):
-        if state.get("acoes_sistema_pendentes"):
-            return "node_acao_sistema"
-        return END
-    return "node_agente_condutor"
+    if state.get("acoes_sistema_pendentes"):
+        return "node_acao_sistema"
+    return END
 
 workflow.add_conditional_edges(
     "node_atendente",
     router_atendente,
     {
         END: END,
-        "node_agente_condutor": "node_agente_condutor",
         "node_acao_sistema": "node_acao_sistema",
-    }
+    },
 )
 
 workflow.add_edge("node_agente_condutor", "node_roteador_maestro")
@@ -3188,20 +3179,7 @@ def router_maestro(state: AgentState):
             metadado_atual = item
             break
 
-    nome_ref = _normalizar_chave_especialista(
-        str((metadado_atual or {}).get("nome") or agente_atual)
-    )
-
-    if nome_ref == "especialista_saudacao":
-        state["especialista_corrente"] = None
-        return "node_especialista_saudacao"
-    if nome_ref == "especialista_funcionamento":
-        state["especialista_corrente"] = None
-        return "especialista_funcionamento"
-    if nome_ref == "especialista_localizacao":
-        state["especialista_corrente"] = None
-        return "especialista_localizacao"
-
+    # Todo especialista (incl. saudação, legados por nome) passa pelo nó dinâmico.
     # Processa apenas o especialista atual neste passo da fila.
     if isinstance(metadado_atual, dict):
         state["especialista_corrente"] = metadado_atual
@@ -3220,17 +3198,11 @@ workflow.add_conditional_edges(
     router_maestro,
     {
         "node_atendente": "node_atendente",
-        "especialista_funcionamento": "especialista_funcionamento",
-        "especialista_localizacao": "especialista_localizacao",
-        "node_especialista_saudacao": "node_especialista_saudacao",
         "node_acao_sistema": "node_acao_sistema",
         "node_especialista_dinamico": "node_especialista_dinamico",
-    }
+    },
 )
 
-workflow.add_conditional_edges("especialista_funcionamento", router_maestro)
-workflow.add_conditional_edges("especialista_localizacao", router_maestro)
-workflow.add_conditional_edges("node_especialista_saudacao", router_maestro)
 workflow.add_conditional_edges("node_especialista_dinamico", router_maestro)
 
 def router_pos_acao_sistema(state: AgentState):

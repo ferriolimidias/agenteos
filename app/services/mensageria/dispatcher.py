@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.services.evolution_service import evolution_base_url
 from db.models import Conexao
 from app.services.mensageria.providers.evolution import EvolutionProvider
 from app.services.mensageria.schemas import StandardOutgoingMessage
@@ -33,7 +34,7 @@ async def dispatch_outbound_message(
         credenciais = dict(conexao.credenciais or {})
         if not credenciais.get("evolution_instance"):
             credenciais["evolution_instance"] = getattr(conexao, "nome_instancia", None)
-        evolution_url = str(credenciais.get("evolution_url") or "").strip()
+        evolution_url = str(credenciais.get("evolution_url") or "").strip() or evolution_base_url()
         evolution_apikey = str(credenciais.get("evolution_apikey") or "").strip()
         evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
         print(

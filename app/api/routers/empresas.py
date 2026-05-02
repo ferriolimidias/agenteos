@@ -3420,16 +3420,10 @@ async def atualizar_credenciais(empresa_id: str, credenciais: EvolutionCredentia
         if not empresa:
             raise HTTPException(status_code=404, detail="Empresa não encontrada")
             
-        novas_credenciais = {
-            "evolution_url": credenciais.evolution_url,
-            "evolution_apikey": credenciais.evolution_apikey,
-            "evolution_instance": credenciais.evolution_instance,
-            "openai_api_key": credenciais.openai_api_key
-        }
-        
-        # Merge de credenciais caso haja (no momento subscreve tudo do WhatsApp channel)
-        # O model JSON admite dicionário
-        empresa.credenciais_canais = novas_credenciais
+        base = dict(empresa.credenciais_canais or {})
+        if credenciais.openai_api_key is not None:
+            base["openai_api_key"] = credenciais.openai_api_key
+        empresa.credenciais_canais = base
         
         await db.commit()
         await db.refresh(empresa)

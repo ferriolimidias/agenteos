@@ -108,9 +108,7 @@ class EmpresaSetupRequest(BaseModel):
 
 
 class EvolutionCredentials(BaseModel):
-    evolution_url: str
-    evolution_apikey: str
-    evolution_instance: str
+    """Legado: manter apenas openai_api_key; URLs/tokens Evolution vêm do servidor."""
     openai_api_key: str | None = None
 
 

@@ -7,7 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.empresas import require_ia_config_access
-from app.services.evolution_service import obter_qr_code, consultar_status_conexao
+from app.services.evolution_service import (
+    consultar_status_conexao,
+    evolution_base_url,
+    obter_qr_code,
+    provisionar_whatsapp_empresa,
+)
 from app.schemas import ConexaoCreate, ConexaoResponse, ConexaoUpdate
 from db.database import get_db
 from db.models import Conexao, Empresa, TipoConexao, Usuario, is_admin_empresa_role, is_root_admin_email, is_super_admin_role
@@ -80,12 +85,20 @@ def _validar_payload(tipo: TipoConexao, payload: ConexaoCreate) -> tuple[str, di
     credenciais = payload.credenciais or {}
 
     if tipo == TipoConexao.EVOLUTION:
-        required_fields = ["evolution_url", "evolution_apikey", "evolution_instance"]
+        base_url = evolution_base_url()
+        if not str(credenciais.get("evolution_url") or "").strip():
+            credenciais["evolution_url"] = base_url
+        required_fields = ["evolution_apikey", "evolution_instance"]
         missing = [field for field in required_fields if not credenciais.get(field)]
         if missing:
             raise HTTPException(
                 status_code=400,
                 detail=f"Campos obrigatórios ausentes para Evolution: {', '.join(missing)}"
+            )
+        if not str(credenciais.get("evolution_url") or "").strip():
+            raise HTTPException(
+                status_code=503,
+                detail="EVOLUTION_API_URL não configurada no servidor.",
             )
         evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
         credenciais["evolution_instance"] = evolution_instance
@@ -110,7 +123,7 @@ def _validar_payload(tipo: TipoConexao, payload: ConexaoCreate) -> tuple[str, di
 
 
 async def _validar_instancia_evolution_existe(credenciais: dict[str, Any]) -> None:
-    evolution_url = str(credenciais.get("evolution_url") or "").rstrip("/")
+    evolution_url = str(credenciais.get("evolution_url") or "").rstrip("/") or evolution_base_url().rstrip("/")
     evolution_apikey = str(credenciais.get("evolution_apikey") or "").strip()
     evolution_instance = str(credenciais.get("evolution_instance") or "").strip()
 
@@ -161,7 +174,7 @@ async def _testar_conectividade(tipo: TipoConexao, credenciais: dict[str, Any]) 
     timeout = httpx.Timeout(8.0, connect=5.0)
 
     if tipo == TipoConexao.EVOLUTION:
-        base_url = str(credenciais["evolution_url"]).rstrip("/")
+        base_url = str(credenciais.get("evolution_url") or evolution_base_url()).rstrip("/")
         headers = {"apikey": credenciais["evolution_apikey"]}
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             try:
@@ -209,7 +222,7 @@ async def _consultar_status_conexao(conexao: Conexao) -> tuple[str, bool]:
     timeout = httpx.Timeout(8.0, connect=5.0)
 
     if conexao.tipo == TipoConexao.EVOLUTION:
-        evolution_url = str(credenciais.get("evolution_url") or "").rstrip("/")
+        evolution_url = str(credenciais.get("evolution_url") or "").rstrip("/") or evolution_base_url().rstrip("/")
         evolution_apikey = credenciais.get("evolution_apikey")
         evolution_instance = credenciais.get("evolution_instance")
 
@@ -331,6 +344,32 @@ async def listar_conexoes(
     )
     conexoes = result.scalars().all()
     return [_serialize_conexao(request, empresa_id, conexao) for conexao in conexoes]
+
+
+@router.post("/provision-whatsapp", status_code=status.HTTP_200_OK)
+async def provisionar_whatsapp(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
+    """
+    Cria (ou reutiliza) a instância Evolution para o tenant usando EVOLUTION_API_URL/EVOLUTION_API_TOKEN
+    do servidor e devolve o QR Code em Base64.
+    """
+    await _buscar_empresa(db, empresa_id)
+    resultado = await provisionar_whatsapp_empresa(empresa_id, db)
+    if not resultado.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=resultado.get("detail") or "Falha ao provisionar WhatsApp.",
+        )
+    return {
+        "conexao_id": resultado.get("conexao_id"),
+        "instance_name": resultado.get("instance_name"),
+        "base64": resultado.get("base64"),
+        "detail": resultado.get("detail"),
+        "reaproveitada": resultado.get("reaproveitada", False),
+    }
 
 
 @router.post("/", response_model=ConexaoResponse, status_code=status.HTTP_201_CREATED)

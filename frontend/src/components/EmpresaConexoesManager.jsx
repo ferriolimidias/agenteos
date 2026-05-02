@@ -14,11 +14,8 @@ import {
 import api from "../services/api";
 
 const initialForm = {
-  tipo: "evolution",
+  tipo: "meta",
   nome_instancia: "",
-  evolution_url: "",
-  evolution_apikey: "",
-  evolution_instance: "",
   access_token: "",
   resource_id: "",
 };
@@ -66,6 +63,7 @@ export default function EmpresaConexoesManager({
   const [qrCodeError, setQrCodeError] = useState("");
   const [checkingQrStatus, setCheckingQrStatus] = useState(false);
   const [toast, setToast] = useState(null);
+  const [provisioning, setProvisioning] = useState(false);
 
   useEffect(() => {
     setSelectedConexaoDisparoId(conexaoDisparoId || "");
@@ -170,15 +168,20 @@ export default function EmpresaConexoesManager({
   };
 
   const openEditModal = (conexao) => {
+    if (conexao.tipo === "evolution") {
+      setToast({
+        type: "error",
+        message:
+          "Conexões WhatsApp são criadas e autenticadas pelo sistema. Use «Conectar / Ativar WhatsApp» para gerar um novo QR Code.",
+      });
+      return;
+    }
     const masked = conexao.credenciais_masked || {};
     setEditingConexao(conexao);
     setModalError(null);
     setForm({
       tipo: conexao.tipo,
       nome_instancia: conexao.nome_instancia || "",
-      evolution_url: masked.evolution_url || "",
-      evolution_apikey: masked.evolution_apikey || "",
-      evolution_instance: masked.evolution_instance || "",
       access_token: masked.access_token || "",
       resource_id: masked.resource_id || "",
     });
@@ -229,29 +232,16 @@ export default function EmpresaConexoesManager({
     const isEditing = Boolean(editingConexao);
     const masked = editingConexao?.credenciais_masked || {};
 
-    const payload =
-      form.tipo === "evolution"
-        ? {
-            tipo: "evolution",
-            nome_instancia: form.nome_instancia || form.evolution_instance,
-            credenciais: {
-              evolution_url: form.evolution_url,
-              evolution_instance: form.evolution_instance,
-              ...(form.evolution_apikey && form.evolution_apikey !== masked.evolution_apikey
-                ? { evolution_apikey: form.evolution_apikey }
-                : {}),
-            },
-          }
-        : {
-            tipo: form.tipo,
-            nome_instancia: form.nome_instancia || form.resource_id,
-            credenciais: {
-              resource_id: form.resource_id,
-              ...(form.access_token && form.access_token !== masked.access_token
-                ? { access_token: form.access_token }
-                : {}),
-            },
-          };
+    const payload = {
+      tipo: form.tipo,
+      nome_instancia: form.nome_instancia || form.resource_id,
+      credenciais: {
+        resource_id: form.resource_id,
+        ...(form.access_token && form.access_token !== masked.access_token
+          ? { access_token: form.access_token }
+          : {}),
+      },
+    };
 
     try {
       if (isEditing) {
@@ -317,41 +307,46 @@ export default function EmpresaConexoesManager({
     setCheckingQrStatus(false);
   };
 
-  const handleOpenQrModal = async (conexao) => {
-    const cred = conexao?.credenciais_masked || {};
-    const evolutionUrl = String(cred?.evolution_url || "").trim();
-    const evolutionApiKey = String(cred?.evolution_apikey || "").trim();
-    if (!evolutionUrl || !evolutionApiKey) {
-      setToast({
-        type: "error",
-        message: "Configure URL da Evolution e API Key antes de gerar o QR Code.",
-      });
-      return;
-    }
-
-    setQrModalConexao(conexao);
+  const handleConectarWhatsApp = async (conexaoExistente = null) => {
     setQrCodeBase64("");
     setQrCodeError("");
+    setProvisioning(true);
     setLoadingQrCode(true);
+    setQrModalConexao(
+      conexaoExistente || { id: null, nome_instancia: "WhatsApp" }
+    );
 
     try {
-      const res = await api.get(`/conexoes/${conexao.id}/qrcode`);
-      setQrCodeBase64(res.data?.base64 || "");
-    } catch (err) {
-      console.error("Erro ao obter QR Code:", err);
-      const detail = err.response?.data?.detail || "Não foi possível gerar o QR Code desta conexão.";
-      setQrCodeError(detail);
-      if (err.response?.status === 409) {
-        setToast({
-          type: "success",
-          message: detail,
+      const res = await api.post(`/empresas/${empresaId}/conexoes/provision-whatsapp`);
+      const data = res.data || {};
+      if (data.base64) {
+        setQrModalConexao({
+          id: data.conexao_id,
+          nome_instancia: data.instance_name || "WhatsApp",
         });
+        setQrCodeBase64(data.base64);
+      } else {
+        setQrCodeError("Resposta sem QR Code. Tente novamente.");
+      }
+      await fetchConexoes();
+    } catch (err) {
+      console.error("Erro ao provisionar WhatsApp:", err);
+      const detail =
+        err.response?.data?.detail || "Não foi possível iniciar a conexão WhatsApp.";
+      setQrCodeError(typeof detail === "string" ? detail : JSON.stringify(detail));
+      if (err.response?.status === 409) {
+        setToast({ type: "success", message: detail });
         closeQrModal();
         await fetchConexoes();
       }
     } finally {
       setLoadingQrCode(false);
+      setProvisioning(false);
     }
+  };
+
+  const handleOpenQrModal = async (conexao) => {
+    await handleConectarWhatsApp(conexao);
   };
 
   const handleRefreshQrStatus = async () => {
@@ -410,22 +405,42 @@ export default function EmpresaConexoesManager({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-semibold text-gray-800">Canais / Conexões</h3>
           <p className="text-sm text-gray-500">
-            Gerencie os canais de entrada e a URL de webhook de cada conexão da empresa.
+            WhatsApp é ativado em um clique; Meta e Instagram continuam com credenciais próprias.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={openAddModal}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
-        >
-          <Plus size={16} />
-          Adicionar Conexão
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleConectarWhatsApp(null)}
+            disabled={provisioning}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {provisioning ? (
+              <>
+                <RefreshCw size={16} className="animate-spin" />
+                Preparando…
+              </>
+            ) : (
+              <>
+                <MessageCircle size={16} />
+                Conectar / Ativar WhatsApp
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={openAddModal}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+          >
+            <Plus size={16} />
+            Meta / Instagram
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
@@ -648,7 +663,7 @@ export default function EmpresaConexoesManager({
             <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
               <div>
                 <h3 className="text-xl font-bold text-gray-800">
-                  {editingConexao ? "Editar Conexão" : "Adicionar Conexão"}
+                  {editingConexao ? "Editar Conexão" : "Adicionar Meta ou Instagram"}
                 </h3>
                 <p className="text-sm text-gray-500">
                   O sistema testa a conectividade antes de salvar.
@@ -678,111 +693,50 @@ export default function EmpresaConexoesManager({
                   disabled={Boolean(editingConexao)}
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="evolution">Evolution</option>
-                  <option value="meta">Meta</option>
+                  <option value="meta">Meta (WhatsApp Cloud)</option>
                   <option value="instagram">Instagram</option>
                 </select>
               </div>
 
-              {form.tipo === "evolution" ? (
-                <>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      URL da API
-                    </label>
-                    <input
-                      type="url"
-                      required
-                      value={form.evolution_url}
-                      onChange={(e) => handleChange("evolution_url", e.target.value)}
-                      placeholder="https://api.seudominio.com"
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      API Key
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      value={form.evolution_apikey}
-                      onChange={(e) => handleChange("evolution_apikey", e.target.value)}
-                      placeholder={editingConexao ? "************abcd" : "apikey da Evolution"}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Nome Amigável (Opcional)
-                      </label>
-                      <input
-                        type="text"
-                        value={form.nome_instancia}
-                        onChange={(e) => handleChange("nome_instancia", e.target.value)}
-                        placeholder="Se vazio, será igual ao Nome da Instância na API"
-                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Nome da Instância na API
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={form.evolution_instance}
-                        onChange={(e) => handleChange("evolution_instance", e.target.value)}
-                        placeholder="instancia configurada na Evolution"
-                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Token de Acesso
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      value={form.access_token}
-                      onChange={(e) => handleChange("access_token", e.target.value)}
-                      placeholder={editingConexao ? "************abcd" : "Token do Meta / Instagram"}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      ID do Telefone / Página
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={form.resource_id}
-                      onChange={(e) => handleChange("resource_id", e.target.value)}
-                      placeholder="Ex: 123456789012345"
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Nome da Instância
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={form.nome_instancia}
-                      onChange={(e) => handleChange("nome_instancia", e.target.value)}
-                      placeholder="Nome amigável da conexão"
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                </>
-              )}
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Token de Acesso
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={form.access_token}
+                  onChange={(e) => handleChange("access_token", e.target.value)}
+                  placeholder={editingConexao ? "************abcd" : "Token do Meta / Instagram"}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  ID do Telefone / Página
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={form.resource_id}
+                  onChange={(e) => handleChange("resource_id", e.target.value)}
+                  placeholder="Ex: 123456789012345"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Nome da Instância
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={form.nome_instancia}
+                  onChange={(e) => handleChange("nome_instancia", e.target.value)}
+                  placeholder="Nome amigável da conexão"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-gray-800 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
               <div className="flex justify-end gap-3 pt-2">
                 <button

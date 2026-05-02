@@ -19,9 +19,6 @@ export default function Empresas() {
   const [empresaSelecionada, setEmpresaSelecionada] = useState(null);
   const [activeIntegracaoTab, setActiveIntegracaoTab] = useState("conexoes");
   const [credenciais, setCredenciais] = useState({
-    evolution_url: "",
-    evolution_apikey: "",
-    evolution_instance: "",
     openai_api_key: ""
   });
   const [savingCredenciais, setSavingCredenciais] = useState(false);
@@ -289,9 +286,6 @@ export default function Empresas() {
     setActiveIntegracaoTab("conexoes");
     // Tentar pré-popular se houver (o mock endpoint atual não traz as credenciais pro front de cara, mas se no futuro vier populado)
     setCredenciais({
-      evolution_url: emp.credenciais_canais?.evolution_url || "",
-      evolution_apikey: emp.credenciais_canais?.evolution_apikey || "",
-      evolution_instance: emp.credenciais_canais?.evolution_instance || "",
       openai_api_key: emp.credenciais_canais?.openai_api_key || ""
     });
     setShowCredenciaisModal(true);
@@ -802,7 +796,7 @@ export default function Empresas() {
                       : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
                   }`}
                 >
-                  Credenciais Legadas
+                  OpenAI (cliente)
                 </button>
               </div>
             </div>
@@ -819,53 +813,11 @@ export default function Empresas() {
                 />
               ) : (
                 <form onSubmit={handleSaveCredenciais} className="space-y-6">
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    Esta aba mantém a configuração antiga por compatibilidade. As novas integrações devem ser cadastradas em <strong>Canais / Conexões</strong>.
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    O WhatsApp (Evolution) é provisionado pelo AgenteOS em <strong>Canais / Conexões</strong>. Aqui você pode opcionalmente definir uma chave OpenAI dedicada a esta empresa.
                   </div>
 
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">
-                        Evolution URL Base
-                      </label>
-                      <input
-                        type="url"
-                        required
-                        placeholder="Ex: https://api.meuservidor.com"
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        value={credenciais.evolution_url}
-                        onChange={(e) => setCredenciais({...credenciais, evolution_url: e.target.value})}
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">
-                        Global API Key
-                      </label>
-                      <input
-                        type="password"
-                        required
-                        placeholder="Sua chave secreta da Evolution"
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        value={credenciais.evolution_apikey}
-                        onChange={(e) => setCredenciais({...credenciais, evolution_apikey: e.target.value})}
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">
-                        Nome da Instância
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Ex: whatsapp-tenant-01"
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        value={credenciais.evolution_instance}
-                        onChange={(e) => setCredenciais({...credenciais, evolution_instance: e.target.value})}
-                      />
-                    </div>
-
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-1">
                         Chave da OpenAI (Opcional - Chave do Cliente)
