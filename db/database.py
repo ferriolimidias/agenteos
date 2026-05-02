@@ -4,7 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_os"
-    OPENAI_API_KEY: str = "sua_chave_aqui"
+    # Opcional: chaves por empresa/config no banco; ausência aqui não impede o app de subir.
+    OPENAI_API_KEY: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
