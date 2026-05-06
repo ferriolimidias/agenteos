@@ -80,7 +80,8 @@ services:
     environment:
       TZ: America/Sao_Paulo
     ports:
-      - "127.0.0.1:8080:80"
+      - "80:80"
+      - "443:443"
 
   evolution:
     image: marcusth81/evolution-buttons:latest
@@ -94,7 +95,7 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
     environment:
       SERVER_URL: http://evolution:8080
       WEBHOOK_GLOBAL_URL: http://backend:8000/api/webhook
