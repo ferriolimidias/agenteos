@@ -8,6 +8,7 @@ class EmpresaBase(BaseModel):
     area_atuacao: str | None = None
     logo_url: str | None = None
     credenciais_canais: dict[str, Any] | None = Field(default_factory=dict)
+    openai_api_key: str | None = None
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     disparo_delay_min: int = 3
@@ -74,6 +75,8 @@ class IAConfigResponse(BaseModel):
     atendente_prompt: str | None = None
     condutor_prompt: str | None = None
     condutor_ativo: bool = False
+    telefone_notificacao: str | None = None
+    status_openai: str = "ok"
 
 
 class IAConfigUpdateRequest(BaseModel):
@@ -94,6 +97,7 @@ class IAConfigUpdateRequest(BaseModel):
     atendente_prompt: str | None = None
     condutor_prompt: str | None = None
     condutor_ativo: bool | None = None
+    telefone_notificacao: str | None = None
 
 
 class EmpresaSetupRequest(BaseModel):

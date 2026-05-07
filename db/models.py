@@ -76,6 +76,9 @@ class Empresa(Base):
     logo_url = Column(String, nullable=True)
     # Campo legado mantido durante a migracao para a tabela conexoes.
     credenciais_canais = Column(JSONB, default={})
+    openai_api_key = Column(String, nullable=True)
+    telefone_notificacao = Column(String, nullable=True)
+    status_openai = Column(String, nullable=False, default="ok", server_default=text("'ok'"))
     informacoes_adicionais = Column(Text, nullable=True)
     # Fonte oficial: usa a coluna legada "ia_identidade" com o novo nome semântico.
     ia_personalidade = Column("ia_identidade", Text, nullable=True)
@@ -258,6 +261,7 @@ class Especialista(Base):
     descricao_roteamento = Column(Text, nullable=True)
     prompt_sistema = Column(Text, nullable=False)
     modelo_ia = Column(String, default="gpt-4o-mini")
+    modelo_llm = Column(String, nullable=False, default="gpt-4o-mini", server_default=text("'gpt-4o-mini'"))
     peso_prioridade = Column(Integer, nullable=False, default=1)
     fixo_no_roteador = Column(Boolean, default=False, server_default=text('false'))
     usar_rag = Column(Boolean, default=False)

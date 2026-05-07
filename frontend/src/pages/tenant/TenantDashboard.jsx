@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   Bot,
+  CheckCircle2,
   MessageSquare,
+  Save,
   UserPlus,
+  WalletCards,
 } from "lucide-react";
 import {
   LineChart,
@@ -90,6 +94,9 @@ export default function TenantDashboard() {
   });
   const [activitySeries, setActivitySeries] = useState(buildLast7DaysSeries());
   const [recentLeads, setRecentLeads] = useState([]);
+  const [aiStatus, setAiStatus] = useState("ok");
+  const [telefoneNotificacao, setTelefoneNotificacao] = useState("");
+  const [savingPhone, setSavingPhone] = useState(false);
   const initialLoadDoneRef = useRef(false);
 
   useEffect(() => {
@@ -105,11 +112,12 @@ export default function TenantDashboard() {
         setLoading(true);
       }
       try {
-        const [resDashboard, resConexoes, resCrm, resInbox] = await Promise.all([
+        const [resDashboard, resConexoes, resCrm, resInbox, resIaConfig] = await Promise.all([
           api.get(`/empresas/${empresaId}/dashboard/stats`).catch(() => ({ data: {} })),
           api.get(`/empresas/${empresaId}/conexoes/`).catch(() => ({ data: [] })),
           api.get(`/empresas/${empresaId}/crm`).catch(() => ({ data: {} })),
           api.get(`/empresas/${empresaId}/inbox`).catch(() => ({ data: [] })),
+          api.get(`/empresas/${empresaId}/ia-config`).catch(() => ({ data: {} })),
         ]);
 
         const conexoes = Array.isArray(resConexoes.data) ? resConexoes.data : [];
@@ -200,6 +208,8 @@ export default function TenantDashboard() {
           leads24h,
           mensagensMes,
         });
+        setAiStatus(String(resIaConfig?.data?.status_openai || "ok").toLowerCase());
+        setTelefoneNotificacao(String(resIaConfig?.data?.telefone_notificacao || ""));
         setRecentLeads(recent);
         setActivitySeries(baseSeries);
       } catch (err) {
@@ -240,6 +250,46 @@ export default function TenantDashboard() {
     [metrics.roboOnline],
   );
 
+  const aiConnection = useMemo(() => {
+    if (aiStatus === "sem_credito") {
+      return {
+        label: "Sem saldo",
+        helper: "Creditos OpenAI esgotados",
+        className: "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
+        icon: AlertTriangle,
+      };
+    }
+    if (aiStatus === "chave_invalida") {
+      return {
+        label: "Erro de autenticacao",
+        helper: "Chave invalida ou nao configurada",
+        className: "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.22)]",
+        icon: WalletCards,
+      };
+    }
+    return {
+      label: "Operacional",
+      helper: "Chave configurada e ativa",
+      className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_24px_rgba(16,185,129,0.22)]",
+      icon: CheckCircle2,
+    };
+  }, [aiStatus]);
+  const AiConnectionIcon = aiConnection.icon;
+
+  const salvarTelefoneNotificacao = async () => {
+    if (!empresaId) return;
+    setSavingPhone(true);
+    try {
+      await api.put(`/empresas/${empresaId}/ia-config`, {
+        telefone_notificacao: telefoneNotificacao,
+      });
+    } catch (err) {
+      console.error("Erro ao salvar telefone de notificacao:", err);
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   if (!user) {
     return (
       <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6 text-sm text-gray-300">
@@ -264,7 +314,7 @@ export default function TenantDashboard() {
           <CardSkeleton />
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6">
             <div className="flex items-start justify-between">
               <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Status do Robô</p>
@@ -292,8 +342,47 @@ export default function TenantDashboard() {
             </div>
             <p className="mt-4 text-3xl font-semibold text-white">{metrics.mensagensMes}</p>
           </div>
+
+          <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6">
+            <div className="flex items-start justify-between">
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Conexao com IA</p>
+              <AiConnectionIcon size={18} className="text-gray-300" />
+            </div>
+            <div className="mt-4">
+              <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${aiConnection.className}`}>
+                {aiConnection.label}
+              </span>
+              <p className="mt-2 text-xs text-gray-400">{aiConnection.helper}</p>
+            </div>
+          </div>
         </div>
       )}
+
+      <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold text-gray-100">Telefone para alertas de credito</h2>
+          <p className="mt-1 text-xs text-gray-400">
+            Recebe aviso no WhatsApp quando a IA detectar falta de saldo da OpenAI.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+          <input
+            value={telefoneNotificacao}
+            onChange={(e) => setTelefoneNotificacao(e.target.value)}
+            placeholder="Ex: 5511999999999"
+            className="w-full rounded-xl border border-[#2d2d2d] bg-[#101012] px-4 py-2.5 text-sm text-gray-100 outline-none focus:border-indigo-500"
+          />
+          <button
+            type="button"
+            onClick={salvarTelefoneNotificacao}
+            disabled={savingPhone}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-500/15 px-4 py-2.5 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500/25 disabled:opacity-60"
+          >
+            <Save size={16} />
+            {savingPhone ? "Salvando..." : "Salvar"}
+          </button>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6 xl:col-span-2">

@@ -1,15 +1,13 @@
-import os
 import logging
 import time
 from typing import Any, List, Optional
 
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from db.models import Empresa, Especialista
+from app.core.llm_factory import get_embeddings_for_tenant, get_llm_for_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -21,26 +19,19 @@ class EspecialistasEscolhidos(BaseModel):
 class SemanticRouterService:
     def __init__(self, db: AsyncSession, api_key: str | None = None):
         self.db = db
-        key = api_key or os.getenv("OPENAI_API_KEY")
-        self.embeddings_model = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=key,
-        )
-        self.api_key = key
+        self.api_key = api_key
 
-    def _build_fast_llm(
+    async def _build_fast_llm(
         self,
+        empresa_id: str,
         api_key: str | None = None,
         model_name: str | None = None,
-    ) -> ChatOpenAI:
-        key = api_key or self.api_key or os.getenv("OPENAI_API_KEY")
+    ):
+        modelo = str(model_name or "gpt-5.4-nano").strip() or "gpt-5.4-nano"
         try:
-            return ChatOpenAI(model=(model_name or "gpt-5.4-nano"), temperature=0, api_key=key)
+            return await get_llm_for_tenant(empresa_id, self.db, modelo)
         except Exception:
-            try:
-                return ChatOpenAI(model="gpt-5.4-nano", temperature=0, api_key=key)
-            except Exception:
-                return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
+            return await get_llm_for_tenant(empresa_id, self.db, "gpt-4o-mini")
 
     @staticmethod
     def _build_routing_text(especialista: Especialista) -> str:
@@ -83,6 +74,7 @@ class SemanticRouterService:
 
     async def _expandir_query_com_llm(
         self,
+        empresa_id: str,
         mensagem_atual: str,
         recent_history_text: str,
         api_key: str | None = None,
@@ -113,7 +105,7 @@ class SemanticRouterService:
             "Retorne APENAS os 10 termos separados por vírgula. Absolutamente nenhum outro texto."
         )
 
-        llm_expansao = self._build_fast_llm(api_key=api_key, model_name=model_name)
+        llm_expansao = await self._build_fast_llm(empresa_id=empresa_id, api_key=api_key, model_name=model_name)
         resposta = await llm_expansao.ainvoke(
             [
                 ("system", system_prompt),
@@ -131,7 +123,8 @@ class SemanticRouterService:
                 getattr(especialista, "nome", "desconhecido"),
             )
             return None
-        return await self.embeddings_model.aembed_query(routing_text)
+        embeddings_model = await get_embeddings_for_tenant(str(especialista.empresa_id), self.db)
+        return await embeddings_model.aembed_query(routing_text)
 
     async def refresh_specialist_embedding(self, especialista: Especialista) -> list[float] | None:
         embedding = await self.generate_embedding_for_specialist(especialista)
@@ -148,8 +141,11 @@ class SemanticRouterService:
         normalized_query = (query_text or "").strip()
         if not normalized_query:
             return []
+        if not empresa_id:
+            return []
 
-        query_embedding = await self.embeddings_model.aembed_query(normalized_query)
+        embeddings_model = await get_embeddings_for_tenant(str(empresa_id), self.db)
+        query_embedding = await embeddings_model.aembed_query(normalized_query)
         similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
 
         stmt = (
@@ -178,7 +174,10 @@ class SemanticRouterService:
         empresa_id: Optional[str] = None,
     ) -> list[tuple[Especialista, float]]:
         async def _buscar_por_texto(texto_busca: str) -> list[tuple[Especialista, float]]:
-            query_embedding = await self.embeddings_model.aembed_query(texto_busca)
+            if not empresa_id:
+                return []
+            embeddings_model = await get_embeddings_for_tenant(str(empresa_id), self.db)
+            query_embedding = await embeddings_model.aembed_query(texto_busca)
             similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
 
             stmt = (
@@ -211,7 +210,9 @@ class SemanticRouterService:
                 "Retorne apenas os termos separados por vírgula."
             )
             try:
-                llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+                if not empresa_id:
+                    return []
+                llm = await get_llm_for_tenant(str(empresa_id), self.db, "gpt-4o-mini")
                 resposta = await llm.ainvoke(prompt)
                 conteudo = str(getattr(resposta, "content", "") or "").strip()
                 if not conteudo:
@@ -262,6 +263,7 @@ class SemanticRouterService:
         self,
         pergunta: str,
         candidatos_duvida: list[tuple[Especialista, float]],
+        empresa_id: str,
         api_key: str | None = None,
     ) -> set[str]:
         if not candidatos_duvida:
@@ -281,7 +283,7 @@ class SemanticRouterService:
         )
 
         try:
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key or os.getenv("OPENAI_API_KEY"))
+            llm = await get_llm_for_tenant(str(empresa_id), self.db, "gpt-4o-mini")
             resposta = await llm.ainvoke(prompt)
             nomes = self._normalizar_resposta_nomes(getattr(resposta, "content", ""))
             return {nome.lower() for nome in nomes}
@@ -303,6 +305,8 @@ class SemanticRouterService:
 
         if not normalized_query:
             return {"termos_expandidos": "", "candidatos": []}
+        if not empresa_id:
+            return {"termos_expandidos": "", "candidatos": []}
 
         limite_duvida = 0.45
         api_key_empresa = None
@@ -321,6 +325,7 @@ class SemanticRouterService:
         query_vetorial = normalized_query
         try:
             query_vetorial = await self._expandir_query_com_llm(
+                empresa_id=str(empresa_id),
                 mensagem_atual=normalized_query,
                 recent_history_text=normalized_history_text,
                 api_key=api_key_empresa,
@@ -339,7 +344,8 @@ class SemanticRouterService:
         )
 
         try:
-            query_embedding = await self.embeddings_model.aembed_query(query_vetorial)
+            embeddings_model = await get_embeddings_for_tenant(str(empresa_id), self.db)
+            query_embedding = await embeddings_model.aembed_query(query_vetorial)
             similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
             stmt = (
                 select(Especialista, similarity_expr)
@@ -379,7 +385,7 @@ class SemanticRouterService:
             return {
                 "id": str(especialista.id),
                 "nome": str(getattr(especialista, "nome", "") or ""),
-                "modelo_ia": str(getattr(especialista, "modelo_ia", "") or "").strip(),
+                "modelo_ia": str(getattr(especialista, "modelo_llm", "") or getattr(especialista, "modelo_ia", "") or "").strip(),
                 "peso_prioridade": int(getattr(especialista, "peso_prioridade", 1) or 1),
                 "fixo_no_roteador": bool(getattr(especialista, "fixo_no_roteador", False)),
                 "descricao_missao": str(getattr(especialista, "descricao_missao", "") or "").strip(),
@@ -446,6 +452,8 @@ class SemanticRouterService:
                 ids_escolhidos_log,
             )
             return []
+        if not empresa_id:
+            return []
 
         limite_duvida = 0.45
         max_agentes_desempate = 3
@@ -469,6 +477,7 @@ class SemanticRouterService:
         query_vetorial = normalized_query
         try:
             query_vetorial = await self._expandir_query_com_llm(
+                empresa_id=str(empresa_id),
                 mensagem_atual=normalized_query,
                 recent_history_text=normalized_history_text,
                 api_key=api_key_empresa,
@@ -490,7 +499,8 @@ class SemanticRouterService:
         top_por_termo = 5
         t0_pool = time.perf_counter()
         try:
-            query_embedding = await self.embeddings_model.aembed_query(query_vetorial)
+            embeddings_model = await get_embeddings_for_tenant(str(empresa_id), self.db)
+            query_embedding = await embeddings_model.aembed_query(query_vetorial)
             similarity_expr = (1 - Especialista.embedding.cosine_distance(query_embedding)).label("similarity")
             stmt = (
                 select(Especialista, similarity_expr)
@@ -540,7 +550,7 @@ class SemanticRouterService:
         ids_escolhidos: list[str] = []
         t0_reranking = time.perf_counter()
         try:
-            llm_rerank = self._build_fast_llm(api_key_empresa)
+            llm_rerank = await self._build_fast_llm(str(empresa_id), api_key_empresa)
             llm_rerank_struct = llm_rerank.with_structured_output(EspecialistasEscolhidos)
             payload_candidatos = [
                 {

@@ -512,6 +512,8 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                     empresa = result.scalars().first()
                     if empresa and empresa.credenciais_canais:
                         openai_key = empresa.credenciais_canais.get("openai_api_key")
+                    if empresa and not openai_key:
+                        openai_key = str(getattr(empresa, "openai_api_key", "") or "").strip() or None
             except Exception as e:
                 print(f"[WEBHOOK EVOLUTION] Erro ao buscar credencial OpenAI: {e}")
 

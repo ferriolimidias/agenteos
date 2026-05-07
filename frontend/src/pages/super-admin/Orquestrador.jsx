@@ -12,6 +12,7 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
   const [especialistas, setEspecialistas] = useState([]);
   const [ferramentas, setFerramentas] = useState([]);
   const [modelosDisponiveis, setModelosDisponiveis] = useState([]);
+  const [modelosErro, setModelosErro] = useState("");
 
   // Modais e Edição
   const [showEspecialistaModal, setShowEspecialistaModal] = useState(false);
@@ -49,38 +50,38 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
         console.error("Erro ao buscar empresas", err);
       }
     };
-    
-    const fetchModelosDisponiveis = async () => {
-      try {
-        const res = await api.get("/admin/modelos-ia");
-        setModelosDisponiveis(res.data);
-      } catch (err) {
-        console.error("Erro ao buscar modelos de IA:", err);
-      }
-    };
-    
+
     fetchEmpresas();
-    fetchModelosDisponiveis();
   }, [empresaId]);
 
-  useEffect(() => {
-    if (empresaId) {
-      // Em modo tenant-centric, ainda precisamos dos modelos para criar/editar especialistas.
-      api
-        .get("/admin/modelos-ia")
-        .then((res) => setModelosDisponiveis(res.data || []))
-        .catch((err) => console.error("Erro ao buscar modelos de IA:", err));
+  const fetchModelosPorEmpresa = async (empId) => {
+    if (!empId) {
+      setModelosDisponiveis([]);
+      setModelosErro("");
+      return;
     }
-  }, [empresaId]);
+    try {
+      const res = await api.get(`/empresas/${empId}/openai-models`);
+      const modelos = Array.isArray(res.data) ? res.data.map((m) => m.id).filter(Boolean) : [];
+      setModelosDisponiveis(modelos);
+      setModelosErro("");
+    } catch (err) {
+      setModelosDisponiveis([]);
+      setModelosErro(err?.response?.data?.detail || "Configure sua chave da API primeiro.");
+    }
+  };
 
   // Carregar dados quando empresa_id mudar
   useEffect(() => {
     if (empresaSelecionadaId) {
       fetchEspecialistas();
       fetchFerramentas();
+      fetchModelosPorEmpresa(empresaSelecionadaId);
     } else {
       setEspecialistas([]);
       setFerramentas([]);
+      setModelosDisponiveis([]);
+      setModelosErro("");
     }
   }, [empresaSelecionadaId]);
 
@@ -450,9 +451,15 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
                   onChange={(e) => setFormEspecialista({...formEspecialista, modelo_ia: e.target.value})}
                   className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none transition-all"
                 >
-                  {modelosDisponiveis.map(m => <option key={m} value={m}>{m}</option>)}
-                  {!modelosDisponiveis.includes("gpt-4o-mini") && <option value="gpt-4o-mini">gpt-4o-mini</option>}
+                  {modelosDisponiveis.length > 0 ? (
+                    modelosDisponiveis.map(m => <option key={m} value={m}>{m}</option>)
+                  ) : (
+                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  )}
                 </select>
+                {modelosErro ? (
+                  <p className="text-xs text-amber-400 mt-1">{modelosErro}</p>
+                ) : null}
               </div>
 
               <div>

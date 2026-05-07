@@ -9,12 +9,12 @@ from datetime import datetime, timedelta
 import pdfplumber
 import traceback
 import httpx
+from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_
 from typing import List
 from fastapi.responses import Response
-from langchain_openai import OpenAIEmbeddings
 
 from db.database import get_db, AsyncSessionLocal
 from sqlalchemy.orm import selectinload
@@ -61,6 +61,7 @@ from app.services.tag_crm_service import (
 )
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
 from app.core.default_agents import ESPECIALISTAS_NATIVOS, FERRAMENTAS_SISTEMA
+from app.core.llm_factory import get_embeddings_for_tenant, get_tenant_api_key
 
 from app.schemas import (
     EmpresaCreate,
@@ -289,7 +290,11 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                 session.add(ferramenta)
             
             # 2. Criar os Especialistas Nativos
-            embeddings = OpenAIEmbeddings()
+            embeddings = None
+            try:
+                embeddings = await get_embeddings_for_tenant(str(empresa_id), session)
+            except Exception:
+                embeddings = None
             for nome, dados in ESPECIALISTAS_NATIVOS.items():
                 especialista = Especialista(
                     empresa_id=empresa_id,
@@ -297,13 +302,15 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                     descricao_missao=dados["descricao_missao"],
                     descricao_roteamento=dados["descricao_roteamento"],
                     prompt_sistema=dados["prompt_sistema"],
+                    modelo_llm="gpt-4o-mini",
                     ativo=True,
                     fixo_no_roteador=bool(dados.get("fixo_no_roteador", True)),
                     peso_prioridade=1
                 )
                 
                 texto_base = f"{nome} {dados['descricao_missao']} {dados['descricao_roteamento']}"
-                especialista.embedding = await embeddings.aembed_query(texto_base)
+                if embeddings is not None:
+                    especialista.embedding = await embeddings.aembed_query(texto_base)
                 
                 session.add(especialista)
                 
@@ -326,6 +333,7 @@ async def criar_empresa(
         nome_empresa=empresa.nome_empresa,
         logo_url=empresa.logo_url,
         credenciais_canais=empresa.credenciais_canais,
+        openai_api_key=empresa.openai_api_key,
         ia_personalidade=empresa.ia_personalidade,
         ia_regras_negocio=empresa.ia_regras_negocio,
     )
@@ -616,6 +624,8 @@ async def get_ia_config(
         "atendente_prompt": str(getattr(empresa, "atendente_prompt", "") or "").strip() or None,
         "condutor_prompt": str(getattr(empresa, "condutor_prompt", "") or "").strip() or None,
         "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
+        "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
+        "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
     }
 
 @router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
@@ -665,6 +675,8 @@ async def put_ia_config(
         empresa.condutor_prompt = str(data.condutor_prompt or "").strip() or None
     if data.condutor_ativo is not None:
         empresa.condutor_ativo = bool(data.condutor_ativo)
+    if data.telefone_notificacao is not None:
+        empresa.telefone_notificacao = str(data.telefone_notificacao or "").strip() or None
     limite_duvida = empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45
     limite_certeza = empresa.limite_certeza if getattr(empresa, "limite_certeza", None) is not None else 0.65
     max_desempate = empresa.max_agentes_desempate if getattr(empresa, "max_agentes_desempate", None) is not None else 3
@@ -697,6 +709,8 @@ async def put_ia_config(
             "atendente_prompt": str(getattr(empresa, "atendente_prompt", "") or "").strip() or None,
             "condutor_prompt": str(getattr(empresa, "condutor_prompt", "") or "").strip() or None,
             "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
+            "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
+            "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
         }
     except Exception as e:
         await db.rollback()
@@ -1260,8 +1274,7 @@ async def adicionar_conhecimento_rag(
         )
         chunks = text_splitter.split_text(texto_para_processar)
         
-        from langchain_openai import OpenAIEmbeddings
-        embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+        embeddings_model = await get_embeddings_for_tenant(str(empresa_id), db)
         chunks_embeddings = await embeddings_model.aembed_documents(chunks)
         
         primeiro_id = None
@@ -1327,8 +1340,7 @@ async def processar_rag_pdf_background(empresa_id: str, content: bytes, filename
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
             chunks = text_splitter.split_text(text_content)
 
-            from langchain_openai import OpenAIEmbeddings
-            embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+            embeddings_model = await get_embeddings_for_tenant(str(empresa_id), db)
             chunks_embeddings = await embeddings_model.aembed_documents(chunks)
 
             for chunk, emb in zip(chunks, chunks_embeddings):
@@ -3620,7 +3632,12 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{empresa_id}/credenciais")
-async def atualizar_credenciais(empresa_id: str, credenciais: EvolutionCredentials, db: AsyncSession = Depends(get_db)):
+async def atualizar_credenciais(
+    empresa_id: str,
+    credenciais: EvolutionCredentials,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
     """
     Atualiza as credenciais da Evolution API para uma determinada empresa (Super Admin).
     """
@@ -3634,6 +3651,7 @@ async def atualizar_credenciais(empresa_id: str, credenciais: EvolutionCredentia
         base = dict(empresa.credenciais_canais or {})
         if credenciais.openai_api_key is not None:
             base["openai_api_key"] = credenciais.openai_api_key
+            empresa.openai_api_key = str(credenciais.openai_api_key or "").strip() or None
         empresa.credenciais_canais = base
         
         await db.commit()
@@ -3649,6 +3667,49 @@ async def atualizar_credenciais(empresa_id: str, credenciais: EvolutionCredentia
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao atualizar credenciais: {str(e)}"
         )
+
+
+@router.get("/{empresa_id}/openai-models")
+async def listar_modelos_openai_empresa(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        api_key = await get_tenant_api_key(empresa_id, db)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.models.list()
+        modelos = []
+        for item in list(getattr(response, "data", []) or []):
+            model_id = str(getattr(item, "id", "") or "").strip()
+            if not model_id:
+                continue
+            prefixos_validos = ("gpt-", "o1", "o3", "o4")
+            if not model_id.startswith(prefixos_validos):
+                continue
+            modelos.append(
+                {
+                    "id": model_id,
+                    "created": int(getattr(item, "created", 0) or 0),
+                }
+            )
+        modelos.sort(key=lambda m: m["created"], reverse=True)
+        return modelos
+    except Exception as exc:
+        detalhe = str(exc).lower()
+        if "401" in detalhe or "invalid api key" in detalhe or "authentication" in detalhe:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Chave OpenAI inválida para esta empresa. Atualize a chave e tente novamente.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Falha ao listar modelos da OpenAI: {str(exc)}",
+        ) from exc
 
 
 class SimuladorRequest(BaseModel):

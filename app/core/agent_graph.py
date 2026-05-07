@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field, StrictStr
 from dotenv import load_dotenv
+from openai import AuthenticationError, RateLimitError
 
 load_dotenv()
 
@@ -32,47 +33,18 @@ def _conversation_debug_log(message: str, flush: bool = False) -> None:
     if _conversation_debug_enabled():
         print(message, flush=flush)
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import AIMessage, HumanMessage
 
-# Removido LLM global: será instanciado via get_llm
-embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
-
 async def get_llm(empresa_id: str | None = None, modelo_ia: str | None = None) -> Any:
-    modelo_ia = str(modelo_ia or "").strip() or None
-    api_key = None
-    if empresa_id:
-        try:
-            import uuid
-            if isinstance(empresa_id, str):
-                empresa_uuid = uuid.UUID(empresa_id)
-            else:
-                empresa_uuid = empresa_id
-            async with AsyncSessionLocal() as session:
-                result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                empresa = result.scalars().first()
-                if empresa:
-                    if empresa.credenciais_canais:
-                        api_key = empresa.credenciais_canais.get("openai_api_key")
-                    if not modelo_ia:
-                        modelo_ia = empresa.modelo_ia
-        except Exception as e:
-            print(f"Erro ao buscar credenciais IA: {e}")
-            pass
-            
-    from app.api.utils import get_llm_model
-    modelo_final = normalize_model_name(modelo_ia or "gpt-4o-mini")
-    try:
-        logger.info("[LLM] Instanciando modelo final='%s' (empresa_id=%s)", modelo_final, empresa_id)
-        return get_llm_model(modelo_final, api_key=api_key)
-    except Exception as e:
-        print(f"Erro instanciando modelo {modelo_final}: {e}")
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.7,
-            model_kwargs={"frequency_penalty": 0.4, "presence_penalty": 0.4},
-        )
+    from app.core.llm_factory import get_llm_for_tenant
+
+    if not empresa_id:
+        raise ValueError("empresa_id é obrigatório para instanciar LLM em modo BYOK.")
+
+    modelo_ia = str(modelo_ia or "").strip() or "gpt-4o-mini"
+    async with AsyncSessionLocal() as session:
+        logger.info("[LLM] Instanciando modelo='%s' (empresa_id=%s)", modelo_ia, empresa_id)
+        return await get_llm_for_tenant(str(empresa_id), session, modelo_ia)
 
 from db.database import AsyncSessionLocal
 from db.models import (
@@ -103,7 +75,7 @@ from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
 from app.api.utils import is_ai_blocked
 from app.core.default_agents import ESPECIALISTAS_NATIVOS
-from app.core.llm_factory import normalize_model_name
+from app.core.llm_factory import normalize_model_name, handle_openai_runtime_exception, mark_openai_status_ok
 from app.core.tools import (
     tool_atualizar_nome_lead,
     tool_atualizar_tags_lead,
@@ -115,6 +87,16 @@ from langgraph.prebuilt import create_react_agent, ToolNode
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+async def _ainvoke_with_openai_guard(llm: Any, payload: Any, empresa_id: str | None):
+    try:
+        response = await llm.ainvoke(payload)
+        await mark_openai_status_ok(str(empresa_id or ""))
+        return response
+    except (AuthenticationError, RateLimitError) as exc:
+        await handle_openai_runtime_exception(str(empresa_id or ""), exc)
+        raise
 
 
 def _strip_role_prefix(texto: str) -> str:
@@ -1091,7 +1073,8 @@ async def node_handoff(state: AgentState):
     ultima_msg_cliente = _ultima_mensagem_cliente(state)
     try:
         llm = await get_llm(state.get("empresa_id"))
-        resposta = await llm.ainvoke(
+        resposta = await _ainvoke_with_openai_guard(
+            llm,
             [
                 ("system", _prepend_resumo_cliente_system_prompt(state, prompt_handoff)),
                 (
@@ -1100,7 +1083,8 @@ async def node_handoff(state: AgentState):
                     f"Última mensagem do cliente: {ultima_msg_cliente}\n"
                     f"Histórico recente:\n{contexto[-1800:] if contexto else '(sem histórico)'}",
                 ),
-            ]
+            ],
+            state.get("empresa_id"),
         )
         texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception:
@@ -1339,9 +1323,11 @@ from langgraph.prebuilt import create_react_agent
 async def buscar_conhecimento(pergunta: str, empresa_uuid):
     print(f"[RAG] Buscando conhecimento para a pergunta: '{pergunta}' na empresa {empresa_uuid}")
     try:
-        pergunta_embedding = await embeddings_model.aembed_query(pergunta)
-
         async with AsyncSessionLocal() as session:
+            from app.core.llm_factory import get_embeddings_for_tenant
+
+            embeddings_model = await get_embeddings_for_tenant(str(empresa_uuid), session)
+            pergunta_embedding = await embeddings_model.aembed_query(pergunta)
             # Busca vetorial filtrada por empresa e ordenada pela distância de cosseno
             query = select(Conhecimento).where(
                 Conhecimento.empresa_id == empresa_uuid
@@ -1580,8 +1566,10 @@ async def node_capturar_nome(state: AgentState):
     ultima_mensagem = _ultima_mensagem_cliente(state)
     
     llm = await get_llm(state.get("empresa_id"))
-    resposta = await llm.ainvoke(
-        [("system", _prepend_resumo_cliente_system_prompt(state, prompt)), ("user", ultima_mensagem)]
+    resposta = await _ainvoke_with_openai_guard(
+        llm,
+        [("system", _prepend_resumo_cliente_system_prompt(state, prompt)), ("user", ultima_mensagem)],
+        state.get("empresa_id"),
     )
     state["resposta_final"] = resposta.content
 
@@ -1680,7 +1668,7 @@ proxima_acao: {proxima_acao}
     _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE ---\n{prompt_final}", flush=True)
     mensagens_para_llm = [SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_final))] + _to_chat_messages(mensagens_recentes)
     llm = await get_llm(empresa_id)
-    resposta = await llm.ainvoke(mensagens_para_llm)
+    resposta = await _ainvoke_with_openai_guard(llm, mensagens_para_llm, empresa_id)
 
     state["resposta_final"] = str(getattr(resposta, "content", "") or "").strip()
     status_conv = "HANDOFF" if state.get("handoff_requested") else "ABERTA"
@@ -1799,11 +1787,13 @@ async def node_agente_condutor(state: AgentState):
             modelo_condutor = str(getattr(empresa, "modelo_roteador", "") or "").strip() or "gpt-4o-mini"
             llm = await get_llm(empresa_id, modelo_ia=modelo_condutor)
             llm_struct = llm.with_structured_output(AnaliseCondutor)
-            analise = await llm_struct.ainvoke(
+            analise = await _ainvoke_with_openai_guard(
+                llm_struct,
                 [
                     ("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)),
                     ("user", contexto_usuario),
-                ]
+                ],
+                empresa_id,
             )
             etapa_nova = str(getattr(analise, "etapa_funil", "") or "").strip() or etapa_atual_por_tag or None
             objetivo_novo = str(getattr(analise, "objetivo_atual", "") or "").strip() or None
@@ -2055,8 +2045,10 @@ async def node_roteador_maestro(state: AgentState):
             )
 
             try:
-                resposta_maestro = await llm_maestro.ainvoke(
-                    [("system", _prepend_resumo_cliente_system_prompt(state, prompt_decisao)), ("user", entrada_decisao)]
+                resposta_maestro = await _ainvoke_with_openai_guard(
+                    llm_maestro,
+                    [("system", _prepend_resumo_cliente_system_prompt(state, prompt_decisao)), ("user", entrada_decisao)],
+                    state.get("empresa_id"),
                 )
                 ids_selecionados_maestro = _parse_ids_json(getattr(resposta_maestro, "content", ""))
             except Exception as exc:
@@ -2368,8 +2360,10 @@ async def node_especialista_funcionamento(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke(
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)]
+        resposta = await _ainvoke_with_openai_guard(
+            llm,
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)],
+            empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
@@ -2447,8 +2441,10 @@ async def node_especialista_localizacao(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke(
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)]
+        resposta = await _ainvoke_with_openai_guard(
+            llm,
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)],
+            empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
@@ -2527,8 +2523,10 @@ async def node_especialista_saudacao(state: AgentState):
 
     try:
         llm = await get_llm(empresa_id)
-        resposta = await llm.ainvoke(
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_saudacao)), ("user", ultima_mensagem)]
+        resposta = await _ainvoke_with_openai_guard(
+            llm,
+            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_saudacao)), ("user", ultima_mensagem)],
+            empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
     except Exception as e:
@@ -3020,8 +3018,12 @@ async def node_especialista_dinamico(state: AgentState):
             prompt_completo = prompt_base + system_message_adicional
 
             modelo_esp = ""
-            if especialista_db and hasattr(especialista_db, "modelo_ia"):
-                modelo_esp = str(getattr(especialista_db, "modelo_ia", "") or "").strip()
+            if especialista_db:
+                modelo_esp = str(
+                    getattr(especialista_db, "modelo_llm", "")
+                    or getattr(especialista_db, "modelo_ia", "")
+                    or ""
+                ).strip()
             if not modelo_esp:
                 modelo_esp = str(meta_especialista.get("modelo_ia") or "").strip()
             modelo_esp = normalize_model_name(modelo_esp or "gpt-5.4")
@@ -3075,7 +3077,7 @@ async def node_especialista_dinamico(state: AgentState):
                         "[NODE ESPECIALISTA DINAMICO][ETAPA 3] Invocando LLM para '%s'",
                         nome_especialista_resultado,
                     )
-                    resposta = await llm_para_invocar.ainvoke(mensagens)
+                    resposta = await _ainvoke_with_openai_guard(llm_para_invocar, mensagens, state.get("empresa_id"))
                     mensagens.append(resposta)
 
                     if tool_node and hasattr(resposta, "tool_calls") and resposta.tool_calls:
@@ -3483,7 +3485,7 @@ Fim da conversa:
 
     _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 1) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
-    resposta = await llm.ainvoke(prompt)
+    resposta = await _ainvoke_with_openai_guard(llm, prompt, empresa_id)
     _conversation_debug_log(f"[FOLLOW-UP RESULT] Resposta da IA: {resposta.content}", flush=True)
     return resposta.content
 
@@ -3512,7 +3514,7 @@ Fim da conversa:
 
     _conversation_debug_log(f"--- PROMPT FINAL FOLLOW-UP (NIVEL 2 ENCERRAMENTO) ---\n{prompt}\n" + "-"*40, flush=True)
     llm = await get_llm(empresa_id)
-    resposta = await llm.ainvoke(prompt)
+    resposta = await _ainvoke_with_openai_guard(llm, prompt, empresa_id)
     texto_encerramento = resposta.content
     _conversation_debug_log(f"[FOLLOW-UP ENCERRAMENTO RESULT] Resposta da IA: {texto_encerramento}", flush=True)
 

@@ -104,7 +104,7 @@ async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_d
             "nome": esp.nome,
             "descricao_missao": esp.descricao_missao,
             "prompt_sistema": esp.prompt_sistema,
-            "modelo_ia": getattr(esp, 'modelo_ia', "gpt-4o-mini"),
+            "modelo_ia": str(getattr(esp, "modelo_llm", "") or getattr(esp, 'modelo_ia', "gpt-4o-mini")),
             "usar_rag": getattr(esp, 'usar_rag', False),
             "usar_agenda": getattr(esp, 'usar_agenda', False),
             "peso_prioridade": int(getattr(esp, "peso_prioridade", 1) or 1),
@@ -128,6 +128,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         descricao_missao=payload.descricao_missao,
         prompt_sistema=_prompt_com_busca_web(payload.prompt_sistema, bool(payload.usar_busca_web)),
         modelo_ia=payload.modelo_ia,
+        modelo_llm=payload.modelo_ia,
         usar_rag=payload.usar_rag,
         usar_agenda=payload.usar_agenda,
         peso_prioridade=int(payload.peso_prioridade or 1),
@@ -202,6 +203,7 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     especialista.descricao_missao = payload.descricao_missao
     especialista.prompt_sistema = _prompt_com_busca_web(payload.prompt_sistema, bool(payload.usar_busca_web))
     especialista.modelo_ia = payload.modelo_ia
+    especialista.modelo_llm = payload.modelo_ia
     especialista.usar_rag = payload.usar_rag
     especialista.usar_agenda = payload.usar_agenda
     especialista.peso_prioridade = int(payload.peso_prioridade or 1)

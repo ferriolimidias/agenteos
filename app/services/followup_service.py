@@ -8,7 +8,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import is_ai_blocked
-from app.core.agent_graph import get_llm
+from app.core.llm_factory import get_llm_for_tenant
 from app.services.channel_factory import despachar_mensagem
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, ConfigFollowUp, Especialista, LeadFollowUpLog, MensagemHistorico, TagCRM
@@ -46,7 +46,7 @@ async def _gerar_texto_followup(
         linhas.append(f"{papel}: {str(msg.texto or '').strip()}")
     historico_txt = "\n".join(linhas).strip() or "(sem histórico recente)"
 
-    llm = await get_llm(str(empresa_id))
+    llm = await get_llm_for_tenant(str(empresa_id), session, str(getattr(especialista, "modelo_llm", "") or getattr(especialista, "modelo_ia", "") or "gpt-4o-mini"))
     resposta = await llm.ainvoke(
         [
             (

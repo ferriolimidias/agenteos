@@ -68,23 +68,19 @@ async def get_available_models() -> List[str]:
         
     modelos = []
     
-    # 1. OpenAI Models
-    try:
-        from openai import AsyncOpenAI
-        import os
-        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        response = await client.models.list()
-        
-        # Filtros básicos para OpenAI: gpt-4, gpt-5, o1, o3, o4. Ignorar vision antigos, instruct, embedding.
-        for m in response.data:
-            m_name = m.id.lower()
-            if any(k in m_name for k in ["gpt-4", "gpt-5", "o1", "o3", "o4"]):
-                if "vision" not in m_name and "instruct" not in m_name and "audio" not in m_name and "realtime" not in m_name:
-                    modelos.append(m.id)
-    except Exception as e:
-        print(f"Aviso: Não foi possível listar modelos OpenAI: {e}")
-        # Fallback básico caso api key falhe
-        modelos.extend(["gpt-4o", "gpt-4o-mini"])
+    # 1. OpenAI Models (lista estática para evitar dependência de chave global)
+    modelos.extend(
+        [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+            "o1",
+            "o3",
+            "o4-mini",
+        ]
+    )
 
     # 2. Google (Gemini) - Hardcoded pois Google API list models varia muito
     modelos.extend(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
