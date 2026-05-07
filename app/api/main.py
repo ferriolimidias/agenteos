@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any, List
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import redis.asyncio as redis
 from db.database import engine
@@ -60,11 +61,27 @@ async def lifespan(app: FastAPI):
     await redis_client.close()
 
 app = FastAPI(lifespan=lifespan, title="Agent OS (Omnichannel)")
+MAX_REQUEST_SIZE_BYTES = 50 * 1024 * 1024
 
 
 @app.get("/")
 async def root():
     return {"status": "online", "message": "API Agente OS operando"}
+
+
+@app.middleware("http")
+async def enforce_max_request_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_SIZE_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Payload too large. Limite máximo: 50MB."},
+                )
+        except ValueError:
+            pass
+    return await call_next(request)
 
 
 # Configuração do CORS
