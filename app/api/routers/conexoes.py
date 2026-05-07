@@ -2,10 +2,11 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routers.auth import get_current_user
 from app.api.routers.empresas import require_ia_config_access
 from app.services.evolution_service import (
     consultar_status_conexao,
@@ -284,33 +285,16 @@ async def _buscar_empresa(db: AsyncSession, empresa_id: str) -> Empresa:
     return empresa
 
 
-async def _validar_acesso_conexao(
+async def _validar_acesso_conexao_usuario(
     conexao: Conexao,
-    db: AsyncSession,
-    x_user_id: str | None,
+    usuario_bd: Usuario,
 ) -> Usuario:
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="Usuário não autenticado.")
-
-    try:
-        user_uuid = uuid.UUID(x_user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Identificador de usuário inválido.") from exc
-
-    result = await db.execute(select(Usuario).where(Usuario.id == user_uuid))
-    usuario_bd = result.scalars().first()
-    if not usuario_bd:
-        raise HTTPException(status_code=401, detail="Usuário não encontrado.")
-
     if is_root_admin_email(usuario_bd.email):
         return usuario_bd
-
     if is_super_admin_role(usuario_bd.role):
         return usuario_bd
-
     if is_admin_empresa_role(usuario_bd.role) and usuario_bd.empresa_id == conexao.empresa_id:
         return usuario_bd
-
     raise HTTPException(status_code=403, detail="Acesso negado para esta conexão.")
 
 
@@ -528,7 +512,7 @@ async def atualizar_conexao(
 async def status_conexao(
     conexao_id: str,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str | None = Header(None),
+    current_user: Usuario = Depends(get_current_user),
 ):
     try:
         conexao_uuid = uuid.UUID(conexao_id)
@@ -540,7 +524,7 @@ async def status_conexao(
     if not conexao:
         raise HTTPException(status_code=404, detail="Conexão não encontrada.")
 
-    await _validar_acesso_conexao(conexao, db, x_user_id)
+    await _validar_acesso_conexao_usuario(conexao, current_user)
 
     try:
         if conexao.tipo == TipoConexao.EVOLUTION:
@@ -583,16 +567,16 @@ async def status_conexao(
 async def status_conexao_alias(
     conexao_id: str,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str | None = Header(None),
+    current_user: Usuario = Depends(get_current_user),
 ):
-    return await status_conexao(conexao_id=conexao_id, db=db, x_user_id=x_user_id)
+    return await status_conexao(conexao_id=conexao_id, db=db, current_user=current_user)
 
 
 @status_router.get("/{conexao_id}/qrcode", status_code=status.HTTP_200_OK)
 async def obter_qrcode_conexao(
     conexao_id: str,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str | None = Header(None),
+    current_user: Usuario = Depends(get_current_user),
 ):
     try:
         conexao_uuid = uuid.UUID(conexao_id)
@@ -604,7 +588,7 @@ async def obter_qrcode_conexao(
     if not conexao:
         raise HTTPException(status_code=404, detail="Conexão não encontrada.")
 
-    await _validar_acesso_conexao(conexao, db, x_user_id)
+    await _validar_acesso_conexao_usuario(conexao, current_user)
 
     if conexao.tipo != TipoConexao.EVOLUTION:
         raise HTTPException(status_code=400, detail="QR Code disponível apenas para conexões Evolution.")
