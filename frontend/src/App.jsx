@@ -20,9 +20,13 @@ import Campanhas from "./pages/tenant/Campanhas";
 import GestaoTags from "./pages/tenant/GestaoTags";
 import Unidades from "./pages/tenant/Unidades";
 import ConfiguracoesConversoes from "./pages/tenant/ConfiguracoesConversoes";
+import { getStoredUser } from "./utils/auth";
 
 function App() {
   useEffect(() => {
+    const usuario = getStoredUser();
+    const isSuperAdmin = usuario?.role === "super_admin";
+
     window.onerror = function(message, source, lineno, colno, error) {
       alert(`ERRO CRÍTICO CAPTURADO NO REACT:\n\n${message}\n\nArquivo: ${source}\nLinha: ${lineno}`);
       return false; 
@@ -42,6 +46,9 @@ function App() {
     };
 
     const loadGlobalFavicon = async () => {
+      if (!isSuperAdmin) {
+        return;
+      }
       try {
         const response = await fetch("/api/admin/configuracoes");
         if (!response.ok) {
@@ -58,8 +65,10 @@ function App() {
       loadGlobalFavicon();
     };
 
-    loadGlobalFavicon();
-    window.addEventListener("configuracoesUpdated", onConfigUpdated);
+    if (isSuperAdmin) {
+      loadGlobalFavicon();
+      window.addEventListener("configuracoesUpdated", onConfigUpdated);
+    }
     return () => {
       window.removeEventListener("configuracoesUpdated", onConfigUpdated);
     };
