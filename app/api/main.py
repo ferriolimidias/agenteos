@@ -24,6 +24,7 @@ from app.api.routers import conexoes
 from app.api.routers import dashboard
 from app.api.routers import websockets
 from app.services.followup_service import processar_followups_pendentes
+from app.core.security import validate_security_settings
 
 # Global Redis Client
 redis_client: redis.Redis = None
@@ -31,6 +32,7 @@ redis_client: redis.Redis = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
+    validate_security_settings()
     await ensure_empresas_prompt_columns(engine)
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     redis_client = redis.from_url(redis_url, decode_responses=True)
@@ -84,7 +86,8 @@ app.include_router(orquestrador.status_router, prefix="/api/admin")
 app.include_router(webhook.router, prefix="/api")
 
 # Rotas que já possuem o prefixo completo no próprio APIRouter interno
-app.include_router(configuracoes.router, dependencies=[Depends(auth.require_super_admin)])
+app.include_router(configuracoes.router)
+app.include_router(configuracoes.public_router)
 app.include_router(auth.router)
 app.include_router(inbox.router)
 app.include_router(integracoes.router)

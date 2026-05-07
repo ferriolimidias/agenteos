@@ -96,6 +96,10 @@ def _jwt_secret_key() -> str:
     return key
 
 
+def validate_security_settings() -> None:
+    _jwt_secret_key()
+
+
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 

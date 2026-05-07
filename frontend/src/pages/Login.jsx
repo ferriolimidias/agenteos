@@ -18,7 +18,7 @@ export default function Login() {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await api.get("/admin/configuracoes");
+        const response = await api.get("/public/configuracoes-branding");
         setConfigVisual({
           nomeSistema: response.data?.nome_sistema || "Antigravity OS",
           logoBase64: response.data?.logo_base64 || "",

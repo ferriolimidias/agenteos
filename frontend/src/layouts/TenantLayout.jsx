@@ -28,17 +28,9 @@ export default function TenantLayout() {
   };
 
   useEffect(() => {
-    const isSuperAdmin = user?.role === "super_admin";
     const fetchConfig = async () => {
-      if (!isSuperAdmin) {
-        setConfigVisual({
-          nomeSistema: "Minha Empresa",
-          logoBase64: "",
-        });
-        return;
-      }
       try {
-        const response = await api.get("/admin/configuracoes");
+        const response = await api.get("/public/configuracoes-branding");
         setConfigVisual({
           nomeSistema: response.data?.nome_sistema || "Minha Empresa",
           logoBase64: response.data?.logo_base64 || "",
@@ -51,14 +43,12 @@ export default function TenantLayout() {
       }
     };
 
-    if (isSuperAdmin) {
-      fetchConfig();
-      window.addEventListener("configuracoesUpdated", fetchConfig);
-    }
+    fetchConfig();
+    window.addEventListener("configuracoesUpdated", fetchConfig);
     return () => {
       window.removeEventListener("configuracoesUpdated", fetchConfig);
     };
-  }, [user?.role]);
+  }, []);
 
   return (
     <div className="min-h-screen flex bg-[#0b0b0c] text-gray-100">

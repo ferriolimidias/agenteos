@@ -18,7 +18,14 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error?.response?.status;
-    if (status === 401) {
+    const requestUrl = String(error?.config?.url || "");
+    const hasAuthHeader = Boolean(error?.config?.headers?.Authorization);
+    const isAuthEndpoint = requestUrl.includes("/auth/login");
+    const isPublicEndpoint = requestUrl.includes("/public/");
+
+    // Evita logout agressivo por 401 em rotas públicas ou login.
+    // Só forçamos logout em falhas autenticadas de sessão.
+    if (status === 401 && hasAuthHeader && !isAuthEndpoint && !isPublicEndpoint) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
       localStorage.removeItem("impersonating");
