@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
-import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText, ArrowRight } from "lucide-react";
+import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText, ArrowRight, Activity } from "lucide-react";
 import RAGManager from "../../components/RAGManager";
 import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import { clearImpersonation } from "../../utils/auth";
@@ -66,6 +66,10 @@ export default function Empresas() {
   const [loadingConfigIA, setLoadingConfigIA] = useState(false);
   const [savingConfigIA, setSavingConfigIA] = useState(false);
   const [modelosDisponiveis, setModelosDisponiveis] = useState([]);
+  const [workerStatus, setWorkerStatus] = useState(null);
+  const [loadingWorkerStatus, setLoadingWorkerStatus] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [etapasFunil, setEtapasFunil] = useState([]);
   const [loadingEtapasFunil, setLoadingEtapasFunil] = useState(false);
   const [salvandoEtapaFunil, setSalvandoEtapaFunil] = useState(false);
@@ -89,6 +93,24 @@ export default function Empresas() {
       setModelosDisponiveis(res.data);
     } catch (err) {
       console.error("Erro ao buscar modelos de IA:", err);
+    }
+  };
+
+  const fetchWorkerStatus = async ({ silent = false } = {}) => {
+    try {
+      if (!silent) {
+        setLoadingWorkerStatus(true);
+      }
+      const res = await api.get("/admin/workers/status");
+      setWorkerStatus(res.data || null);
+      setLastUpdate(Date.now());
+    } catch (err) {
+      console.error("Erro ao buscar status do worker:", err);
+      setWorkerStatus(null);
+    } finally {
+      if (!silent) {
+        setLoadingWorkerStatus(false);
+      }
     }
   };
 
@@ -178,7 +200,36 @@ export default function Empresas() {
   useEffect(() => {
     fetchEmpresas();
     fetchModelosDisponiveis();
+    fetchWorkerStatus();
+
+    const intervalId = setInterval(() => {
+      fetchWorkerStatus({ silent: true });
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
   }, []);
+
+  useEffect(() => {
+    const tickId = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(tickId);
+    };
+  }, []);
+
+  const getLastUpdateLabel = () => {
+    if (!lastUpdate) return "Atualização ainda não realizada";
+    const diffMs = Math.max(0, nowTick - lastUpdate);
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) {
+      return `Atualizado há ${diffSec} segundo${diffSec === 1 ? "" : "s"}`;
+    }
+    const diffMin = Math.floor(diffSec / 60);
+    return `Atualizado há ${diffMin} minuto${diffMin === 1 ? "" : "s"}`;
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -414,6 +465,58 @@ export default function Empresas() {
           <Plus size={20} />
           <span>Novo Cliente</span>
         </button>
+      </div>
+
+      <div className="rounded-xl border border-[#2d2d2d] bg-[#111112] p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-100">
+              <Activity size={16} className="text-indigo-300" />
+              Saúde do Sistema
+            </h2>
+            <p className="mt-1 text-xs text-gray-400">Monitoramento do Worker de Follow-up</p>
+          </div>
+          <button
+            type="button"
+            onClick={fetchWorkerStatus}
+            className="rounded-lg border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-1.5 text-xs text-gray-300 hover:bg-[#202022]"
+          >
+            Atualizar
+          </button>
+        </div>
+        <div className="mt-4">
+          {loadingWorkerStatus ? (
+            <p className="text-xs text-gray-500">Carregando status do worker...</p>
+          ) : (() => {
+              const ultima = workerStatus?.ultima_execucao ? new Date(workerStatus.ultima_execucao) : null;
+              const ativo = !!(ultima && (Date.now() - ultima.getTime()) < 3 * 60 * 1000);
+              return (
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span
+                    className={`rounded-full border px-2.5 py-1 font-semibold ${
+                      ativo
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                        : "border-red-500/40 bg-red-500/10 text-red-300"
+                    }`}
+                  >
+                    {ativo ? "Worker Ativo" : "Worker Inativo"}
+                  </span>
+                  <span className="text-gray-300">
+                    Leads processados hoje: <strong>{Number(workerStatus?.leads_processados_hoje || 0)}</strong>
+                  </span>
+                  <span className="text-gray-400">
+                    Erros recentes: <strong>{Number(workerStatus?.erros_recentes || 0)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    Lock: {workerStatus?.status_lock || "N/A"}
+                  </span>
+                </div>
+              );
+            })()}
+        </div>
+        <div className="mt-3 border-t border-[#2d2d2d] pt-2 text-[11px] text-gray-500">
+          {getLastUpdateLabel()}
+        </div>
       </div>
 
       <div className="bg-[#111112] border border-[#2d2d2d] rounded-xl overflow-hidden shadow-sm">

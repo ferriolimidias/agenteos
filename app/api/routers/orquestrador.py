@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -13,6 +14,11 @@ from app.api.routers.auth import require_super_admin
 router = APIRouter(
     prefix="/orquestrador",
     tags=["Orquestrador"],
+    dependencies=[Depends(require_super_admin)],
+)
+status_router = APIRouter(
+    prefix="/workers",
+    tags=["Workers"],
     dependencies=[Depends(require_super_admin)],
 )
 
@@ -50,6 +56,36 @@ class FerramentaCreate(BaseModel):
     headers: Optional[str] = None
     payload: Optional[str] = None
     parameters_json: Optional[dict] = None
+
+
+@status_router.get("/status")
+async def worker_status():
+    from app.api.main import redis_client
+
+    if redis_client is None:
+        return {
+            "status_lock": "Livre",
+            "ultima_execucao": None,
+            "leads_processados_hoje": 0,
+            "erros_recentes": 0,
+        }
+
+    lock_key = "lock:followup_worker"
+    key_ultima_execucao = "metrics:followup:ultima_execucao"
+    key_erros_recentes = "metrics:followup:erros_recentes"
+    key_leads_hoje = f"metrics:followup:leads_processados:{datetime.utcnow().strftime('%Y-%m-%d')}"
+
+    lock_val = await redis_client.get(lock_key)
+    ultima_execucao = await redis_client.get(key_ultima_execucao)
+    leads_hoje = await redis_client.get(key_leads_hoje)
+    erros_recentes = await redis_client.get(key_erros_recentes)
+
+    return {
+        "status_lock": "Ocupado" if lock_val else "Livre",
+        "ultima_execucao": ultima_execucao,
+        "leads_processados_hoje": int(leads_hoje or 0),
+        "erros_recentes": int(erros_recentes or 0),
+    }
 
 @router.get("/empresas/{empresa_id}/especialistas")
 async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_db)):

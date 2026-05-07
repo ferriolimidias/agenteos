@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, Link, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Brain, BookOpenText, Users, Webhook, LogOut } from "lucide-react";
+import { LayoutDashboard, Brain, BookOpenText, Users, Webhook, LogOut, Timer } from "lucide-react";
 import api from "../services/api";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
 
@@ -75,6 +75,10 @@ export default function TenantLayout() {
           <Link to="/painel/agentes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
             <Brain size={18} />
             <span>Meus Agentes</span>
+          </Link>
+          <Link to="/painel/followups" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
+            <Timer size={18} />
+            <span>Cadências / Follow-up</span>
           </Link>
           <Link to="/painel/rag" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
             <BookOpenText size={18} />

@@ -8,6 +8,7 @@ import ConfiguracoesGlobais from "./pages/super-admin/ConfiguracoesGlobais";
 import EmpresaDetalhes from "./pages/super-admin/EmpresaDetalhes";
 import TenantDashboard from "./pages/tenant/TenantDashboard";
 import TenantAgentes from "./pages/tenant/TenantAgentes";
+import TenantFollowUps from "./pages/tenant/TenantFollowUps";
 import Rag from "./pages/tenant/Rag";
 import Crm from "./pages/tenant/Crm";
 import Agenda from "./pages/tenant/Agenda";
@@ -80,6 +81,7 @@ function App() {
       <Route path="/painel" element={<TenantLayout />}>
         <Route index element={<TenantDashboard />} />
         <Route path="agentes" element={<TenantAgentes />} />
+        <Route path="followups" element={<TenantFollowUps />} />
         <Route path="crm" element={<Crm />} />
         <Route path="rag" element={<Rag />} />
         <Route path="agenda" element={<Agenda />} />

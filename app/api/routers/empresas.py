@@ -41,6 +41,7 @@ from db.models import (
     TagCRM,
     FerramentaAPI,
     Especialista,
+    ConfigFollowUp,
     TemplateMensagem,
     is_admin_empresa_role,
     is_root_admin_email,
@@ -968,6 +969,32 @@ class TenantAgenteResponse(BaseModel):
     nome: str
     funcao: str | None = None
     status: str = "online"
+
+
+class FollowUpBase(BaseModel):
+    nome: str
+    tempo_gatilho_minutos: int
+    objetivo_prompt: str
+    tag_aplicar_final: str | None = None
+    ativo: bool = True
+
+
+class FollowUpCreate(FollowUpBase):
+    pass
+
+
+class FollowUpUpdate(BaseModel):
+    nome: str | None = None
+    tempo_gatilho_minutos: int | None = None
+    objetivo_prompt: str | None = None
+    tag_aplicar_final: str | None = None
+    ativo: bool | None = None
+
+
+class FollowUpResponse(FollowUpBase):
+    id: str
+    empresa_id: str
+    criado_em: str | None = None
 
 
 class DestinoTransferenciaBase(BaseModel):
@@ -2757,6 +2784,154 @@ async def listar_agentes_tenant(
         }
         for esp in especialistas_visiveis
     ]
+
+
+@router.get("/{empresa_id}/followups", response_model=List[FollowUpResponse])
+async def listar_followups(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        emp_uuid = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(ConfigFollowUp)
+        .where(ConfigFollowUp.empresa_id == emp_uuid)
+        .order_by(ConfigFollowUp.tempo_gatilho_minutos.asc(), ConfigFollowUp.nome.asc())
+    )
+    items = result.scalars().all()
+    return [
+        {
+            "id": str(item.id),
+            "empresa_id": str(item.empresa_id),
+            "nome": str(item.nome or ""),
+            "tempo_gatilho_minutos": int(item.tempo_gatilho_minutos or 0),
+            "objetivo_prompt": str(item.objetivo_prompt or ""),
+            "tag_aplicar_final": str(item.tag_aplicar_final) if item.tag_aplicar_final else None,
+            "ativo": bool(item.ativo),
+            "criado_em": item.criado_em.isoformat() if item.criado_em else None,
+        }
+        for item in items
+    ]
+
+
+@router.post("/{empresa_id}/followups", response_model=FollowUpResponse, status_code=status.HTTP_201_CREATED)
+async def criar_followup(
+    empresa_id: str,
+    payload: FollowUpCreate,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        emp_uuid = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    tag_uuid = _parse_uuid_or_none(payload.tag_aplicar_final)
+    if payload.tag_aplicar_final and not tag_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tag_aplicar_final inválida")
+
+    item = ConfigFollowUp(
+        empresa_id=emp_uuid,
+        nome=str(payload.nome or "").strip(),
+        tempo_gatilho_minutos=max(1, int(payload.tempo_gatilho_minutos)),
+        objetivo_prompt=str(payload.objetivo_prompt or "").strip(),
+        tag_aplicar_final=tag_uuid,
+        ativo=bool(payload.ativo),
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return {
+        "id": str(item.id),
+        "empresa_id": str(item.empresa_id),
+        "nome": str(item.nome or ""),
+        "tempo_gatilho_minutos": int(item.tempo_gatilho_minutos or 0),
+        "objetivo_prompt": str(item.objetivo_prompt or ""),
+        "tag_aplicar_final": str(item.tag_aplicar_final) if item.tag_aplicar_final else None,
+        "ativo": bool(item.ativo),
+        "criado_em": item.criado_em.isoformat() if item.criado_em else None,
+    }
+
+
+@router.put("/{empresa_id}/followups/{id}", response_model=FollowUpResponse)
+async def atualizar_followup(
+    empresa_id: str,
+    id: str,
+    payload: FollowUpUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        emp_uuid = uuid.UUID(str(empresa_id))
+        followup_uuid = uuid.UUID(str(id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(ConfigFollowUp).where(ConfigFollowUp.id == followup_uuid, ConfigFollowUp.empresa_id == emp_uuid)
+    )
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Follow-up não encontrado")
+
+    if payload.nome is not None:
+        item.nome = str(payload.nome).strip()
+    if payload.tempo_gatilho_minutos is not None:
+        item.tempo_gatilho_minutos = max(1, int(payload.tempo_gatilho_minutos))
+    if payload.objetivo_prompt is not None:
+        item.objetivo_prompt = str(payload.objetivo_prompt).strip()
+    if payload.ativo is not None:
+        item.ativo = bool(payload.ativo)
+    if payload.tag_aplicar_final is not None:
+        if str(payload.tag_aplicar_final).strip() == "":
+            item.tag_aplicar_final = None
+        else:
+            tag_uuid = _parse_uuid_or_none(payload.tag_aplicar_final)
+            if not tag_uuid:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tag_aplicar_final inválida")
+            item.tag_aplicar_final = tag_uuid
+
+    await db.commit()
+    await db.refresh(item)
+    return {
+        "id": str(item.id),
+        "empresa_id": str(item.empresa_id),
+        "nome": str(item.nome or ""),
+        "tempo_gatilho_minutos": int(item.tempo_gatilho_minutos or 0),
+        "objetivo_prompt": str(item.objetivo_prompt or ""),
+        "tag_aplicar_final": str(item.tag_aplicar_final) if item.tag_aplicar_final else None,
+        "ativo": bool(item.ativo),
+        "criado_em": item.criado_em.isoformat() if item.criado_em else None,
+    }
+
+
+@router.delete("/{empresa_id}/followups/{id}", status_code=status.HTTP_200_OK)
+async def excluir_followup(
+    empresa_id: str,
+    id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        emp_uuid = uuid.UUID(str(empresa_id))
+        followup_uuid = uuid.UUID(str(id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(ConfigFollowUp).where(ConfigFollowUp.id == followup_uuid, ConfigFollowUp.empresa_id == emp_uuid)
+    )
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Follow-up não encontrado")
+
+    await db.delete(item)
+    await db.commit()
+    return {"success": True, "id": str(followup_uuid)}
 
 
 @router.post("/{empresa_id}/leads/{lead_id}/transferir_manual", status_code=status.HTTP_200_OK)

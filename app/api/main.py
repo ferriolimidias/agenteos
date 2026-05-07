@@ -23,6 +23,7 @@ from app.api.routers import integracoes
 from app.api.routers import conexoes
 from app.api.routers import dashboard
 from app.api.routers import websockets
+from app.services.followup_service import processar_followups_pendentes
 
 # Global Redis Client
 redis_client: redis.Redis = None
@@ -33,8 +34,27 @@ async def lifespan(app: FastAPI):
     await ensure_empresas_prompt_columns(engine)
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     redis_client = redis.from_url(redis_url, decode_responses=True)
+    followup_task = None
+
+    async def _followup_worker_loop():
+        intervalo = max(30, int(os.getenv("FOLLOWUP_WORKER_INTERVAL_SECONDS", "60")))
+        while True:
+            try:
+                resultado = await processar_followups_pendentes()
+                print(f"[FOLLOWUP WORKER] ciclo concluído: {resultado}")
+            except Exception as exc:
+                print(f"[FOLLOWUP WORKER] falha no ciclo: {exc}")
+            await asyncio.sleep(intervalo)
+
+    followup_task = asyncio.create_task(_followup_worker_loop())
     yield
     # Cleanup Redis connection on shutdown
+    if followup_task:
+        followup_task.cancel()
+        try:
+            await followup_task
+        except asyncio.CancelledError:
+            pass
     await redis_client.close()
 
 app = FastAPI(lifespan=lifespan, title="Agent OS (Omnichannel)")
@@ -60,6 +80,7 @@ app.include_router(agentes.router, prefix="/api")
 app.include_router(especialistas.router, prefix="/api")
 app.include_router(api_connections.router, prefix="/api")
 app.include_router(orquestrador.router, prefix="/api/admin", dependencies=[Depends(auth.require_super_admin)])
+app.include_router(orquestrador.status_router, prefix="/api/admin")
 app.include_router(webhook.router, prefix="/api")
 
 # Rotas que já possuem o prefixo completo no próprio APIRouter interno
