@@ -32,7 +32,26 @@ def get_llm_model(model_name: str, api_key: str = None):
     return _core_get_llm_model(normalized, api_key=api_key)
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+def is_ai_blocked(lead: object, now: datetime | None = None) -> bool:
+    """
+    Fonte única de verdade para bloqueio de IA por lead.
+
+    Precedência:
+    1) Pausa permanente/manual por lead.ia_ativa == False
+    2) Pausa temporária por lead.bot_pausado_ate > now
+    """
+    if lead is None:
+        return False
+
+    if not bool(getattr(lead, "ia_ativa", True)):
+        return True
+
+    referencia = now or datetime.utcnow()
+    pausado_ate = getattr(lead, "bot_pausado_ate", None)
+    return bool(pausado_ate and pausado_ate > referencia)
+
 
 async def get_available_models() -> List[str]:
     """

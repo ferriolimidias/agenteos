@@ -1,13 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import uuid
 from sqlalchemy import select, func
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, MensagemHistorico, CRMEtapa
+from app.api.routers.auth import require_tenant_access
 
 router = APIRouter(prefix="/api/empresas", tags=["Dashboard"])
 
 @router.get("/{empresa_id}/dashboard/stats")
-async def obter_estatisticas(empresa_id: str):
+async def obter_estatisticas(empresa_id: str, _: object = Depends(require_tenant_access)):
     try:
         empresa_uuid = uuid.UUID(empresa_id)
         async with AsyncSessionLocal() as session:

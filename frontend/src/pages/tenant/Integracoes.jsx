@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Webhook, Save, CheckCircle, AlertCircle } from "lucide-react";
-import axios from "axios";
-import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import api from "../../services/api";
+import { getActiveEmpresaId } from "../../utils/auth";
 
 export default function Integracoes() {
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -9,14 +9,13 @@ export default function Integracoes() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
 
-  const user = getStoredUser();
   const empresa_id = getActiveEmpresaId();
 
   useEffect(() => {
     const fetchWebhook = async () => {
       if (!empresa_id) return;
       try {
-        const res = await axios.get(`/api/empresas/${empresa_id}/webhooks`);
+        const res = await api.get(`/empresas/${empresa_id}/webhooks`);
         if (res.data && res.data.url) {
           setWebhookUrl(res.data.url);
           setAtivo(res.data.ativo);
@@ -34,7 +33,7 @@ export default function Integracoes() {
     setLoading(true);
     setMessage(null);
     try {
-      await axios.post(`/api/empresas/${empresa_id}/webhooks`, {
+      await api.post(`/empresas/${empresa_id}/webhooks`, {
         url: webhookUrl,
         ativo: ativo
       });

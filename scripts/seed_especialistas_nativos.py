@@ -14,63 +14,18 @@ sys.path.append(os.path.join(base_dir, "app"))
 try:
     from app.db.database import AsyncSessionLocal
     from app.db.models import Empresa, Especialista
+    from app.core.default_agents import ESPECIALISTAS_NATIVOS
     print("ℹ️  Importado via app.db")
 except ImportError:
     try:
         from db.database import AsyncSessionLocal
         from db.models import Empresa, Especialista
+        from app.core.default_agents import ESPECIALISTAS_NATIVOS
         print("ℹ️  Importado via db direto")
     except ImportError as e:
         print(f"❌ Erro crítico de importação: {e}")
         print(f"Caminhos verificados: {sys.path}")
         sys.exit(1)
-
-
-ESPECIALISTAS_NATIVOS = {
-    "especialista_saudacao": {
-        "descricao_missao": (
-            "Atender mensagens de abertura de conversa e cumprimentos iniciais."
-        ),
-        "descricao_roteamento": (
-            "oi, olá, bom dia, boa tarde, boa noite, tudo bem, "
-            "quero falar com atendente, inicio de conversa, saudação, iniciar atendimento"
-        ),
-        "prompt_sistema": (
-            "Você é o especialista de saudação. Receba o cliente com cordialidade, "
-            "identifique a intenção inicial e conduza para o próximo passo do atendimento."
-        ),
-    },
-    "especialista_localizacao": {
-        "descricao_missao": (
-            "Fornecer o endereço completo, ponto de referência e enviar o link do Google Maps (mapa) para ajudar o cliente a chegar à unidade."
-        ),
-        "descricao_roteamento": (
-            "endereço, onde fica, mapa, link do maps, google maps, matriz, filial, ponto de referência, "
-            "como chegar, me manda o mapa, referências do local, fica perto de onde, rua, avenida, bairro, cidade, "
-            "localização novamente, endereço de novo, gps, rota, manda a localização"
-        ),
-        "prompt_sistema": (
-            "Você é o especialista de localização. REGRAS OBRIGATÓRIAS: 1. NUNCA peça permissão para enviar o endereço ou o link, "
-            "envie imediatamente. 2. Use o PONTO DE REFERÊNCIA cadastrado como guia principal. 3. Se houver um link de mapa disponível "
-            "no contexto, forneça-o. 4. NUNCA invente ou gere links falsos (como '/0'). Se não houver link no contexto, envie apenas o "
-            "endereço em texto."
-        ),
-    },
-    "especialista_funcionamento": {
-        "descricao_missao": (
-            "Responder perguntas sobre dias e horários de atendimento."
-        ),
-        "descricao_roteamento": (
-            "horário de atendimento, que horas abre, que horas fecha, dias de funcionamento, "
-            "vocês abrem de sábado, abrem feriado, estão abertos hoje, expediente"
-        ),
-        "prompt_sistema": (
-            "Você é o especialista de funcionamento. Informe horários, dias úteis e "
-            "regras de abertura com clareza."
-        ),
-    },
-}
-
 
 def _build_embedding_text(especialista: Especialista) -> str:
     partes = [
@@ -117,11 +72,15 @@ async def seed_especialistas_nativos() -> None:
                             descricao_roteamento=dados["descricao_roteamento"],
                             prompt_sistema=dados["prompt_sistema"],
                             ativo=True,
+                            fixo_no_roteador=bool(dados.get("fixo_no_roteador", True)),
                         )
                         session.add(especialista)
                         total_criados += 1
                     else:
+                        especialista.descricao_missao = dados["descricao_missao"]
                         especialista.descricao_roteamento = dados["descricao_roteamento"]
+                        especialista.prompt_sistema = dados["prompt_sistema"]
+                        especialista.fixo_no_roteador = bool(dados.get("fixo_no_roteador", True))
                         total_atualizados += 1
 
                     texto_base = _build_embedding_text(especialista)

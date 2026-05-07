@@ -238,6 +238,7 @@ class ConversaListaResponse(BaseModel):
     status_atendimento: str | None = "aberto"
     bot_pausado: bool = False
     bot_pausado_ate: str | None = None
+    ia_ativa: bool = True
     etapa_crm: str | None = None
     tags: list[dict[str, Any]] = Field(default_factory=list)
     historico_resumo: str | None = None

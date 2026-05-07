@@ -3,7 +3,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import redis.asyncio as redis
@@ -59,11 +59,11 @@ app.include_router(empresas.router, prefix="/api")
 app.include_router(agentes.router, prefix="/api")
 app.include_router(especialistas.router, prefix="/api")
 app.include_router(api_connections.router, prefix="/api")
-app.include_router(orquestrador.router, prefix="/api/admin")
+app.include_router(orquestrador.router, prefix="/api/admin", dependencies=[Depends(auth.require_super_admin)])
 app.include_router(webhook.router, prefix="/api")
 
 # Rotas que já possuem o prefixo completo no próprio APIRouter interno
-app.include_router(configuracoes.router)
+app.include_router(configuracoes.router, dependencies=[Depends(auth.require_super_admin)])
 app.include_router(auth.router)
 app.include_router(inbox.router)
 app.include_router(integracoes.router)

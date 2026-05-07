@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
-import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText } from "lucide-react";
+import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText, ArrowRight } from "lucide-react";
 import RAGManager from "../../components/RAGManager";
 import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import { clearImpersonation } from "../../utils/auth";
@@ -416,47 +416,51 @@ export default function Empresas() {
         </button>
       </div>
 
-      <div className="bg-gray-950 border border-gray-800 rounded-xl overflow-hidden shadow-sm">
+      <div className="bg-[#111112] border border-[#2d2d2d] rounded-xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-gray-900 text-gray-400 border-b border-gray-800 uppercase tracking-wider text-xs font-semibold">
+          <table className="w-full text-left text-xs whitespace-nowrap">
+            <thead className="bg-[#151516] text-gray-400 border-b border-[#2d2d2d] uppercase tracking-wider font-semibold">
               <tr>
-                <th className="px-6 py-4">Nome da Empresa</th>
-                <th className="px-6 py-4">Área de Atuação</th>
-                <th className="px-6 py-4 text-right">ID do Tenant</th>
+                <th className="px-4 py-3">Cliente</th>
+                <th className="px-4 py-3">Área</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Tenant ID</th>
+                <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800 text-gray-200">
+            <tbody className="divide-y divide-[#2d2d2d] text-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan="3" className="px-6 py-8 text-center text-gray-500">Carregando empresas...</td>
+                  <td colSpan="5" className="px-4 py-8 text-center text-gray-500">Carregando empresas...</td>
                 </tr>
               ) : empresas.length === 0 ? (
                 <tr>
-                  <td colSpan="3" className="px-6 py-8 text-center text-gray-500">Nenhum cliente cadastrado.</td>
+                  <td colSpan="5" className="px-4 py-8 text-center text-gray-500">Nenhum cliente cadastrado.</td>
                 </tr>
               ) : (
                 empresas.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-gray-800/50 transition-colors">
-                    <td className="px-6 py-4 font-medium flex items-center space-x-3">
+                  <tr key={emp.id} className="hover:bg-[#171718] transition-colors">
+                    <td className="px-4 py-3 font-medium">
+                      <div className="flex items-center space-x-3">
                       {emp.logo_url ? (
                         <img
                           src={emp.logo_url}
                           alt={`Logo de ${emp.nome_empresa}`}
-                          className="w-8 h-8 rounded-md object-contain"
+                          className="w-7 h-7 rounded-md object-contain"
                         />
                       ) : (
-                        <div className="w-8 h-8 rounded-md bg-indigo-900/50 text-indigo-400 flex items-center justify-center">
-                          <Building size={16} />
+                        <div className="w-7 h-7 rounded-md bg-indigo-900/50 text-indigo-300 flex items-center justify-center">
+                          <Building size={14} />
                         </div>
                       )}
-                      <span>{emp.nome_empresa}</span>
+                      <span className="text-sm">{emp.nome_empresa}</span>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-gray-400">
+                    <td className="px-4 py-3 text-gray-400">
                       <div className="flex items-center space-x-2">
                         {emp.area_atuacao ? (
                           <>
-                            <MapPin size={14} />
+                            <MapPin size={12} />
                             <span>{emp.area_atuacao}</span>
                           </>
                         ) : (
@@ -464,50 +468,64 @@ export default function Empresas() {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-right text-xs font-mono text-gray-500">
-                      <div className="flex items-center justify-end space-x-4">
-                        <span>{emp.id}</span>
+                    <td className="px-4 py-3">
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
+                        Ativo
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-[11px] font-mono text-gray-500 max-w-[180px] truncate">
+                      {emp.id}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => navigate(`/admin/empresas/${emp.id}`)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-600/15 px-3 py-1.5 text-[11px] font-semibold text-indigo-200 transition-colors hover:bg-indigo-600/25"
+                          title="Gerenciar Empresa"
+                        >
+                          Gerenciar <ArrowRight size={13} />
+                        </button>
                         <button 
                           onClick={() => handleImpersonate(emp)}
-                          className="text-gray-400 hover:text-emerald-500 transition-colors p-2 hover:bg-emerald-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-emerald-500 transition-colors p-1.5 hover:bg-emerald-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Acessar Painel (Impersonate)"
                         >
-                          <UserCheck size={16} />
+                          <UserCheck size={14} />
                         </button>
                         <button 
                           onClick={() => openConfigIAModal(emp)}
-                          className="text-gray-400 hover:text-purple-400 transition-colors p-2 hover:bg-purple-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-purple-400 transition-colors p-1.5 hover:bg-purple-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Configuração do Agente"
                         >
-                          <Brain size={16} />
+                          <Brain size={14} />
                         </button>
                         <button 
                           onClick={() => openRagModal(emp)}
-                          className="text-gray-400 hover:text-orange-400 transition-colors p-2 hover:bg-orange-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-orange-400 transition-colors p-1.5 hover:bg-orange-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Treinamento RAG"
                         >
-                          <FileText size={16} />
+                          <FileText size={14} />
                         </button>
                         <button 
                           onClick={() => openCredenciaisModal(emp)}
-                          className="text-gray-400 hover:text-blue-600 transition-colors p-2 hover:bg-blue-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-blue-600 transition-colors p-1.5 hover:bg-blue-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Configurar Integrações"
                         >
-                          <Settings size={16} />
+                          <Settings size={14} />
                         </button>
                         <button 
                           onClick={() => openEditModal(emp)}
-                          className="text-gray-400 hover:text-indigo-400 transition-colors p-2 hover:bg-indigo-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-indigo-400 transition-colors p-1.5 hover:bg-indigo-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Editar Cliente"
                         >
-                          <Pencil size={16} />
+                          <Pencil size={14} />
                         </button>
                         <button 
                           onClick={() => handleDelete(emp.id)}
-                          className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-50/10 rounded-lg inline-flex items-center gap-2 border border-gray-800"
+                          className="text-gray-400 hover:text-red-500 transition-colors p-1.5 hover:bg-red-50/10 rounded-lg inline-flex items-center gap-2 border border-[#2d2d2d]"
                           title="Excluir Cliente"
                         >
-                          <Trash size={16} />
+                          <Trash size={14} />
                         </button>
                       </div>
                     </td>

@@ -26,6 +26,33 @@ def _normalizar_tags(tags: list[str] | None) -> list[str]:
 
 
 @tool
+async def tool_atualizar_nome_lead(lead_id: str, novo_nome: str) -> str:
+    """Use esta ferramenta para atualizar o nome oficial do lead no CRM após confirmação explícita do cliente."""
+    nome_limpo = str(novo_nome or "").strip()
+    if len(nome_limpo) < 2:
+        return "Falha ao atualizar nome: nome inválido."
+
+    try:
+        lead_uuid = uuid.UUID(str(lead_id))
+    except (ValueError, TypeError):
+        return "Falha ao atualizar nome: lead_id inválido."
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(CRMLead).where(CRMLead.id == lead_uuid))
+            lead = result.scalars().first()
+            if not lead:
+                return "Falha ao atualizar nome: lead não encontrado."
+
+            lead.nome_contato = nome_limpo
+            session.add(lead)
+            await session.commit()
+            return f"Nome atualizado com sucesso para: {nome_limpo}"
+    except Exception as e:
+        return f"Falha ao atualizar nome: {str(e)}"
+
+
+@tool
 async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
     """Use esta ferramenta para atualizar ou adicionar múltiplas tags oficiais ao lead de uma vez. Passe uma lista com os nomes das tags."""
     print(f"\n--- [DEBUG TOOL] Iniciando atualização de tags para Lead: {lead_id} ---")

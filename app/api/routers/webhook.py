@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 
 from app.schemas import StandardMessage
-from app.api.utils import handle_debouncer
+from app.api.utils import handle_debouncer, is_ai_blocked
 from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal
 from db.models import Empresa, CRMLead, CRMFunil, CRMEtapa, MensagemHistorico, Conexao, TipoConexao
@@ -394,7 +394,7 @@ async def save_history_and_check_pause(
             lead.bot_pausado_ate = now + timedelta(hours=1)
             should_process = False
         else:
-            if lead.bot_pausado_ate and lead.bot_pausado_ate > now:
+            if is_ai_blocked(lead, now=now):
                 should_process = False
                 
         await session.commit()

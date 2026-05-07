@@ -1,23 +1,26 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
-import axios from "axios";
-import { Send, Bot, RefreshCw } from "lucide-react";
-import { getActiveEmpresaId } from "../../utils/auth";
+import React, { useState, useRef, useEffect } from "react";
+import { Send, Bot, RefreshCw, FlaskConical, XCircle } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { clearImpersonation, getActiveEmpresaId } from "../../utils/auth";
+import api from "../../services/api";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 90000; // 90s max wait
 
 export default function Simulador() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [messages, setMessages] = useState([]);
   const [inputStr, setInputStr] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
-  const pollInterval = useRef(null);
-  const pollStartTime = useRef(null);
+  const bootstrapEnviadoRef = useRef(false);
 
   const [sessaoId] = useState(() => "ID_TESTE_SIMULADOR");
 
-  const empresaId = getActiveEmpresaId() || "";
+  const empresaIdFromQuery = String(searchParams.get("empresaId") || "").trim();
+  const especialistaFromQuery = String(searchParams.get("especialista") || "").trim();
+  const empresaNomeTeste = String(localStorage.getItem("impersonating_empresa") || "").trim();
+  const empresaId = empresaIdFromQuery || getActiveEmpresaId() || "";
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,9 +46,7 @@ export default function Simulador() {
 
     const intervalId = setInterval(async () => {
       try {
-        const res = await axios.get(
-          `${API_BASE}/empresas/${empresaId}/simulador/resposta/${sessaoId}`
-        );
+        const res = await api.get(`/empresas/${empresaId}/simulador/resposta/${sessaoId}`);
 
         if (res.data.status === "concluido" && res.data.resposta) {
           setLoading(false);
@@ -83,7 +84,7 @@ export default function Simulador() {
     setLoading(true);
 
     try {
-      await axios.post(`${API_BASE}/empresas/${empresaId}/simulador`, {
+      await api.post(`/empresas/${empresaId}/simulador`, {
         mensagem: userMessage.text,
         sessao_id: sessaoId,
       });
@@ -97,6 +98,31 @@ export default function Simulador() {
     }
   };
 
+  useEffect(() => {
+    const enviarBootstrap = async () => {
+      if (!empresaId || !especialistaFromQuery || bootstrapEnviadoRef.current) return;
+      bootstrapEnviadoRef.current = true;
+      const textoBootstrap = `Quero falar com o especialista principal: ${especialistaFromQuery}.`;
+      setMessages((prev) => [...prev, { role: "user", text: textoBootstrap }]);
+      setLoading(true);
+      try {
+        await api.post(`/empresas/${empresaId}/simulador`, {
+          mensagem: textoBootstrap,
+          sessao_id: sessaoId,
+        });
+      } catch (error) {
+        console.error("Erro ao enviar bootstrap do especialista:", error);
+        setLoading(false);
+        setMessages((prev) => [
+          ...prev,
+          { role: "error", text: "Não foi possível iniciar o teste automático do especialista." },
+        ]);
+      }
+    };
+
+    enviarBootstrap();
+  }, [empresaId, especialistaFromQuery, sessaoId]);
+
 
   const handleReset = async () => {
     if (!window.confirm("Deseja limpar o histórico do simulador?")) return;
@@ -104,7 +130,7 @@ export default function Simulador() {
     // stopPolling() is no longer needed as polling is persistent via useEffect
     setLoading(true);
     try {
-      await axios.delete(`${API_BASE}/empresas/${empresaId}/simulador/reset`);
+      await api.delete(`/empresas/${empresaId}/simulador/reset`);
       setMessages([]);
     } catch (error) {
       console.error("Erro ao resetar conversa:", error);
@@ -114,8 +140,33 @@ export default function Simulador() {
     }
   };
 
+  const encerrarTeste = () => {
+    clearImpersonation();
+    navigate("/admin");
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+      {empresaId ? (
+        <div className="sticky top-0 z-20 border-b border-[#2d2d2d] bg-[#2a1f38] px-4 py-2 text-xs text-violet-100">
+          <div className="flex items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2">
+              <FlaskConical size={14} className="text-violet-300" />
+              <span>
+                Modo de Teste: {empresaNomeTeste || empresaId} {especialistaFromQuery ? `| Agente: ${especialistaFromQuery}` : ""}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={encerrarTeste}
+              className="inline-flex items-center gap-1 rounded-md border border-violet-300/30 bg-violet-700/20 px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-700/30"
+            >
+              <XCircle size={12} />
+              Encerrar Teste
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="bg-blue-900 text-white p-4 flex items-center justify-between shadow-md z-10">
         <div className="flex items-center">
           <Bot size={24} className="mr-3" />
@@ -123,6 +174,7 @@ export default function Simulador() {
             <h2 className="font-semibold">Simulador do Agente AI</h2>
             <p className="text-xs text-blue-200">
               Teste o fluxo de conversação antes de ligar na inteligência real.
+              {empresaIdFromQuery ? ` Tenant: ${empresaIdFromQuery}.` : ""}
             </p>
           </div>
         </div>

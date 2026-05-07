@@ -5,9 +5,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 import uuid
 
-from app.core.security import get_password_hash, is_bcrypt_hash, verify_password
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    get_password_hash,
+    is_bcrypt_hash,
+    verify_password,
+)
 from db.database import get_db
-from db.models import ROOT_ADMIN_ROLE, Usuario, is_root_admin_email, is_super_admin_role, normalize_user_email
+from db.models import (
+    ROOT_ADMIN_ROLE,
+    Usuario,
+    is_admin_empresa_role,
+    is_root_admin_email,
+    is_super_admin_role,
+    normalize_user_email,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -46,8 +59,16 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
                 detail=str(exc),
             ) from exc
 
+    token = create_access_token(
+        subject=str(user.id),
+        extra_claims={
+            "role": user.role,
+            "empresa_id": str(user.empresa_id) if user.empresa_id else None,
+            "email": user.email,
+        },
+    )
     return {
-        "access_token": "token_fake",
+        "access_token": token,
         "usuario": {
             "id": str(user.id),
             "nome": user.nome,
@@ -57,34 +78,66 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         }
     }
 
-async def require_super_admin(
+def _extract_bearer_token(authorization: Optional[str]) -> str:
+    raw = str(authorization or "").strip()
+    if not raw:
+        raise HTTPException(status_code=401, detail="Token ausente.")
+    if not raw.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Formato de Authorization inválido.")
+    token = raw.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Token ausente.")
+    return token
+
+
+async def get_current_user(
     db: AsyncSession = Depends(get_db),
-    x_user_id: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="Usu?rio n?o autenticado.")
+    token = _extract_bearer_token(authorization)
+    try:
+        claims = decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Token inválido: {exc}") from exc
 
     try:
-        user_uuid = uuid.UUID(x_user_id)
+        user_uuid = uuid.UUID(str(claims.get("sub")))
     except ValueError:
-        raise HTTPException(status_code=401, detail="Identificador de usu?rio inv?lido.")
+        raise HTTPException(status_code=401, detail="Token inválido (subject).")
 
     result = await db.execute(select(Usuario).where(Usuario.id == user_uuid))
     usuario_bd = result.scalars().first()
-    if not usuario_bd:
-        raise HTTPException(status_code=401, detail="Usu?rio n?o encontrado.")
+    if not usuario_bd or not usuario_bd.ativo:
+        raise HTTPException(status_code=401, detail="Usuário não encontrado ou inativo.")
+    return usuario_bd
 
-    if is_root_admin_email(usuario_bd.email) or is_super_admin_role(usuario_bd.role):
-        return usuario_bd
 
-    print(f"Role no Banco: {usuario_bd.role}")
+async def require_super_admin(current_user: Usuario = Depends(get_current_user)):
+    if is_root_admin_email(current_user.email) or is_super_admin_role(current_user.role):
+        return current_user
     raise HTTPException(
         status_code=403,
         detail=f"Acesso negado. Apenas Super Admin com role '{ROOT_ADMIN_ROLE}'.",
     )
 
+
+async def require_tenant_access(
+    empresa_id: str,
+    current_user: Usuario = Depends(get_current_user),
+):
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID da empresa inválido.")
+
+    if is_root_admin_email(current_user.email) or is_super_admin_role(current_user.role):
+        return current_user
+    if is_admin_empresa_role(current_user.role) and current_user.empresa_id == empresa_uuid:
+        return current_user
+    raise HTTPException(status_code=403, detail="Acesso negado para esta empresa.")
+
 @router.post("/impersonate/{empresa_id}")
-async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: None = Depends(require_super_admin)):
+async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: Usuario = Depends(require_super_admin)):
     try:
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
@@ -99,8 +152,16 @@ async def impersonate(empresa_id: str, db: AsyncSession = Depends(get_db), _: No
 
     print(f"[IMPERSONATE] Gerando token para o usu?rio: {user.email} (Role: {user.role})")
 
+    token = create_access_token(
+        subject=str(user.id),
+        extra_claims={
+            "role": user.role,
+            "empresa_id": str(user.empresa_id) if user.empresa_id else None,
+            "email": user.email,
+        },
+    )
     return {
-        "access_token": "token_fake_impersonate",
+        "access_token": token,
         "usuario": {
             "id": str(user.id),
             "nome": user.nome,

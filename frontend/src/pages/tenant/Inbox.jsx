@@ -266,6 +266,7 @@ export default function Inbox() {
                 status_atendimento: "aberto",
                 bot_pausado: false,
                 bot_pausado_ate: null,
+                ia_ativa: true,
                 tags: [],
                 historico_resumo: "",
                 dados_adicionais: {},
@@ -803,14 +804,13 @@ export default function Inbox() {
     if (!selectedLead || botToggleLoading) return;
 
     const leadId = selectedLead.id;
-    const telefone = selectedLead.telefone_contato;
-    const wasPaused = Boolean(selectedLead.bot_pausado);
-    const optimisticPausedUntil = wasPaused ? null : new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString();
+    const wasPaused = !Boolean(selectedLead.ia_ativa ?? true);
     const optimisticUpdates = {
+      ia_ativa: wasPaused,
       bot_pausado: !wasPaused,
-      bot_pausado_ate: optimisticPausedUntil,
     };
     const previousState = {
+      ia_ativa: Boolean(selectedLead.ia_ativa ?? true),
       bot_pausado: Boolean(selectedLead.bot_pausado),
       bot_pausado_ate: selectedLead.bot_pausado_ate || null,
     };
@@ -819,11 +819,11 @@ export default function Inbox() {
     setBotToggleLoading(true);
 
     try {
-      const endpoint = wasPaused ? "reativar_bot" : "pausar_bot";
-      const res = await api.post(`/empresas/${empresa_id}/inbox/${telefone}/${endpoint}`);
+      const res = await api.patch(`/empresas/${empresa_id}/crm/${leadId}/toggle-ia`);
       updateLeadInState(leadId, {
-        bot_pausado: !wasPaused,
-        bot_pausado_ate: wasPaused ? null : (res.data?.bot_pausado_ate || optimisticPausedUntil),
+        ia_ativa: Boolean(res.data?.ia_ativa),
+        bot_pausado: !Boolean(res.data?.ia_ativa),
+        status_atendimento: res.data?.status_atendimento || selectedLead.status_atendimento,
       });
       await fetchLeads();
     } catch (e) {
@@ -1051,7 +1051,7 @@ export default function Inbox() {
   }, [abaAtiva, filtroStatus, grupos, leads, searchTerm, tagsOficiaisLookup]);
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
-  const selectedLeadPaused = Boolean(selectedLead?.bot_pausado);
+  const selectedLeadPaused = !Boolean(selectedLead?.ia_ativa ?? true);
   const selectedLeadPausedAtLabel = selectedLead?.bot_pausado_ate
     ? new Date(selectedLead.bot_pausado_ate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
@@ -1157,7 +1157,7 @@ export default function Inbox() {
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
                         Concluído
                       </span>
-                    ) : normalizeStatusAtendimento(lead?.status_atendimento) === "manual" || lead.bot_pausado ? (
+                    ) : normalizeStatusAtendimento(lead?.status_atendimento) === "manual" || lead.bot_pausado || lead.ia_ativa === false ? (
                       <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
                         Humano
                       </span>
@@ -1230,17 +1230,17 @@ export default function Inbox() {
                         ? "border-orange-200 bg-orange-50 hover:bg-orange-100"
                         : "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
                     } disabled:cursor-not-allowed disabled:opacity-70`}
-                    title={selectedLeadPaused ? "Ativar respostas da IA" : "Assumir atendimento humano"}
+                    title={selectedLeadPaused ? "Ativar respostas da IA" : "Desativar IA para este lead"}
                   >
                     <span className="flex flex-col items-start text-left leading-tight">
                       <span className={`text-[11px] font-semibold ${selectedLeadPaused ? "text-orange-700" : "text-emerald-700"}`}>
-                        {selectedLeadPaused ? "Modo Humano" : "IA Respondendo"}
+                        {selectedLeadPaused ? "👤 Modo Humano" : "🤖 IA Ativa"}
                       </span>
                       {selectedLeadPaused && selectedLeadPausedAtLabel ? (
                         <span className="text-[10px] text-orange-600">Retorna às {selectedLeadPausedAtLabel}</span>
                       ) : (
                         <span className="text-[10px] text-gray-500">
-                          {selectedLeadPaused ? "Pausada manualmente" : "Resposta automática ativa"}
+                          {selectedLeadPaused ? "IA desligada para este contato" : "Resposta automática ativa"}
                         </span>
                       )}
                     </span>

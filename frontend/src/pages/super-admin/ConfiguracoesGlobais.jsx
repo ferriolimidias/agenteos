@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
+import api from "../../services/api";
 
 export default function ConfiguracoesGlobais() {
   const [formData, setFormData] = useState({
@@ -19,7 +19,7 @@ export default function ConfiguracoesGlobais() {
       setLoading(true);
       setErrorMessage("");
       try {
-        const response = await axios.get("/api/admin/configuracoes");
+        const response = await api.get("/admin/configuracoes");
         setFormData({
           nome_sistema: response.data.nome_sistema || "",
           cor_primaria: response.data.cor_primaria || "#6366f1",
@@ -85,7 +85,7 @@ export default function ConfiguracoesGlobais() {
     setErrorMessage("");
     setSuccessMessage("");
     try {
-      await axios.put("/api/admin/configuracoes", formData);
+      await api.put("/admin/configuracoes", formData);
       setSuccessMessage("Configurações salvas com sucesso.");
       window.dispatchEvent(new Event("configuracoesUpdated"));
     } catch (error) {

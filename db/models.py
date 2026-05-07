@@ -132,6 +132,7 @@ class Empresa(Base):
     destinos_transferencia = relationship("DestinosTransferencia", back_populates="empresa", cascade="all, delete-orphan")
     historicos_transferencia = relationship("HistoricoTransferencia", back_populates="empresa", cascade="all, delete-orphan")
     unidades = relationship("EmpresaUnidade", back_populates="empresa", cascade="all, delete-orphan")
+    followups_config = relationship("ConfigFollowUp", back_populates="empresa", cascade="all, delete-orphan")
 
 
 class EmpresaUnidade(Base):
@@ -378,6 +379,7 @@ class CRMLead(Base):
     fbclid = Column(String, nullable=True)
     valor_conversao = Column(Float, nullable=True)
     bot_pausado_ate = Column(DateTime, nullable=True)
+    ia_ativa = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     criado_em = Column(DateTime, default=datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="crm_leads")
@@ -385,6 +387,38 @@ class CRMLead(Base):
     agendamentos = relationship("AgendamentoLocal", back_populates="lead")
     mensagens = relationship("MensagemHistorico", back_populates="lead", cascade="all, delete-orphan")
     historicos_transferencia = relationship("HistoricoTransferencia", back_populates="lead", cascade="all, delete-orphan")
+    followup_logs = relationship("LeadFollowUpLog", back_populates="lead", cascade="all, delete-orphan")
+
+
+class ConfigFollowUp(Base):
+    __tablename__ = "config_followups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String, nullable=False)
+    tempo_gatilho_minutos = Column(Integer, nullable=False)
+    objetivo_prompt = Column(Text, nullable=False)
+    tag_aplicar_final = Column(UUID(as_uuid=True), ForeignKey("tags_crm.id", ondelete="SET NULL"), nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    empresa = relationship("Empresa", back_populates="followups_config")
+    logs = relationship("LeadFollowUpLog", back_populates="config_followup", cascade="all, delete-orphan")
+    tag_final = relationship("TagCRM")
+
+
+class LeadFollowUpLog(Base):
+    __tablename__ = "lead_followup_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("crm_leads.id", ondelete="CASCADE"), nullable=False)
+    config_followup_id = Column(UUID(as_uuid=True), ForeignKey("config_followups.id", ondelete="CASCADE"), nullable=False)
+    data_envio = Column(DateTime, nullable=False, default=datetime.utcnow)
+    status_envio = Column(String, nullable=False, default="enviado")
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    lead = relationship("CRMLead", back_populates="followup_logs")
+    config_followup = relationship("ConfigFollowUp", back_populates="logs")
 
 
 class TagGroup(Base):
@@ -411,6 +445,7 @@ class TagCRM(Base):
     tipo = Column(String, nullable=False, default="comportamento")
     ordem = Column(Integer, nullable=True)
     ativa_no_funil = Column(Boolean, nullable=False, default=False)
+    pausa_permanente = Column(Boolean, nullable=False, default=False, server_default=text('false'))
     instrucao_ia = Column(Text, nullable=True)
     disparar_conversao_ads = Column(Boolean, nullable=False, default=False)
     acao_fechamento = Column(Boolean, nullable=False, default=False)

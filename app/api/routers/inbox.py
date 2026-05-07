@@ -156,6 +156,7 @@ async def listar_inbox(empresa_id: str):
                     "status_atendimento": str(l.status_atendimento or "aberto"),
                     "bot_pausado": bot_pausado,
                     "bot_pausado_ate": l.bot_pausado_ate.isoformat() if l.bot_pausado_ate else None,
+                    "ia_ativa": bool(getattr(l, "ia_ativa", True)),
                     "etapa_crm": l.etapa.nome if l.etapa else None,
                     "tags": _montar_tags_frontend(l.tags, tags_por_id),
                     "historico_resumo": l.historico_resumo or "",

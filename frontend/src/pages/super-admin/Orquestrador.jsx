@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { BrainCircuit, PenTool, Plus, X, Building, CheckCircle, RefreshCw, Pencil, Trash2 } from "lucide-react";
 
-export default function Orquestrador() {
+export default function Orquestrador({ empresaId = "", embedded = false }) {
   const [empresas, setEmpresas] = useState([]);
-  const [empresaSelecionadaId, setEmpresaSelecionadaId] = useState("");
+  const [empresaSelecionadaId, setEmpresaSelecionadaId] = useState(empresaId || "");
   
   const [activeTab, setActiveTab] = useState("especialistas"); // 'especialistas' ou 'ferramentas'
   const [loading, setLoading] = useState(false);
@@ -21,7 +21,7 @@ export default function Orquestrador() {
   const [submitting, setSubmitting] = useState(false);
 
   // Forms
-  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
   const [formFerramenta, setFormFerramenta] = useState({ 
     nome_ferramenta: "", 
     descricao_ia: "",
@@ -32,8 +32,15 @@ export default function Orquestrador() {
     parameters_json: ""
   });
 
+  useEffect(() => {
+    if (empresaId) {
+      setEmpresaSelecionadaId(String(empresaId));
+    }
+  }, [empresaId]);
+
   // Carregar todas empresas no mount
   useEffect(() => {
+    if (empresaId) return;
     const fetchEmpresas = async () => {
       try {
         const res = await api.get("/empresas/");
@@ -54,7 +61,17 @@ export default function Orquestrador() {
     
     fetchEmpresas();
     fetchModelosDisponiveis();
-  }, []);
+  }, [empresaId]);
+
+  useEffect(() => {
+    if (empresaId) {
+      // Em modo tenant-centric, ainda precisamos dos modelos para criar/editar especialistas.
+      api
+        .get("/admin/modelos-ia")
+        .then((res) => setModelosDisponiveis(res.data || []))
+        .catch((err) => console.error("Erro ao buscar modelos de IA:", err));
+    }
+  }, [empresaId]);
 
   // Carregar dados quando empresa_id mudar
   useEffect(() => {
@@ -115,7 +132,7 @@ export default function Orquestrador() {
       }
       setShowEspecialistaModal(false);
       setEditingEspecialistaId(null);
-      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
       fetchEspecialistas();
     } catch (err) {
       alert("Erro ao salvar especialista");
@@ -142,6 +159,7 @@ export default function Orquestrador() {
       modelo_ia: esp.modelo_ia || "gpt-4o-mini",
       usar_rag: esp.usar_rag || false,
       usar_agenda: esp.usar_agenda || false,
+      usar_busca_web: esp.usar_busca_web || false,
       peso_prioridade: Number(esp.peso_prioridade || 1),
       fixo_no_roteador: esp.fixo_no_roteador || false,
       ferramentas_ids: esp.ferramentas_ids || []
@@ -231,7 +249,7 @@ export default function Orquestrador() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col space-y-2">
+      <div className={`flex flex-col ${embedded ? "space-y-1" : "space-y-2"}`}>
         <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-2">
           <BrainCircuit size={32} className="text-indigo-400" />
           Orquestrador de IA
@@ -240,6 +258,7 @@ export default function Orquestrador() {
       </div>
 
       {/* Box de Seleção de Empresa */}
+      {!empresaId && (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-sm">
         <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
           <Building size={16} /> Selecione o Cliente (Tenant)
@@ -255,6 +274,7 @@ export default function Orquestrador() {
           ))}
         </select>
       </div>
+      )}
 
       {empresaSelecionadaId && (
         <>
@@ -282,7 +302,7 @@ export default function Orquestrador() {
                 <button 
                   onClick={() => {
                     setEditingEspecialistaId(null);
-                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
                     setShowEspecialistaModal(true);
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
@@ -313,6 +333,11 @@ export default function Orquestrador() {
                           {Boolean(esp.fixo_no_roteador) && (
                             <span className="bg-emerald-900/40 border border-emerald-700 text-xs px-2 py-1 rounded-md text-emerald-300 font-semibold mt-1 ml-2 inline-block">
                               Fixo no Roteador
+                            </span>
+                          )}
+                          {Boolean(esp.usar_busca_web) && (
+                            <span className="bg-cyan-900/40 border border-cyan-700 text-xs px-2 py-1 rounded-md text-cyan-300 font-semibold mt-1 ml-2 inline-block">
+                              Busca Web ON
                             </span>
                           )}
                         </div>
@@ -494,6 +519,22 @@ export default function Orquestrador() {
                   <div>
                     <p className="text-sm font-semibold text-white">Ativar Agendamento Nativo</p>
                     <p className="text-xs text-gray-400 mt-0.5">Permite que este especialista acesse e gerencie a agenda do sistema (consulte, marque e cancele horários).</p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Busca Web Toggle */}
+              <div className="pt-2">
+                <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                    checked={formEspecialista.usar_busca_web}
+                    onChange={(e) => setFormEspecialista({...formEspecialista, usar_busca_web: e.target.checked})}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Habilitar Busca na Web</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Permite consultar internet com a ferramenta google_search quando necessário.</p>
                   </div>
                 </label>
               </div>

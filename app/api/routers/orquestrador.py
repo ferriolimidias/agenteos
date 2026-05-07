@@ -8,10 +8,12 @@ from sqlalchemy.orm import selectinload
 from db.database import get_db
 from db.models import Empresa, Especialista, FerramentaAPI
 from app.services.semantic_router import SemanticRouterService
+from app.api.routers.auth import require_super_admin
 
 router = APIRouter(
     prefix="/orquestrador",
-    tags=["Orquestrador"]
+    tags=["Orquestrador"],
+    dependencies=[Depends(require_super_admin)],
 )
 
 class EspecialistaCreate(BaseModel):
@@ -23,7 +25,22 @@ class EspecialistaCreate(BaseModel):
     usar_agenda: Optional[bool] = False
     peso_prioridade: Optional[int] = Field(default=1, ge=1)
     fixo_no_roteador: Optional[bool] = False
+    usar_busca_web: Optional[bool] = False
     ferramentas_ids: Optional[List[str]] = Field(default_factory=list)
+
+
+WEB_SEARCH_MARKER = "[GOOGLE_SEARCH_ENABLED=true]"
+
+
+def _prompt_com_busca_web(prompt: str, habilitado: bool) -> str:
+    base = str(prompt or "").replace(WEB_SEARCH_MARKER, "").strip()
+    if habilitado:
+        return f"{base}\n\n{WEB_SEARCH_MARKER}".strip()
+    return base
+
+
+def _prompt_tem_busca_web(prompt: str | None) -> bool:
+    return WEB_SEARCH_MARKER in str(prompt or "")
 
 class FerramentaCreate(BaseModel):
     nome_ferramenta: str
@@ -56,6 +73,7 @@ async def listar_especialistas(empresa_id: str, db: AsyncSession = Depends(get_d
             "usar_agenda": getattr(esp, 'usar_agenda', False),
             "peso_prioridade": int(getattr(esp, "peso_prioridade", 1) or 1),
             "fixo_no_roteador": bool(getattr(esp, "fixo_no_roteador", False)),
+            "usar_busca_web": _prompt_tem_busca_web(getattr(esp, "prompt_sistema", "")),
             "ferramentas_ids": [str(f.id) for f in esp.ferramentas] if esp.ferramentas else []
         })
     return retorno
@@ -72,7 +90,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         empresa_id=empresa.id,
         nome=payload.nome,
         descricao_missao=payload.descricao_missao,
-        prompt_sistema=payload.prompt_sistema,
+        prompt_sistema=_prompt_com_busca_web(payload.prompt_sistema, bool(payload.usar_busca_web)),
         modelo_ia=payload.modelo_ia,
         usar_rag=payload.usar_rag,
         usar_agenda=payload.usar_agenda,
@@ -106,6 +124,7 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         "usar_agenda": novo.usar_agenda,
         "peso_prioridade": int(getattr(novo, "peso_prioridade", 1) or 1),
         "fixo_no_roteador": bool(getattr(novo, "fixo_no_roteador", False)),
+        "usar_busca_web": _prompt_tem_busca_web(getattr(novo, "prompt_sistema", "")),
         "ferramentas_ids": [str(f.id) for f in novo.ferramentas] if novo.ferramentas else []
     }
 
@@ -145,7 +164,7 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     
     especialista.nome = payload.nome
     especialista.descricao_missao = payload.descricao_missao
-    especialista.prompt_sistema = payload.prompt_sistema
+    especialista.prompt_sistema = _prompt_com_busca_web(payload.prompt_sistema, bool(payload.usar_busca_web))
     especialista.modelo_ia = payload.modelo_ia
     especialista.usar_rag = payload.usar_rag
     especialista.usar_agenda = payload.usar_agenda

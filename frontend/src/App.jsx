@@ -1,12 +1,13 @@
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route } from "react-router-dom";
 import React, { useEffect } from "react";
 import Login from "./pages/Login";
 import SuperAdminLayout from "./layouts/SuperAdminLayout";
 import TenantLayout from "./layouts/TenantLayout";
 import Empresas from "./pages/super-admin/Empresas";
-import Orquestrador from "./pages/super-admin/Orquestrador";
 import ConfiguracoesGlobais from "./pages/super-admin/ConfiguracoesGlobais";
-import Dashboard from "./pages/tenant/Dashboard";
+import EmpresaDetalhes from "./pages/super-admin/EmpresaDetalhes";
+import TenantDashboard from "./pages/tenant/TenantDashboard";
+import TenantAgentes from "./pages/tenant/TenantAgentes";
 import Rag from "./pages/tenant/Rag";
 import Crm from "./pages/tenant/Crm";
 import Agenda from "./pages/tenant/Agenda";
@@ -70,13 +71,15 @@ function App() {
       {/* Rota do Super Admin */}
       <Route path="/admin" element={<SuperAdminLayout />}>
         <Route index element={<Empresas />} />
-        <Route path="agente" element={<Orquestrador />} />
+        <Route path="agente" element={<Navigate to="/admin" replace />} />
+        <Route path="empresas/:empresaId" element={<EmpresaDetalhes />} />
         <Route path="configuracoes" element={<ConfiguracoesGlobais />} />
       </Route>
 
       {/* Rota do Cliente (Tenant) */}
       <Route path="/painel" element={<TenantLayout />}>
-        <Route index element={<Dashboard />} />
+        <Route index element={<TenantDashboard />} />
+        <Route path="agentes" element={<TenantAgentes />} />
         <Route path="crm" element={<Crm />} />
         <Route path="rag" element={<Rag />} />
         <Route path="agenda" element={<Agenda />} />

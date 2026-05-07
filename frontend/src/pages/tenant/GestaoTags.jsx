@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Layers3, Palette, Pencil, Plus, RefreshCw, Tag, Trash2, X } from "lucide-react";
+import { BotOff, Layers3, Palette, Pencil, Plus, RefreshCw, Tag, Trash2, X } from "lucide-react";
 
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
@@ -12,6 +12,7 @@ const initialTagForm = {
   disparar_conversao_ads: false,
   acao_fechamento: false,
   acao_transferir_humano: false,
+  pausa_permanente: false,
   mensagem_transferencia: "",
 };
 
@@ -115,6 +116,7 @@ export default function GestaoTags() {
       disparar_conversao_ads: Boolean(tag.disparar_conversao_ads),
       acao_fechamento: Boolean(tag.acao_fechamento),
       acao_transferir_humano: Boolean(tag.acao_transferir_humano),
+      pausa_permanente: Boolean(tag.pausa_permanente),
       mensagem_transferencia: tag.mensagem_transferencia || "",
     });
     setShowModal(true);
@@ -381,12 +383,23 @@ export default function GestaoTags() {
                     return (
                       <tr key={tag.id}>
                         <td className="px-4 py-3">
-                          <span
-                            className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold"
-                            style={{ backgroundColor: `${tag.cor}18`, borderColor: `${tag.cor}55`, color: tag.cor }}
-                          >
-                            {tag.nome}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold"
+                              style={{ backgroundColor: `${tag.cor}18`, borderColor: `${tag.cor}55`, color: tag.cor }}
+                            >
+                              {tag.nome}
+                            </span>
+                            {tag.pausa_permanente ? (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700"
+                                title="Esta tag desliga a IA permanentemente para o contato até reativação manual."
+                              >
+                                <BotOff size={12} />
+                                Pausa Permanente
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-600">
                           {grupo ? (
@@ -650,6 +663,46 @@ export default function GestaoTags() {
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-gray-800">
+                          Pausa Permanente (Travar IA)
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Se ativado, ao aplicar esta tag, a IA será desligada permanentemente para o contato até ser religada manualmente.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.pausa_permanente}
+                        onClick={() =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            pausa_permanente: !prev.pausa_permanente,
+                            ...(prev.pausa_permanente
+                              ? {}
+                              : {
+                                  acao_transferir_humano: false,
+                                  mensagem_transferencia: "",
+                                }),
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          formData.pausa_permanente ? "bg-amber-600" : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                            formData.pausa_permanente ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {!formData.pausa_permanente ? (
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 mt-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">
                           Pausar bot ao aplicar esta tag (Transferir para Humano)
                         </p>
                         <p className="text-xs text-gray-500">
@@ -678,7 +731,9 @@ export default function GestaoTags() {
                       </button>
                     </div>
                   </div>
+                  ) : null}
 
+                  {!formData.pausa_permanente ? (
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
                       Mensagem Automática de Transferência
@@ -694,6 +749,7 @@ export default function GestaoTags() {
                       Se preenchido, o agente enviará exatamente esta mensagem ao aplicar a tag.
                     </p>
                   </div>
+                  ) : null}
                 </div>
               </div>
               <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">

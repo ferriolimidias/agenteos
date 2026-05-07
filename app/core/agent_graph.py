@@ -101,8 +101,11 @@ from app.services.ferramentas_service import (
 )
 from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
+from app.api.utils import is_ai_blocked
+from app.core.default_agents import ESPECIALISTAS_NATIVOS
 from app.core.llm_factory import normalize_model_name
 from app.core.tools import (
+    tool_atualizar_nome_lead,
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
     tool_consultar_tags_empresa,
@@ -1058,6 +1061,60 @@ Retorne apenas o resultado técnico da ação."""
     return state
 
 
+async def node_handoff(state: AgentState):
+    """Micro-agente interno para saída contextual de transbordo."""
+    if not state.get("bot_foi_pausado"):
+        return state
+    if state.get("resposta_final"):
+        return state
+
+    contexto_historico = str(state.get("historico_bd") or "")
+    contexto_curto = str(state.get("historico_curto") or "")
+    contexto = f"{contexto_historico}\n{contexto_curto}".strip()
+    contexto_lower = contexto.lower()
+
+    if state.get("ia_bloqueada_entrada"):
+        return state
+
+    humano_ja_assumiu = any(
+        marcador in contexto_lower
+        for marcador in ("atendente:", "humano:", "equipe:", "suporte:")
+    )
+    if humano_ja_assumiu:
+        return state
+
+    prompt_handoff = str(
+        ESPECIALISTAS_NATIVOS.get("especialista_handoff_interno", {}).get("prompt_sistema")
+        or ""
+    ).strip() or "Você é um agente interno de transbordo. Responda com uma frase curta de transferência para humano."
+
+    ultima_msg_cliente = _ultima_mensagem_cliente(state)
+    try:
+        llm = await get_llm(state.get("empresa_id"))
+        resposta = await llm.ainvoke(
+            [
+                ("system", _prepend_resumo_cliente_system_prompt(state, prompt_handoff)),
+                (
+                    "user",
+                    "Gere UMA frase curta de transbordo para humano, em português, sem detalhes técnicos.\n"
+                    f"Última mensagem do cliente: {ultima_msg_cliente}\n"
+                    f"Histórico recente:\n{contexto[-1800:] if contexto else '(sem histórico)'}",
+                ),
+            ]
+        )
+        texto = str(getattr(resposta, "content", "") or "").strip()
+    except Exception:
+        texto = ""
+
+    if not texto:
+        texto = "Entendido. Vou transferir você para a nossa equipe agora."
+    if len(texto) > 260:
+        texto = texto[:257].rstrip() + "..."
+
+    state["resposta_final"] = texto
+    return state
+
+
 def criar_ferramenta_transferir_atendimento_contextual(
     lead_id: str,
     empresa_id: str,
@@ -1087,10 +1144,66 @@ MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
     "consultar_agenda": consultar_agenda,
     "transferir_para_humano": transferir_para_humano,  # ADICIONE ESTA LINHA
+    "tool_atualizar_nome_lead": tool_atualizar_nome_lead,
     "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
     "tool_consultar_tags_empresa": tool_consultar_tags_empresa.coroutine,
 }
+
+
+@tool
+async def google_search(query: str) -> str:
+    """
+    Busca informações públicas recentes na web para apoiar respostas contextuais.
+    Retorna até 5 resultados em texto curto (título, URL e resumo).
+    """
+    termo = str(query or "").strip()
+    if not termo:
+        return "Busca não executada: consulta vazia."
+    endpoint = "https://duckduckgo.com/?q=" + httpx.QueryParams({"q": termo}).get("q", termo) + "&format=json&pretty=1"
+    api = "https://api.duckduckgo.com/"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0), follow_redirects=True) as client:
+            response = await client.get(
+                api,
+                params={
+                    "q": termo,
+                    "format": "json",
+                    "no_html": 1,
+                    "no_redirect": 1,
+                },
+            )
+        if response.status_code != 200:
+            return f"Falha na busca web (status {response.status_code})."
+        data = response.json() if response.content else {}
+        resultados: list[str] = []
+        abstrato = str(data.get("AbstractText") or "").strip()
+        abstrato_url = str(data.get("AbstractURL") or "").strip()
+        heading = str(data.get("Heading") or "").strip()
+        if abstrato:
+            resultados.append(f"1) {heading or 'Resultado'} | {abstrato_url or endpoint}\n{abstrato}")
+        relacionados = data.get("RelatedTopics") or []
+        for item in relacionados:
+            if len(resultados) >= 5:
+                break
+            if isinstance(item, dict) and isinstance(item.get("Topics"), list):
+                for sub in item.get("Topics") or []:
+                    if len(resultados) >= 5:
+                        break
+                    txt = str(sub.get("Text") or "").strip()
+                    url = str(sub.get("FirstURL") or "").strip()
+                    if txt:
+                        resultados.append(f"{len(resultados)+1}) {url or endpoint}\n{txt}")
+                continue
+            txt = str(item.get("Text") or "").strip() if isinstance(item, dict) else ""
+            url = str(item.get("FirstURL") or "").strip() if isinstance(item, dict) else ""
+            if txt:
+                resultados.append(f"{len(resultados)+1}) {url or endpoint}\n{txt}")
+        if not resultados:
+            return "Busca web executada, mas sem resultados úteis no momento."
+        return "Resultados da busca web:\n" + "\n\n".join(resultados[:5])
+    except Exception as exc:
+        return f"Falha ao executar busca web: {exc}"
 
 
 class ConsultarHorariosLivresInput(BaseModel):
@@ -1298,6 +1411,7 @@ class AgentState(TypedDict):
     etapas_concluidas: List[str]
     objetivo_atual: Optional[str]
     proxima_acao: Optional[str]
+    ia_bloqueada_entrada: Optional[bool]
 
 class AnaliseRoteador(BaseModel):
     termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
@@ -1338,7 +1452,7 @@ async def node_crm(state: AgentState):
             nome_atual = str(lead.nome_contato or "").strip()
             if nome_recebido and (not nome_atual or nome_atual == "Usuário (Auto)"):
                 lead.nome_contato = nome_recebido
-            if lead.bot_pausado_ate and lead.bot_pausado_ate > datetime.utcnow():
+            if is_ai_blocked(lead):
                 conexao_id_limpo = str(state.get("conexao_id") or "").strip()
                 try:
                     conexao_uuid = uuid.UUID(conexao_id_limpo) if conexao_id_limpo else None
@@ -1358,7 +1472,10 @@ async def node_crm(state: AgentState):
                 state["lead_id"] = str(lead.id)
                 state["nome_contato"] = lead.nome_contato
                 state["resposta_final"] = None
-                state["fluxo_encerrado"] = True
+                state["ia_bloqueada_entrada"] = True
+                state["bot_foi_pausado"] = True
+                state["handoff_requested"] = True
+                state["fluxo_encerrado"] = False
                 print(
                     "[NODE CRM] Bot pausado para este lead até "
                     f"{lead.bot_pausado_ate}. Mensagem registrada no histórico e fluxo encerrado."
@@ -2560,6 +2677,23 @@ async def node_especialista_dinamico(state: AgentState):
                 elif prompt_especialista_meta:
                     prompt_base += f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{prompt_especialista_meta}\n"
 
+                prompt_especialista_final = str(
+                    (especialista_db.prompt_sistema if especialista_db else prompt_especialista_meta) or ""
+                )
+                if "[GOOGLE_SEARCH_ENABLED=true]" in prompt_especialista_final:
+                    nome_search_tool = str(getattr(google_search, "name", "google_search")).strip()
+                    if nome_search_tool not in nomes_tools_registradas:
+                        tools_disponiveis.append(google_search)
+                        nomes_tools_registradas.add(nome_search_tool)
+                    descricoes_tools.append(
+                        "- google_search: consulta informações públicas recentes na web (internet)."
+                    )
+                    prompt_base += (
+                        "\nFerramenta habilitada: google_search.\n"
+                        "Quando faltar informação atualizada no contexto interno, você PODE usar google_search.\n"
+                        "Sempre valide coerência e cite que a resposta veio de busca web quando aplicável.\n"
+                    )
+
                 usar_rag_final = bool(
                     usar_rag_meta or (especialista_db and getattr(especialista_db, "usar_rag", False))
                 )
@@ -2713,6 +2847,22 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_atualizar_tags_lead_contextual
+                            elif chave_nativa == "tool_atualizar_nome_lead":
+                                async def _tool_atualizar_nome_lead_contextual(
+                                    novo_nome: str,
+                                    lead_id: Optional[str] = None,
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    lead_id_final = str(lead_id or _lead_id or "").strip()
+                                    if not lead_id_final:
+                                        return "Falha ao atualizar nome: contexto de lead ausente."
+                                    return await _coroutine_native(
+                                        lead_id=lead_id_final,
+                                        novo_nome=novo_nome,
+                                    )
+
+                                coroutine_native = _tool_atualizar_nome_lead_contextual
                             elif chave_nativa == "tool_consultar_tags_empresa":
                                 async def _tool_consultar_tags_empresa_contextual(
                                     _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
@@ -3051,6 +3201,8 @@ async def node_especialista_dinamico(state: AgentState):
 
 # Função condicional de roteamento
 def router_crm(state: AgentState):
+    if state.get("ia_bloqueada_entrada"):
+        return "node_handoff"
     if state.get("fluxo_encerrado"):
         return END
     if state.get("nome_contato") is None:
@@ -3066,6 +3218,7 @@ workflow.add_node("node_atendente", node_atendente)
 workflow.add_node("node_agente_condutor", node_agente_condutor)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("node_acao_sistema", node_acao_sistema)
+workflow.add_node("node_handoff", node_handoff)
 workflow.add_node("node_especialista_dinamico", node_especialista_dinamico)
 
 workflow.set_entry_point("node_crm")
@@ -3076,6 +3229,7 @@ workflow.add_conditional_edges(
     {
         END: END,
         "capturar_nome": "node_capturar_nome",
+        "node_handoff": "node_handoff",
         "node_agente_condutor": "node_agente_condutor",
     },
 )
@@ -3206,10 +3360,8 @@ workflow.add_conditional_edges(
 workflow.add_conditional_edges("node_especialista_dinamico", router_maestro)
 
 def router_pos_acao_sistema(state: AgentState):
-    if state.get("bot_foi_pausado") and not state.get("resposta_final"):
-        return "node_atendente"
     if state.get("bot_foi_pausado"):
-        return END
+        return "node_handoff"
     if state.get("resposta_final"):
         return "node_atendente"
     return "node_roteador_maestro"
@@ -3221,9 +3373,11 @@ workflow.add_conditional_edges(
     {
         END: END,
         "node_atendente": "node_atendente",
+        "node_handoff": "node_handoff",
         "node_roteador_maestro": "node_roteador_maestro",
     }
 )
+workflow.add_edge("node_handoff", END)
 # Compilar sem checkpointer persistente:
 # a memória global da conversa vem exclusivamente do histórico consolidado no estado.
 graph = workflow.compile()

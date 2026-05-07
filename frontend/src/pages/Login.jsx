@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogIn } from "lucide-react";
-import axios from "axios";
 import api from "../services/api";
 import { clearImpersonation } from "../utils/auth";
 
@@ -19,7 +18,7 @@ export default function Login() {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await axios.get("/api/admin/configuracoes");
+        const response = await api.get("/admin/configuracoes");
         setConfigVisual({
           nomeSistema: response.data?.nome_sistema || "Antigravity OS",
           logoBase64: response.data?.logo_base64 || "",

@@ -5,7 +5,7 @@ import json
 import uuid
 import hashlib
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import pdfplumber
 import traceback
 import httpx
@@ -59,6 +59,7 @@ from app.services.tag_crm_service import (
     sync_tag_etapa_lead,
 )
 from app.services.transferencia_service import executar_transferencia_atendimento, testar_destino_transferencia
+from app.core.default_agents import ESPECIALISTAS_NATIVOS, FERRAMENTAS_SISTEMA
 
 from app.schemas import (
     EmpresaCreate,
@@ -70,6 +71,7 @@ from app.schemas import (
     IAConfigUpdateRequest,
     StandardMessage,
 )
+from app.api.routers.auth import require_tenant_access
 
 router = APIRouter(
     prefix="/empresas",
@@ -271,66 +273,6 @@ async def _garantir_etapa_inicial_crm(db: AsyncSession, empresa_uuid: uuid.UUID)
     return etapa_inicial.id
 
 
-FERRAMENTAS_SISTEMA = [
-    {
-        "nome_exibicao": "Aplicar Tag Dinâmica",
-        "nome_ferramenta": "tool_aplicar_tag_dinamica",
-        "descricao_ia": "Recebe o tag_id (UUID) para aplicar uma etiqueta ao lead. Obrigatório consultar o ID antes.",
-        "schema_parametros": {
-            "type": "object",
-            "properties": {"tag_id": {"type": "string", "description": "UUID da etiqueta oficial que deve ser aplicada ao lead atual."}},
-            "required": ["tag_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "nome_exibicao": "Transferir para Humano (Pausar Bot)",
-        "nome_ferramenta": "tool_transferir_para_humano",
-        "descricao_ia": "Permite que o agente pause o bot por 24 horas e coloque o lead na fila de atendimento humano.",
-        "schema_parametros": {
-            "type": "object",
-            "properties": {"motivo": {"type": "string", "description": "Resumo curto do motivo para pausar o bot e transferir para humano."}},
-            "required": [],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "nome_exibicao": "Consultar Lista de Tags",
-        "nome_ferramenta": "tool_consultar_tags_empresa",
-        "descricao_ia": "Retorna a lista oficial de etiquetas com NOME e ID. Use isso antes de aplicar qualquer tag.",
-        "schema_parametros": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        },
-    },
-]
-
-ESPECIALISTAS_NATIVOS = {
-    "especialista_saudacao": {
-        "descricao_missao": "Atender mensagens de abertura de conversa e cumprimentos iniciais.",
-        "descricao_roteamento": "oi, olá, bom dia, boa tarde, boa noite, tudo bem, quero falar com atendente, inicio de conversa, saudação, iniciar atendimento",
-        "prompt_sistema": "Você é o especialista de saudação. Receba o cliente com cordialidade, identifique a intenção inicial e conduza para o próximo passo do atendimento."
-    },
-    "especialista_localizacao": {
-        "descricao_missao": "Fornecer o endereço completo, ponto de referência e enviar o link do Google Maps (mapa) para ajudar o cliente a chegar à unidade.",
-        "descricao_roteamento": "endereço, onde fica, mapa, link do maps, google maps, matriz, filial, ponto de referência, como chegar, me manda o mapa, referências do local, fica perto de onde, rua, avenida, bairro, cidade, localização novamente, endereço de novo, gps, rota, manda a localização",
-        "prompt_sistema": "Você é o especialista de localização. REGRAS OBRIGATÓRIAS: 1. NUNCA peça permissão para enviar o endereço ou o link, envie imediatamente. 2. Use o PONTO DE REFERÊNCIA cadastrado como guia principal. 3. Se houver um link de mapa disponível no contexto, forneça-o. 4. NUNCA invente ou gere links falsos. Se não houver link no contexto, envie apenas o endereço em texto."
-    },
-    "especialista_funcionamento": {
-        "descricao_missao": "Responder perguntas sobre dias e horários de atendimento.",
-        "descricao_roteamento": "horário de atendimento, que horas abre, que horas fecha, dias de funcionamento, vocês abrem de sábado, abrem feriado, estão abertos hoje, expediente",
-        "prompt_sistema": "Você é o especialista de funcionamento. Informe horários, dias úteis e regras de abertura com clareza."
-    },
-    "especialista_followup": {
-        "descricao_missao": "Gerar as mensagens automáticas de retomada de conversa e de encerramento por inatividade.",
-        "descricao_roteamento": "NÃO DEVE SER CHAMADO DIRETAMENTE PELO ROTEADOR. USO INTERNO DO SISTEMA DE DELAY.",
-        "prompt_sistema": "Você é o especialista de engajamento da empresa. Seu tom é educado, sutil e empático. Seu objetivo é reconectar com clientes que pararam de responder ou encerrar contatos inativos de forma elegante, deixando as portas sempre abertas."
-    }
-}
-
-
 async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
     async with AsyncSessionLocal() as session:
         try:
@@ -355,7 +297,7 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                     descricao_roteamento=dados["descricao_roteamento"],
                     prompt_sistema=dados["prompt_sistema"],
                     ativo=True,
-                    fixo_no_roteador=True,
+                    fixo_no_roteador=bool(dados.get("fixo_no_roteador", True)),
                     peso_prioridade=1
                 )
                 
@@ -1021,6 +963,13 @@ class CRMLeadUpdateRequest(BaseModel):
     valor_conversao: float | None = None
 
 
+class TenantAgenteResponse(BaseModel):
+    id: str
+    nome: str
+    funcao: str | None = None
+    status: str = "online"
+
+
 class DestinoTransferenciaBase(BaseModel):
     nome_destino: str
     contatos_destino: List[str] = Field(default_factory=list)
@@ -1095,6 +1044,7 @@ class TagCRMBase(BaseModel):
     disparar_conversao_ads: bool = False
     acao_fechamento: bool = False
     acao_transferir_humano: bool = False
+    pausa_permanente: bool = False
     mensagem_transferencia: str | None = None
 
 
@@ -1113,6 +1063,7 @@ class TagCRMUpdate(BaseModel):
     disparar_conversao_ads: bool | None = None
     acao_fechamento: bool | None = None
     acao_transferir_humano: bool | None = None
+    pausa_permanente: bool | None = None
     mensagem_transferencia: str | None = None
 
 
@@ -1946,6 +1897,7 @@ async def listar_tags_crm_oficiais(empresa_id: str, db: AsyncSession = Depends(g
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
             "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "pausa_permanente": bool(getattr(tag, "pausa_permanente", False)),
             "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
@@ -2001,6 +1953,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
         disparar_conversao_ads=bool(data.disparar_conversao_ads),
         acao_fechamento=bool(data.acao_fechamento),
         acao_transferir_humano=bool(data.acao_transferir_humano),
+        pausa_permanente=bool(data.pausa_permanente),
         mensagem_transferencia=(data.mensagem_transferencia or "").strip() or None,
     )
     db.add(tag)
@@ -2020,6 +1973,7 @@ async def criar_tag_crm_oficial(empresa_id: str, data: TagCRMCreate, db: AsyncSe
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
             "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "pausa_permanente": bool(getattr(tag, "pausa_permanente", False)),
             "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
@@ -2081,6 +2035,8 @@ async def atualizar_tag_crm_oficial(
         tag.acao_fechamento = bool(data.acao_fechamento)
     if data.acao_transferir_humano is not None:
         tag.acao_transferir_humano = bool(data.acao_transferir_humano)
+    if data.pausa_permanente is not None:
+        tag.pausa_permanente = bool(data.pausa_permanente)
     if data.mensagem_transferencia is not None:
         tag.mensagem_transferencia = str(data.mensagem_transferencia).strip() or None
     if data.grupo_id is not None:
@@ -2117,6 +2073,7 @@ async def atualizar_tag_crm_oficial(
             "disparar_conversao_ads": bool(tag.disparar_conversao_ads),
             "acao_fechamento": bool(tag.acao_fechamento),
             "acao_transferir_humano": bool(getattr(tag, "acao_transferir_humano", False)),
+            "pausa_permanente": bool(getattr(tag, "pausa_permanente", False)),
             "mensagem_transferencia": str(getattr(tag, "mensagem_transferencia", "") or "").strip() or None,
             "criado_em": tag.criado_em.isoformat() if tag.criado_em else None,
         }
@@ -2642,9 +2599,19 @@ async def atualizar_lead_crm(
     if data.tags is not None:
         tags_atuais_norm = {str(tag).strip().lower() for tag in (lead.tags or []) if str(tag).strip()}
         tags_limpas = [str(tag).strip() for tag in data.tags if str(tag).strip()]
-        lead.tags = tags_limpas
+        tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, emp_uuid)
+        tags_ids_normalizadas = _normalizar_tags_lead_para_ids(tags_limpas, tags_por_id, tags_por_nome)
+        lead.tags = tags_ids_normalizadas
         tags_novas_aplicadas = [tag for tag in tags_limpas if tag.lower() not in tags_atuais_norm]
         tags_novas_norm = {tag.lower() for tag in tags_novas_aplicadas if tag}
+        tags_vinculadas = [tags_por_id.get(tag_id) for tag_id in tags_ids_normalizadas if tags_por_id.get(tag_id)]
+        if any(bool(getattr(tag, "pausa_permanente", False)) for tag in tags_vinculadas):
+            lead.ia_ativa = False
+            lead.status_atendimento = "manual"
+        # Preserva a lógica de pausa temporária de 24h por tag
+        if any(bool(getattr(tag, "acao_transferir_humano", False)) for tag in tags_vinculadas):
+            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+            lead.status_atendimento = "manual"
         if tags_novas_norm:
             result_tags_disparo = await db.execute(
                 select(TagCRM).where(
@@ -2721,6 +2688,75 @@ async def atualizar_lead_crm(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar lead: {str(e)}")
+
+
+@router.patch("/{empresa_id}/crm/{lead_id}/toggle-ia", status_code=status.HTTP_200_OK)
+async def toggle_ia_lead(
+    empresa_id: str,
+    lead_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    if _lead_id_eh_simulador_ou_invalido(lead_id):
+        return {"id": lead_id, "ia_ativa": True}
+
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        lead_uuid = uuid.UUID(lead_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(CRMLead).where(CRMLead.id == lead_uuid, CRMLead.empresa_id == emp_uuid)
+    )
+    lead = result.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    novo_estado = not bool(getattr(lead, "ia_ativa", True))
+    lead.ia_ativa = novo_estado
+    if not novo_estado:
+        lead.status_atendimento = "manual"
+
+    await db.commit()
+    await db.refresh(lead)
+    return {
+        "id": str(lead.id),
+        "ia_ativa": bool(lead.ia_ativa),
+        "status_atendimento": str(lead.status_atendimento or "aberto"),
+    }
+
+
+@router.get("/{empresa_id}/agentes", response_model=List[TenantAgenteResponse])
+async def listar_agentes_tenant(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    try:
+        emp_uuid = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(Especialista)
+        .where(Especialista.empresa_id == emp_uuid)
+        .order_by(Especialista.peso_prioridade.desc(), Especialista.nome.asc())
+    )
+    especialistas = result.scalars().all()
+    especialistas_visiveis = [
+        esp for esp in especialistas
+        if str(getattr(esp, "nome", "") or "").strip().lower() != "especialista_handoff_interno"
+    ]
+    return [
+        {
+            "id": str(esp.id),
+            "nome": str(esp.nome or "Agente"),
+            "funcao": str(esp.descricao_missao or "").strip() or "Especialista de atendimento",
+            "status": "online" if bool(esp.ativo) else "offline",
+        }
+        for esp in especialistas_visiveis
+    ]
 
 
 @router.post("/{empresa_id}/leads/{lead_id}/transferir_manual", status_code=status.HTTP_200_OK)

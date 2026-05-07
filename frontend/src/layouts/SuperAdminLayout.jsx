@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Outlet, Link } from "react-router-dom";
-import { Settings, Building, LogOut, Bot } from "lucide-react";
-import axios from "axios";
+import { Settings, Building, LogOut } from "lucide-react";
+import api from "../services/api";
 
 export default function SuperAdminLayout() {
   const [configVisual, setConfigVisual] = useState({
@@ -11,7 +11,7 @@ export default function SuperAdminLayout() {
 
   const fetchConfig = async () => {
     try {
-      const response = await axios.get("/api/admin/configuracoes");
+      const response = await api.get("/admin/configuracoes");
       setConfigVisual({
         nomeSistema: response.data?.nome_sistema || "ANTIGRAVITY",
         logoBase64: response.data?.logo_base64 || "",
@@ -35,9 +35,9 @@ export default function SuperAdminLayout() {
     };
   }, []);
   return (
-    <div className="min-h-screen flex bg-gray-900 text-gray-100">
+    <div className="min-h-screen flex bg-[#0f0f10] text-gray-100">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-950 p-6 flex flex-col border-r border-gray-800">
+      <aside className="w-60 bg-[#111112] p-5 flex flex-col border-r border-[#2d2d2d]">
         <div className="mb-8">
           {configVisual.logoBase64 ? (
             <img
@@ -48,34 +48,30 @@ export default function SuperAdminLayout() {
           ) : (
             <h2 className="text-xl font-bold text-white uppercase tracking-wider">{configVisual.nomeSistema}</h2>
           )}
-          <span className="text-xs text-indigo-400 font-medium tracking-widest">SUPER ADMIN</span>
+          <span className="text-[11px] text-indigo-400 font-medium tracking-widest">SUPER ADMIN</span>
         </div>
         
         <nav className="flex-1 space-y-2">
-          <Link to="/admin/" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
-            <Building size={20} />
-            <span>Empresas</span>
+          <Link to="/admin/" className="flex items-center space-x-2.5 text-sm text-gray-300 hover:text-white hover:bg-[#1a1a1a] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
+            <Building size={16} />
+            <span>Clientes</span>
           </Link>
-          <Link to="/admin/agente" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
-            <Bot size={20} />
-            <span>Agentes</span>
-          </Link>
-          <Link to="/admin/configuracoes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
-            <Settings size={20} />
-            <span>Configurações globais</span>
+          <Link to="/admin/configuracoes" className="flex items-center space-x-2.5 text-sm text-gray-300 hover:text-white hover:bg-[#1a1a1a] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
+            <Settings size={16} />
+            <span>Configurações</span>
           </Link>
         </nav>
         
-        <div className="pt-6 border-t border-gray-800">
-          <Link to="/" className="flex items-center space-x-3 text-red-400 hover:text-red-300 hover:bg-gray-800 px-3 py-2 rounded-lg transition-colors">
-            <LogOut size={20} />
+        <div className="pt-6 border-t border-[#2d2d2d]">
+          <Link to="/" className="flex items-center space-x-2.5 text-sm text-red-400 hover:text-red-300 hover:bg-[#1a1a1a] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
+            <LogOut size={16} />
             <span>Sair</span>
           </Link>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-gray-900">
+      <main className="flex-1 overflow-auto bg-[#0f0f10]">
         <div className="p-8">
           <Outlet />
         </div>
