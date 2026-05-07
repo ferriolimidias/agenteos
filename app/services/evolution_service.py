@@ -16,6 +16,13 @@ def evolution_global_api_key() -> str:
     return (os.getenv("EVOLUTION_API_TOKEN") or "").strip()
 
 
+def _headers_evolution(apikey: str) -> dict:
+    return {
+        "apikey": str(apikey or "").strip(),
+        "Content-Type": "application/json",
+    }
+
+
 def _mask_apikey(value: str | None) -> str:
     key = str(value or "").strip()
     if not key:
@@ -289,7 +296,8 @@ async def obter_qr_code(conexao_id: str | UUID) -> dict:
         evolution_apikey = credenciais["evolution_apikey"]
         evolution_instance = credenciais["evolution_instance"]
 
-        headers = {"apikey": evolution_apikey}
+        global_key = evolution_global_api_key()
+        headers = {"apikey": global_key or evolution_apikey}
         base_url = str(evolution_url).rstrip("/")
         endpoint_status = f"{base_url}/instance/connectionState/{evolution_instance}"
         endpoint_connect = f"{base_url}/instance/connect/{evolution_instance}"
@@ -367,6 +375,7 @@ async def consultar_status_instancia(
     base_url = str(evolution_url or "").rstrip("/")
     instance = str(instance_name or "").strip()
     apikey = str(evolution_apikey or "").strip()
+    global_key = evolution_global_api_key()
 
     if not base_url:
         return {"success": False, "detail": "Evolution URL não configurada."}
@@ -376,7 +385,7 @@ async def consultar_status_instancia(
         return {"success": False, "detail": "API Key da Evolution não configurada."}
 
     endpoint_status = f"{base_url}/instance/connectionState/{instance}"
-    headers = {"apikey": apikey}
+    headers = {"apikey": global_key or apikey}
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
@@ -560,7 +569,7 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         }
 
     instance_name = f"wa_{str(empresa_uuid).replace('-', '')}"
-    headers = {"apikey": gkey, "Content-Type": "application/json"}
+    headers = _headers_evolution(gkey)
     body = {
         "instanceName": instance_name,
         "integration": "WHATSAPP-BAILEYS",
@@ -592,7 +601,7 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         ep = f"{base}/instance/connect/{instance_name}"
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-                r2 = await client.get(ep, headers={"apikey": token_inst})
+                r2 = await client.get(ep, headers={"apikey": gkey or token_inst})
             if r2.status_code in (200, 201) and r2.content:
                 try:
                     payload2 = r2.json()
@@ -607,7 +616,7 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
             await client.post(
                 f"{base}/webhook/set/{instance_name}",
-                headers={"apikey": token_inst, "Content-Type": "application/json"},
+                headers=_headers_evolution(gkey or token_inst),
                 json={"url": wh_url, "webhook_by_events": False},
             )
     except Exception as exc:
