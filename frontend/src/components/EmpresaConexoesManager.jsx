@@ -42,6 +42,13 @@ export default function EmpresaConexoesManager({
   disparoDelayMax = 7,
   onConexaoDisparoUpdated,
 }) {
+  const resolveApiErrorMessage = (err, fallback) => {
+    if (err?.response?.status === 401) {
+      return "Sua sessão expirou. Faça login novamente para continuar.";
+    }
+    return err?.response?.data?.detail || fallback;
+  };
+
   const [conexoes, setConexoes] = useState([]);
   const [statusMap, setStatusMap] = useState({});
   const [loading, setLoading] = useState(false);
@@ -120,7 +127,7 @@ export default function EmpresaConexoesManager({
       await loadStatusForConexoes(lista);
     } catch (err) {
       console.error("Erro ao buscar conexões:", err);
-      setError(err.response?.data?.detail || "Erro ao carregar conexões.");
+      setError(resolveApiErrorMessage(err, "Erro ao carregar conexões."));
     } finally {
       setLoading(false);
     }
@@ -219,7 +226,7 @@ export default function EmpresaConexoesManager({
       await fetchConexoes();
     } catch (err) {
       console.error("Erro ao excluir conexão:", err);
-      alert(err.response?.data?.detail || "Erro ao excluir conexão.");
+      alert(resolveApiErrorMessage(err, "Erro ao excluir conexão."));
     } finally {
       setDeletingId(null);
     }
@@ -254,8 +261,10 @@ export default function EmpresaConexoesManager({
     } catch (err) {
       console.error("Erro ao salvar conexão:", err);
       setModalError(
-        err.response?.data?.detail ||
+        resolveApiErrorMessage(
+          err,
           "Erro ao salvar conexão. Verifique as credenciais e tente novamente."
+        )
       );
     } finally {
       setSaving(false);

@@ -1,14 +1,13 @@
 import axios from 'axios';
-import { getAuthenticatedToken } from "../utils/auth";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api'
 });
 
 api.interceptors.request.use((config) => {
-  const token = getAuthenticatedToken();
+  const token = localStorage.getItem("token");
 
-  if (token) {
+  if (token && token !== "null" && token !== "undefined") {
     config.headers["Authorization"] = `Bearer ${token}`;
   }
   return config;
@@ -33,13 +32,6 @@ api.interceptors.response.use(
     // Auto-logout somente quando existe token salvo e endpoint exige sessão.
     if (hasToken) {
       localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      localStorage.removeItem("impersonating");
-      localStorage.removeItem("impersonating_empresa");
-      localStorage.removeItem("impersonated_empresa_id");
-      localStorage.removeItem("impersonated_user_id");
-      localStorage.removeItem("original_user");
-      localStorage.removeItem("original_token");
 
       if (window.location.pathname !== "/") {
         window.location.replace("/");
