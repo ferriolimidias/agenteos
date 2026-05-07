@@ -50,6 +50,7 @@ function App() {
         const data = await response.json();
         applyFavicon(data?.favicon_base64);
       } catch (error) {
+        // Branding é público e opcional: nunca deve impactar estado de autenticação.
         console.error("Falha ao carregar favicon global:", error);
       }
     };

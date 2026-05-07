@@ -557,44 +557,13 @@ async def deletar_unidade_empresa(empresa_id: str, unidade_id: str, db: AsyncSes
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # --- ROTAS DA IA CONFIGURATOR ---
-from fastapi import Header
-
+# Compatibilidade: a IA Config usa a mesma política do tenant access com JWT Bearer.
+# Isso evita dependência legada de X-User-Id e permite tenant/admin da própria empresa.
 async def require_ia_config_access(
     empresa_id: str,
-    db: AsyncSession = Depends(get_db),
-    x_user_id: Optional[str] = Header(None),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="Usuário não autenticado.")
-
-    try:
-        user_uuid = uuid.UUID(x_user_id)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Identificador de usuário inválido.")
-
-    result = await db.execute(select(Usuario).where(Usuario.id == user_uuid))
-    usuario_bd = result.scalars().first()
-    if not usuario_bd:
-        raise HTTPException(status_code=401, detail="Usuário não encontrado.")
-
-    if is_root_admin_email(usuario_bd.email) or is_super_admin_role(usuario_bd.role):
-        return usuario_bd
-
-    print(f"Role no Banco: {usuario_bd.role}")
-    if is_admin_empresa_role(usuario_bd.role):
-        try:
-            empresa_uuid = uuid.UUID(empresa_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="ID da empresa inválido.")
-
-        if usuario_bd.empresa_id != empresa_uuid:
-            raise HTTPException(status_code=403, detail="Acesso negado para esta empresa.")
-        return usuario_bd
-
-    raise HTTPException(
-        status_code=403,
-        detail="Acesso negado. Apenas Super Admin ou Admin da própria empresa."
-    )
+    return current_user
 
 @router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
 async def get_ia_config(

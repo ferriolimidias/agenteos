@@ -370,6 +370,10 @@ export default function Empresas() {
   };
 
   const openConfigIAModal = async (emp) => {
+    if (!emp?.id) {
+      alert("Empresa inválida para carregar configuração do agente.");
+      return;
+    }
     setEmpresaSelecionada(emp);
     setShowConfigIAModal(true);
     setLoadingConfigIA(true);

@@ -19,13 +19,19 @@ api.interceptors.response.use(
   (error) => {
     const status = error?.response?.status;
     const requestUrl = String(error?.config?.url || "");
-    const hasAuthHeader = Boolean(error?.config?.headers?.Authorization);
-    const isAuthEndpoint = requestUrl.includes("/auth/login");
-    const isPublicEndpoint = requestUrl.includes("/public/");
+    const normalizedUrl = requestUrl.startsWith("/api/") ? requestUrl : `/api${requestUrl.startsWith("/") ? requestUrl : `/${requestUrl}`}`;
+    const tokenInStorage = localStorage.getItem("token");
+    const hasToken = Boolean(tokenInStorage && tokenInStorage !== "null" && tokenInStorage !== "undefined");
+    const isAuthEndpoint = normalizedUrl.includes("/api/auth/login");
+    const isPublicEndpoint = normalizedUrl.includes("/api/public/");
 
-    // Evita logout agressivo por 401 em rotas públicas ou login.
-    // Só forçamos logout em falhas autenticadas de sessão.
-    if (status === 401 && hasAuthHeader && !isAuthEndpoint && !isPublicEndpoint) {
+    // 401 em endpoint público/login não deve derrubar sessão.
+    if (status !== 401 || isPublicEndpoint || isAuthEndpoint) {
+      return Promise.reject(error);
+    }
+
+    // Auto-logout somente quando existe token salvo e endpoint exige sessão.
+    if (hasToken) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
       localStorage.removeItem("impersonating");
