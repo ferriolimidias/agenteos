@@ -21,12 +21,31 @@ def webhook_base_url() -> str:
     URL pública base do sistema para callbacks externos.
     Prioriza URL_BASE_DO_SISTEMA e aceita aliases comuns.
     """
-    return (
-        os.getenv("URL_BASE_DO_SISTEMA")
-        or os.getenv("PUBLIC_BASE_URL")
-        or os.getenv("APP_BASE_URL")
-        or ""
-    ).strip().rstrip("/")
+    candidatos = [
+        os.getenv("URL_BASE_DO_SISTEMA"),
+        os.getenv("PUBLIC_BASE_URL"),
+        os.getenv("APP_BASE_URL"),
+    ]
+
+    # Em alguns ambientes, BACKEND_CORS_ORIGINS já contém a origem pública principal.
+    cors_origins = str(os.getenv("BACKEND_CORS_ORIGINS") or "").strip()
+    if cors_origins:
+        bruto = cors_origins.strip()
+        if bruto.startswith("[") and bruto.endswith("]"):
+            bruto = bruto[1:-1]
+        for item in bruto.split(","):
+            origem = item.strip().strip("'").strip('"')
+            if origem and origem.lower() != "null":
+                candidatos.append(origem)
+                break
+
+    for base in candidatos:
+        base = str(base or "").strip().rstrip("/")
+        if base:
+            return base
+
+    # Fallback interno para Compose/rede docker.
+    return "http://backend:8000"
 
 
 def _headers_evolution(apikey: str) -> dict:
@@ -624,7 +643,7 @@ async def _solicitar_qrcode_connect(
 
 
 def _montar_url_webhook_empresa(empresa_id: str) -> str:
-    base = webhook_base_url() or "http://backend:8000"
+    base = webhook_base_url()
     return f"{base.rstrip('/')}/api/webhook/{empresa_id}/evolution"
 
 
@@ -763,13 +782,9 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
 
         webhook_ok = await _configurar_webhook_instancia(base, instance_name, key_para_usar, empresa_id)
         if not webhook_ok:
-            return {
-                "success": False,
-                "detail": (
-                    "A instância foi encontrada, mas não foi possível configurar o webhook obrigatório da Evolution. "
-                    "Verifique URL_BASE_DO_SISTEMA no servidor e tente novamente."
-                ),
-            }
+            print(
+                f"[Evolution Service] Aviso: instância {instance_name} reaproveitada sem confirmação de webhook."
+            )
 
         conexao = Conexao(
             empresa_id=empresa_uuid,
@@ -824,13 +839,9 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
 
     webhook_ok = await _configurar_webhook_instancia(base, instance_name, gkey or token_inst, empresa_id)
     if not webhook_ok:
-        return {
-            "success": False,
-            "detail": (
-                "Instância criada, mas falhou a configuração do webhook obrigatório da Evolution. "
-                "Verifique URL_BASE_DO_SISTEMA no servidor e tente novamente."
-            ),
-        }
+        print(
+            f"[Evolution Service] Aviso: instância {instance_name} criada sem confirmação de webhook."
+        )
 
     conexao = Conexao(
         empresa_id=empresa_uuid,
