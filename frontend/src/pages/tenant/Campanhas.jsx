@@ -71,6 +71,17 @@ function StatusBadge({ status }) {
   );
 }
 
+function LoadingSkeletonBlock({ rows = 3 }) {
+  return (
+    <div className="animate-pulse space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="h-5 w-44 rounded-xl bg-slate-200" />
+      {Array.from({ length: rows }).map((_, idx) => (
+        <div key={`sk-${idx}`} className="h-4 w-full rounded-xl bg-slate-200" />
+      ))}
+    </div>
+  );
+}
+
 export default function Campanhas() {
   const empresaId = getActiveEmpresaId();
   const templateTextareaRef = useRef(null);
@@ -122,7 +133,7 @@ export default function Campanhas() {
     if (!empresaId) return;
     try {
       setLoadingTemplates(true);
-      const res = await api.get(`/empresas/${empresaId}/campanhas/templates`);
+      const res = await api.get(`/empresas/${empresaId}/campanhas/templates`, { timeout: 15000 });
       setTemplates(res.data || []);
     } catch (err) {
       console.error("Erro ao carregar templates:", err);
@@ -135,7 +146,7 @@ export default function Campanhas() {
     if (!empresaId) return;
     try {
       setLoadingCampanhas(true);
-      const res = await api.get(`/empresas/${empresaId}/campanhas`);
+      const res = await api.get(`/empresas/${empresaId}/campanhas`, { timeout: 15000 });
       setCampanhas(res.data || []);
     } catch (err) {
       console.error("Erro ao carregar campanhas:", err);
@@ -169,7 +180,7 @@ export default function Campanhas() {
     if (!empresaId) return;
     try {
       setLoadingListas(true);
-      const res = await api.get(`/empresas/${empresaId}/campanhas/listas`);
+      const res = await api.get(`/empresas/${empresaId}/campanhas/listas`, { timeout: 15000 });
       setListas(res.data || []);
     } catch (err) {
       console.error("Erro ao carregar listas de campanhas:", err);
@@ -548,22 +559,27 @@ export default function Campanhas() {
         <div className="p-6">
           {activeTab === "templates" ? (
             loadingTemplates ? (
-              <div className="flex items-center justify-center py-14 text-gray-500">
-                <RefreshCw size={18} className="mr-2 animate-spin" />
-                Carregando templates...
+              <div className="grid gap-4 xl:grid-cols-2">
+                <LoadingSkeletonBlock rows={4} />
+                <LoadingSkeletonBlock rows={4} />
               </div>
             ) : templatesEmpty ? (
-              <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-14 text-center">
-                <FileText className="mx-auto mb-3 text-gray-300" size={36} />
-                <p className="text-sm font-medium text-gray-700">Nenhum template cadastrado.</p>
-                <p className="mt-1 text-sm text-gray-500">
+              <div className="rounded-xl border border-slate-200 bg-white px-6 py-14 text-center shadow-sm">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+                  <FileText size={22} />
+                </div>
+                <p className="text-base font-semibold text-slate-900">Nenhum template cadastrado</p>
+                <p className="mt-2 text-sm text-slate-500">
                   Crie mensagens reutilizáveis com variáveis como {`{{nome}}`} e {`{{telefone}}`}.
                 </p>
               </div>
             ) : (
               <div className="grid gap-4 xl:grid-cols-2">
                 {templates.map((template) => (
-                  <div key={template.id} className="rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
+                  <div
+                    key={template.id}
+                    className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:shadow-md"
+                  >
                     <div className="mb-4 flex items-start justify-between gap-4">
                       <div>
                         <h3 className="text-lg font-semibold text-gray-900">{template.nome}</h3>
@@ -613,15 +629,17 @@ export default function Campanhas() {
               </div>
             )
           ) : activeTab === "disparos" ? loadingCampanhas ? (
-            <div className="flex items-center justify-center py-14 text-gray-500">
-              <RefreshCw size={18} className="mr-2 animate-spin" />
-              Carregando campanhas...
+            <div className="space-y-3">
+              <LoadingSkeletonBlock rows={3} />
+              <LoadingSkeletonBlock rows={3} />
             </div>
           ) : campanhasEmpty ? (
-            <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-14 text-center">
-              <Megaphone className="mx-auto mb-3 text-gray-300" size={36} />
-              <p className="text-sm font-medium text-gray-700">Nenhum disparo realizado ainda.</p>
-              <p className="mt-1 text-sm text-gray-500">
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-14 text-center shadow-sm">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+                <Megaphone size={22} />
+              </div>
+              <p className="text-base font-semibold text-slate-900">Nenhum disparo realizado ainda</p>
+              <p className="mt-2 text-sm text-slate-500">
                 Crie uma campanha selecionando um template e uma tag do CRM.
               </p>
             </div>
@@ -653,15 +671,17 @@ export default function Campanhas() {
               </table>
             </div>
           ) : loadingListas ? (
-            <div className="flex items-center justify-center py-14 text-gray-500">
-              <RefreshCw size={18} className="mr-2 animate-spin" />
-              Carregando listas...
+            <div className="space-y-3">
+              <LoadingSkeletonBlock rows={3} />
+              <LoadingSkeletonBlock rows={3} />
             </div>
           ) : listas.length === 0 ? (
-            <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-14 text-center">
-              <List className="mx-auto mb-3 text-gray-300" size={36} />
-              <p className="text-sm font-medium text-gray-700">Nenhuma lista disponível.</p>
-              <p className="mt-1 text-sm text-gray-500">
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-14 text-center shadow-sm">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+                <List size={22} />
+              </div>
+              <p className="text-base font-semibold text-slate-900">Nenhuma lista disponível</p>
+              <p className="mt-2 text-sm text-slate-500">
                 Cadastre tags oficiais para visualizar audiências e quantidades por lista.
               </p>
             </div>
@@ -798,48 +818,52 @@ export default function Campanhas() {
       />
 
       {showTemplateModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-slate-200 bg-white/95 p-4 backdrop-blur md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-semibold text-slate-900">
                   {editingTemplate ? "Editar template" : "Novo template"}
                 </h2>
-                <p className="text-sm text-gray-500">Use variáveis como {`{{nome}}`} e {`{{telefone}}`} no texto.</p>
+                <p className="mt-1 text-sm text-slate-500">Use variáveis como {`{{nome}}`} e {`{{telefone}}`} no texto.</p>
               </div>
-              <button type="button" onClick={closeTemplateModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+              <button
+                type="button"
+                onClick={closeTemplateModal}
+                className="rounded-lg border border-slate-200 p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
                 <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleSaveTemplate} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="flex-1 overflow-y-auto bg-slate-50/50 p-4 md:p-6">
                 <div className="space-y-5">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do template</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Nome do template</label>
                     <input
                       required
                       value={templateForm.nome}
                       onChange={(e) => setTemplateForm((prev) => ({ ...prev, nome: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                       placeholder="Ex: Reativação, Oferta VIP, Cobrança"
                     />
                   </div>
 
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Texto do template</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Texto do template</label>
                     <textarea
                       ref={templateTextareaRef}
                       required
                       rows={8}
                       value={templateForm.texto_template}
                       onChange={(e) => setTemplateForm((prev) => ({ ...prev, texto_template: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                       placeholder={"Olá {{nome}}, tudo bem?\nTemos uma condição especial para você hoje."}
                     />
                   </div>
 
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800 shadow-sm">
                     <p className="mb-3">
                       Dica: além de {`{{nome}}`} e {`{{telefone}}`}, você pode usar campos existentes em `dados_adicionais` do lead.
                     </p>
@@ -858,8 +882,12 @@ export default function Campanhas() {
                   </div>
                 </div>
               </div>
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
-                <button type="button" onClick={closeTemplateModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
+              <div className="sticky bottom-0 z-10 flex shrink-0 justify-end gap-3 border-t border-slate-200 bg-white/95 p-4 backdrop-blur md:p-6">
+                <button
+                  type="button"
+                  onClick={closeTemplateModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                >
                   Cancelar
                 </button>
                 <button
@@ -876,12 +904,12 @@ export default function Campanhas() {
       ) : null}
 
       {showCampanhaModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-slate-200 bg-white/95 p-4 backdrop-blur md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Novo Disparo</h2>
-                <p className="text-sm text-gray-500">Selecione o template e a tag para iniciar a campanha.</p>
+                <h2 className="text-xl font-semibold text-slate-900">Novo Disparo</h2>
+                <p className="mt-1 text-sm text-slate-500">Selecione o template e a tag para iniciar a campanha.</p>
               </div>
               <button
                 type="button"
@@ -890,33 +918,33 @@ export default function Campanhas() {
                   setPreviewData(null);
                   setPreviewError("");
                 }}
-                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                className="rounded-lg border border-slate-200 p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
               >
                 <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleCreateCampanha} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="flex-1 overflow-y-auto bg-slate-50/50 p-4 md:p-6">
                 <div className="space-y-5">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome da campanha</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Nome da campanha</label>
                     <input
                       required
                       value={campanhaForm.nome}
                       onChange={(e) => setCampanhaForm((prev) => ({ ...prev, nome: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                       placeholder="Ex: Reativação de leads frios"
                     />
                   </div>
 
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Template</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Template</label>
                     <select
                       required
                       value={campanhaForm.template_id}
                       onChange={(e) => setCampanhaForm((prev) => ({ ...prev, template_id: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Selecione um template</option>
                       {templates.map((template) => (
@@ -927,13 +955,13 @@ export default function Campanhas() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Tag alvo</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Tag alvo</label>
                     <select
                       required
                       value={campanhaForm.tag}
                       onChange={(e) => setCampanhaForm((prev) => ({ ...prev, tag: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Selecionar tag</option>
                       {tagsDisponiveis.map((tag) => (
@@ -942,12 +970,12 @@ export default function Campanhas() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-gray-500">
+                    <p className="mt-2 text-xs text-slate-500">
                       O disparo será enviado para leads que possuam essa tag no CRM.
                     </p>
                   </div>
 
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 shadow-sm">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-emerald-900">Pré-visualização</p>
@@ -1009,7 +1037,7 @@ export default function Campanhas() {
                 </div>
               </div>
 
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+              <div className="sticky bottom-0 z-10 flex shrink-0 justify-end gap-3 border-t border-slate-200 bg-white/95 p-4 backdrop-blur md:p-6">
                 <button
                   type="button"
                   onClick={() => {
@@ -1017,7 +1045,7 @@ export default function Campanhas() {
                     setPreviewData(null);
                     setPreviewError("");
                   }}
-                  className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
                 >
                   Cancelar
                 </button>

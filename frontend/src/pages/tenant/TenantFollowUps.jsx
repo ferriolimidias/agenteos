@@ -14,10 +14,10 @@ const initialForm = {
 
 function SkeletonCard() {
   return (
-    <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-6 animate-pulse">
-      <div className="h-5 w-40 rounded bg-[#2a2a2c]" />
-      <div className="mt-3 h-4 w-28 rounded bg-[#2a2a2c]" />
-      <div className="mt-4 h-14 w-full rounded bg-[#2a2a2c]" />
+    <div className="animate-pulse rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="h-5 w-40 rounded-xl bg-slate-200" />
+      <div className="mt-3 h-4 w-28 rounded-xl bg-slate-200" />
+      <div className="mt-4 h-14 w-full rounded-xl bg-slate-200" />
     </div>
   );
 }
@@ -47,8 +47,8 @@ export default function TenantFollowUps() {
     try {
       setLoading(true);
       const [followupsRes, tagsRes] = await Promise.all([
-        api.get(`/empresas/${empresaId}/followups`),
-        api.get(`/empresas/${empresaId}/crm/tags/oficiais`),
+        api.get(`/empresas/${empresaId}/followups`, { timeout: 15000 }),
+        api.get(`/empresas/${empresaId}/crm/tags/oficiais`, { timeout: 15000 }),
       ]);
       setFollowups(Array.isArray(followupsRes.data) ? followupsRes.data : []);
       setTags(Array.isArray(tagsRes.data) ? tagsRes.data : []);
@@ -132,11 +132,11 @@ export default function TenantFollowUps() {
   };
 
   return (
-    <div className="space-y-6 text-gray-100">
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Cadências / Follow-up</h1>
-          <p className="mt-1 text-sm font-medium text-gray-400">
+          <h1 className="text-2xl font-semibold text-slate-900">Cadências / Follow-up</h1>
+          <p className="mt-1 text-sm text-slate-500">
             Configure disparos automáticos de retomada para leads inativos.
           </p>
         </div>
@@ -144,7 +144,7 @@ export default function TenantFollowUps() {
           <button
             type="button"
             onClick={carregarDados}
-            className="inline-flex items-center gap-2 rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-4 py-2 text-sm font-medium text-gray-200 hover:bg-[#171718]"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
           >
             <RefreshCw size={15} />
             Atualizar
@@ -167,19 +167,38 @@ export default function TenantFollowUps() {
           <SkeletonCard />
         </div>
       ) : followups.length === 0 ? (
-        <div className="rounded-2xl border border-[#2d2d2d] bg-[#1a1a1b] p-8 text-center text-sm text-gray-400">
-          Nenhuma cadência cadastrada ainda.
+        <div className="flex items-center justify-center py-6">
+          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+              <TimerReset className="h-6 w-6" />
+            </div>
+            <h2 className="text-lg font-semibold text-slate-900">Nenhuma cadência configurada</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Crie uma cadência para retomar automaticamente leads inativos.
+            </p>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:bg-indigo-700"
+            >
+              <Plus size={15} />
+              Nova Cadência
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {followups.map((item) => {
             const tag = item.tag_aplicar_final ? tagsMap.get(item.tag_aplicar_final) : null;
             return (
-              <div key={item.id} className="rounded-2xl border border-[#2d2d2d] bg-[#0f0f10] p-6">
+              <div
+                key={item.id}
+                className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition-all hover:shadow-md"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="truncate text-lg font-semibold text-white">{item.nome}</h3>
-                    <p className="mt-1 flex items-center gap-1 text-sm text-indigo-300">
+                    <h3 className="truncate text-lg font-semibold text-slate-900">{item.nome}</h3>
+                    <p className="mt-1 flex items-center gap-1 text-sm text-indigo-600">
                       <Clock3 size={14} />
                       {item.tempo_gatilho_minutos} min
                     </p>
@@ -187,19 +206,19 @@ export default function TenantFollowUps() {
                   <span
                     className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
                       item.ativo
-                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                        : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700"
                     }`}
                   >
                     {item.ativo ? "Ativa" : "Inativa"}
                   </span>
                 </div>
 
-                <p className="mt-4 line-clamp-3 text-sm text-gray-300">{item.objetivo_prompt}</p>
+                <p className="mt-4 line-clamp-3 text-sm text-slate-500">{item.objetivo_prompt}</p>
 
-                <div className="mt-4 text-xs text-gray-400">
+                <div className="mt-4 text-xs text-slate-500">
                   Tag final:{" "}
-                  <span className="font-medium text-gray-200">
+                  <span className="font-medium text-slate-800">
                     {tag?.nome || (item.tag_aplicar_final ? "Tag não encontrada" : "Nenhuma")}
                   </span>
                 </div>
@@ -208,7 +227,7 @@ export default function TenantFollowUps() {
                   <button
                     type="button"
                     onClick={() => openEdit(item)}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-1.5 text-xs font-medium text-gray-200 hover:bg-[#202022]"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                   >
                     <Pencil size={13} />
                     Editar
@@ -231,15 +250,15 @@ export default function TenantFollowUps() {
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-2xl rounded-2xl border border-[#2d2d2d] bg-[#0f0f10] p-6">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">
+              <h2 className="text-lg font-semibold text-slate-900">
                 {editingItem ? "Editar Cadência" : "Nova Cadência"}
               </h2>
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-lg border border-[#2d2d2d] p-2 text-gray-300 hover:bg-[#1a1a1b]"
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 transition-colors hover:bg-slate-100"
               >
                 <X size={14} />
               </button>
@@ -247,47 +266,47 @@ export default function TenantFollowUps() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-200">Nome da Cadência</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Nome da Cadência</label>
                 <input
                   required
                   value={formData.nome}
                   onChange={(e) => setFormData((prev) => ({ ...prev, nome: e.target.value }))}
-                  className="w-full rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   placeholder="Ex: Recuperação 1h"
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-200">Tempo de Disparo (Minutos)</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Tempo de Disparo (Minutos)</label>
                 <input
                   required
                   type="number"
                   min={1}
                   value={formData.tempo_gatilho_minutos}
                   onChange={(e) => setFormData((prev) => ({ ...prev, tempo_gatilho_minutos: e.target.value }))}
-                  className="w-full rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   placeholder="Ex: 60 para 1h, 1440 para 24h"
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-200">Objetivo</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Objetivo</label>
                 <textarea
                   required
                   rows={4}
                   value={formData.objetivo_prompt}
                   onChange={(e) => setFormData((prev) => ({ ...prev, objetivo_prompt: e.target.value }))}
-                  className="w-full rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                   placeholder="Ex: O lead parou de responder. Ofereça 10% de desconto de forma amigável."
                 />
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-200">Tag Final (Opcional)</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Tag Final (Opcional)</label>
                 <select
                   value={formData.tag_aplicar_final}
                   onChange={(e) => setFormData((prev) => ({ ...prev, tag_aplicar_final: e.target.value }))}
-                  className="w-full rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="">Nenhuma</option>
                   {tags.map((tag) => (
@@ -298,12 +317,12 @@ export default function TenantFollowUps() {
                 </select>
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-gray-200">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   checked={Boolean(formData.ativo)}
                   onChange={(e) => setFormData((prev) => ({ ...prev, ativo: e.target.checked }))}
-                  className="h-4 w-4 rounded border-[#2d2d2d] bg-[#1a1a1b] text-indigo-500 focus:ring-indigo-500"
+                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 Cadência ativa
               </label>
@@ -312,7 +331,7 @@ export default function TenantFollowUps() {
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="rounded-xl border border-[#2d2d2d] bg-[#1a1a1b] px-4 py-2 text-sm text-gray-200 hover:bg-[#202022]"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                 >
                   Cancelar
                 </button>
