@@ -649,6 +649,15 @@ def _montar_url_webhook_empresa(empresa_id: str) -> str:
 
 async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: str, empresa_id: str) -> bool:
     wh_url = _montar_url_webhook_empresa(empresa_id)
+    evolution_url = evolution_base_url() or str(base or "").strip().rstrip("/")
+    webhook_apikey = evolution_global_api_key() or str(apikey or "").strip()
+    if not evolution_url:
+        print("[Evolution Service] Falha ao configurar webhook: EVOLUTION_API_URL ausente.")
+        return False
+    if not webhook_apikey:
+        print("[Evolution Service] Falha ao configurar webhook: EVOLUTION_API_TOKEN ausente.")
+        return False
+
     payload = {
         "enabled": True,
         "url": wh_url,
@@ -659,8 +668,8 @@ async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: s
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
             resp = await client.post(
-                f"{base.rstrip('/')}/webhook/set/{instance_name}",
-                headers=_headers_evolution(apikey),
+                f"{evolution_url.rstrip('/')}/webhook/set/{instance_name}",
+                headers=_headers_evolution(webhook_apikey),
                 json=payload,
             )
         if resp.status_code >= 400:

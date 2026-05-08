@@ -111,7 +111,7 @@ app.include_router(integracoes.router)
 app.include_router(conexoes.router, prefix="/api")
 app.include_router(conexoes.status_router, prefix="/api")
 app.include_router(dashboard.router)
-app.include_router(websockets.router, prefix="/api/empresas", tags=["websockets"])
+app.include_router(websockets.router, prefix="/api", tags=["websockets"])
 
 print("--- INICIANDO MAPEAMENTO DE ROTAS ---")
 for route in app.routes:

@@ -6,7 +6,7 @@ from app.services.websocket_manager import manager
 router = APIRouter()
 
 
-@router.websocket("/{empresa_id}/ws")
+@router.websocket("/empresas/{empresa_id}/ws")
 async def websocket_empresa(websocket: WebSocket, empresa_id: str):
     await manager.connect(empresa_id, websocket)
     try:

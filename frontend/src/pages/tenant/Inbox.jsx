@@ -8,6 +8,23 @@ import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 
 export default function Inbox() {
+  const buildWsUrl = (empresaId) => {
+    const baseRaw = String(api?.defaults?.baseURL || "/api").trim();
+    let apiHttpBase = "";
+
+    if (/^https?:\/\//i.test(baseRaw)) {
+      apiHttpBase = baseRaw;
+    } else {
+      const normalized = baseRaw.startsWith("/") ? baseRaw : `/${baseRaw}`;
+      apiHttpBase = `${window.location.origin}${normalized}`;
+    }
+
+    const base = apiHttpBase.endsWith("/") ? apiHttpBase : `${apiHttpBase}/`;
+    const endpoint = new URL(`empresas/${empresaId}/ws`, base);
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    return endpoint.toString();
+  };
+
   const [leads, setLeads] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -215,12 +232,7 @@ export default function Inbox() {
         return;
       }
 
-      const wsUrl =
-        (window.location.protocol === "https:" ? "wss://" : "ws://") +
-        window.location.host +
-        "/api/empresas/" +
-        activeEmpresaId +
-        "/ws";
+      const wsUrl = buildWsUrl(activeEmpresaId);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       socketOpenedRef.current = false;
