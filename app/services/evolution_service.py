@@ -1,11 +1,14 @@
 import os
 import httpx
 import re
+import logging
 from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import Empresa, Conexao, TipoConexao
 from db.database import AsyncSessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 def evolution_base_url() -> str:
@@ -659,11 +662,13 @@ async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: s
         return False
 
     payload = {
-        "enabled": True,
-        "url": wh_url,
-        "byEvents": False,
-        "webhook_by_events": False,
-        "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"],
+        "webhook": {
+            "enabled": True,
+            "url": wh_url,
+            "byEvents": False,
+            "base64": False,
+            "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"],
+        }
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
@@ -673,14 +678,22 @@ async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: s
                 json=payload,
             )
         if resp.status_code >= 400:
-            print(
-                f"[Evolution Service] Falha ao configurar webhook da instância {instance_name} "
-                f"(status={resp.status_code}, body={resp.text[:300]})"
+            logger.error(
+                "Falha ao configurar webhook na Evolution | instance=%s | url=%s | status_code=%s | response_text=%s",
+                instance_name,
+                f"{evolution_url.rstrip('/')}/webhook/set/{instance_name}",
+                resp.status_code,
+                (resp.text or "")[:2000],
             )
             return False
         return True
     except Exception as exc:
-        print(f"[Evolution Service] Falha ao configurar webhook por instância ({exc}).")
+        logger.error(
+            "Exceção ao configurar webhook na Evolution | instance=%s | url=%s | erro=%s",
+            instance_name,
+            f"{evolution_url.rstrip('/')}/webhook/set/{instance_name}",
+            str(exc),
+        )
         return False
 
 
