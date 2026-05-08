@@ -16,58 +16,36 @@ function CardSkeleton() {
 export default function TenantAgentes() {
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
+  const hasUser = Boolean(user);
   const [loading, setLoading] = useState(true);
   const [agentes, setAgentes] = useState([]);
   const [erroCarregamento, setErroCarregamento] = useState("");
 
   useEffect(() => {
-    let ativo = true;
-
-    const carregarAgentes = async () => {
-      if (!empresaId || !user) {
-        if (ativo) {
-          setLoading(false);
-          setAgentes([]);
-        }
+    const fetchAgentes = async () => {
+      if (!empresaId || !hasUser) {
+        setAgentes([]);
+        setLoading(false);
         return;
       }
 
-      if (ativo) {
+      try {
         setLoading(true);
         setErroCarregamento("");
-      }
-
-      try {
-        const res = await api.get(`/empresas/${empresaId}/agentes`, {
-          timeout: 15000,
-        });
-        const lista = Array.isArray(res.data)
-          ? res.data
-          : Array.isArray(res.data?.items)
-            ? res.data.items
-            : [];
-        if (ativo) {
-          setAgentes(lista);
-        }
-      } catch (err) {
-        console.error("Erro ao carregar agentes do tenant:", err);
-        if (ativo) {
-          setAgentes([]);
-          setErroCarregamento("Não foi possível carregar seus agentes no momento.");
-        }
+        const res = await api.get(`/empresas/${empresaId}/agentes`);
+        const data = res.data?.items || res.data || [];
+        setAgentes(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error("Erro ao buscar agentes:", error);
+        setAgentes([]);
+        setErroCarregamento("Não foi possível carregar seus agentes no momento.");
       } finally {
-        if (ativo) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     };
 
-    void carregarAgentes();
-
-    return () => {
-      ativo = false;
-    };
-  }, [empresaId, user]);
+    void fetchAgentes();
+  }, [empresaId, hasUser]);
 
   if (!user) {
     return (
