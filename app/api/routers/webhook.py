@@ -410,6 +410,7 @@ async def save_history_and_check_pause(
         await manager.broadcast_to_empresa(
             str(empresa_id),
             {
+                "type": "NOVA_MENSAGEM",
                 "tipo_evento": tipo_evento,
                 "telefone": telefone,
                 "lead_id": str(lead.id),
