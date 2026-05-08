@@ -71,6 +71,7 @@ export default function EmpresaConexoesManager({
   const [checkingQrStatus, setCheckingQrStatus] = useState(false);
   const [toast, setToast] = useState(null);
   const [provisioning, setProvisioning] = useState(false);
+  const [resettingEvolution, setResettingEvolution] = useState(false);
 
   useEffect(() => {
     setSelectedConexaoDisparoId(conexaoDisparoId || "");
@@ -335,14 +336,27 @@ export default function EmpresaConexoesManager({
         });
         setQrCodeBase64(data.base64);
       } else {
-        setQrCodeError("Resposta sem QR Code. Tente novamente.");
+        setQrCodeError(
+          data.detail ||
+            "Resposta sem QR Code. Tente «Forçar reinício» se o problema persistir."
+        );
       }
       await fetchConexoes();
     } catch (err) {
       console.error("Erro ao provisionar WhatsApp:", err);
-      const detail =
+      let detail =
         err.response?.data?.detail || "Não foi possível iniciar a conexão WhatsApp.";
-      setQrCodeError(typeof detail === "string" ? detail : JSON.stringify(detail));
+      if (typeof detail !== "string") {
+        detail = JSON.stringify(detail);
+      }
+      if (
+        /já existe|já existia|QR Code|qr code|Evolution|403|reinício|reinicio|instância|instancia|already|in use/i.test(
+          detail
+        )
+      ) {
+        detail = `${detail}\n\nSe continuar sem QR Code, utilize «Forçar reinício» neste modal para apagar a instância na Evolution e voltar a tentar.`;
+      }
+      setQrCodeError(detail);
       if (err.response?.status === 409) {
         setToast({ type: "success", message: detail });
         closeQrModal();
@@ -356,6 +370,55 @@ export default function EmpresaConexoesManager({
 
   const handleOpenQrModal = async (conexao) => {
     await handleConectarWhatsApp(conexao);
+  };
+
+  const handleResetEvolutionWhatsApp = async () => {
+    const ok = window.confirm(
+      "Isto apaga na Evolution a instância WhatsApp automática desta empresa (wa_…) e remove a conexão guardada. Continuar?"
+    );
+    if (!ok) return;
+    setQrCodeError("");
+    setResettingEvolution(true);
+    try {
+      const res = await api.post(
+        `/empresas/${empresaId}/conexoes/reset-evolution-whatsapp`
+      );
+      setToast({
+        type: "success",
+        message: res.data?.detail || "Instância reiniciada. A gerar novo QR…",
+      });
+      await fetchConexoes();
+      setQrCodeBase64("");
+      setQrModalConexao({ id: null, nome_instancia: "WhatsApp" });
+      setLoadingQrCode(true);
+      try {
+        const prov = await api.post(`/empresas/${empresaId}/conexoes/provision-whatsapp`);
+        const data = prov.data || {};
+        if (data.base64) {
+          setQrModalConexao({
+            id: data.conexao_id,
+            nome_instancia: data.instance_name || "WhatsApp",
+          });
+          setQrCodeBase64(data.base64);
+        } else {
+          setQrCodeError(
+            data.detail ||
+              "Instância limpa, mas ainda sem QR Code. Tente «Conectar / Ativar WhatsApp» outra vez."
+          );
+        }
+        await fetchConexoes();
+      } finally {
+        setLoadingQrCode(false);
+      }
+    } catch (err) {
+      console.error("Erro ao reiniciar Evolution:", err);
+      const d = err.response?.data?.detail;
+      setQrCodeError(
+        typeof d === "string" ? d : "Não foi possível reiniciar a instância WhatsApp."
+      );
+    } finally {
+      setResettingEvolution(false);
+    }
   };
 
   const handleRefreshQrStatus = async () => {
@@ -805,8 +868,11 @@ export default function EmpresaConexoesManager({
                   Gerando QR Code...
                 </div>
               ) : qrCodeError ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
-                  {qrCodeError}
+                <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+                  <p className="whitespace-pre-wrap">{qrCodeError}</p>
+                  <p className="text-xs text-red-600/90">
+                    Se a mensagem indicar instância em conflito ou falha ao obter o código, use «Forçar reinício» abaixo.
+                  </p>
                 </div>
               ) : qrCodeBase64 ? (
                 <div className="flex flex-col items-center rounded-2xl border border-gray-200 bg-gray-50 p-6">
@@ -821,11 +887,31 @@ export default function EmpresaConexoesManager({
                 </div>
               ) : (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
-                  A Evolution não retornou um QR Code neste momento. Tente novamente em instantes.
+                  A Evolution não retornou um QR Code neste momento. Aguarde alguns segundos e use «Atualizar
+                  Status», ou «Forçar reinício» se a instância estiver bloqueada.
                 </div>
               )}
 
-              <div className="flex justify-end gap-3">
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleResetEvolutionWhatsApp}
+                  disabled={resettingEvolution || loadingQrCode}
+                  title="Apaga a instância wa_… na Evolution e volta a pedir o QR Code"
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {resettingEvolution ? (
+                    <>
+                      <RefreshCw size={14} className="animate-spin" />
+                      A reiniciar…
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={14} />
+                      Forçar reinício
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={closeQrModal}
@@ -836,7 +922,7 @@ export default function EmpresaConexoesManager({
                 <button
                   type="button"
                   onClick={handleRefreshQrStatus}
-                  disabled={checkingQrStatus}
+                  disabled={checkingQrStatus || !qrModalConexao?.id}
                   className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {checkingQrStatus ? (

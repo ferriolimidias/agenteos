@@ -503,6 +503,126 @@ async def get_base64_media(
         return None
 
 
+def _nome_instancia_padrao_empresa(empresa_uuid: UUID) -> str:
+    """
+    Nome canónico único da instância Evolution criada pelo provisionamento automático (1:1 com a empresa).
+    Deriva-se só do UUID interno; não aceite nomes vindos de input HTTP para operações de delete/reset.
+    """
+    suffix = str(empresa_uuid).replace("-", "").lower()
+    nome = f"wa_{suffix}"
+    if not re.fullmatch(r"^wa_[0-9a-f]{32}$", nome):
+        raise ValueError("Invariante de tenant: UUID de empresa inválido para nome de instância.")
+    return nome
+
+
+def _evolution_create_indicates_existing_instance(resp: httpx.Response) -> bool:
+    if resp.status_code not in (400, 403, 409, 422):
+        return False
+    text = (resp.text or "").lower()
+    if "already" in text and ("use" in text or "exists" in text or "in use" in text):
+        return True
+    if "in use" in text:
+        return True
+    if "duplicate" in text or "em uso" in text or "já existe" in text:
+        return True
+    return False
+
+
+async def _buscar_apikey_instancia_evolution(
+    base: str,
+    gkey: str,
+    instance_name: str,
+) -> str | None:
+    """Tenta obter a apikey da instância via fetchInstances filtrado pelo nome (sem listar todas as instâncias)."""
+    root = base.rstrip("/")
+    url = f"{root}/instance/fetchInstances"
+    headers = {"apikey": gkey}
+    timeout = httpx.Timeout(20.0, connect=8.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers, params={"instanceName": instance_name})
+            if r.status_code >= 400:
+                return None
+            data = r.json() if r.content else {}
+    except Exception as exc:
+        print(f"[Evolution Service] fetchInstances falhou: {exc}")
+        return None
+
+    candidatos: list = []
+    if isinstance(data, list):
+        candidatos = data
+    elif isinstance(data, dict):
+        for k in ("instances", "instance", "data", "response"):
+            v = data.get(k)
+            if isinstance(v, list):
+                candidatos = v
+                break
+            if isinstance(v, dict):
+                candidatos = [v]
+                break
+        if not candidatos and data.get("name") == instance_name:
+            candidatos = [data]
+
+    nome_alvo = str(instance_name or "").strip().lower()
+    for item in candidatos:
+        if not isinstance(item, dict):
+            continue
+        nome = str(item.get("name") or item.get("instanceName") or item.get("instance") or "").strip().lower()
+        if nome and nome != nome_alvo:
+            continue
+        for k in ("apikey", "apiKey", "token", "hash"):
+            v = item.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, dict):
+                for sk in ("apikey", "apiKey", "token"):
+                    sv = v.get(sk)
+                    if isinstance(sv, str) and sv.strip():
+                        return sv.strip()
+    return None
+
+
+async def _solicitar_qrcode_connect(
+    base: str,
+    instance_name: str,
+    apikey_primary: str,
+    apikey_fallback: str | None = None,
+) -> tuple[str | None, str]:
+    root = base.rstrip("/")
+    ep = f"{root}/instance/connect/{instance_name}"
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    for key in filter(None, [apikey_primary, apikey_fallback]):
+        key = str(key).strip()
+        if not key:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                r = await client.get(ep, headers={"apikey": key})
+            if r.status_code >= 400:
+                continue
+            payload = r.json() if r.content else {}
+            qr = _extrair_base64_qrcode(payload if isinstance(payload, dict) else {})
+            if qr:
+                return qr, key
+        except Exception as exc:
+            print(f"[Evolution Service] connect {instance_name} com chave alternativa: {exc}")
+            continue
+    return None, apikey_primary
+
+
+async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: str, empresa_id: str) -> None:
+    wh_url = f"http://backend:8000/api/webhook/{empresa_id}/evolution"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+            await client.post(
+                f"{base.rstrip('/')}/webhook/set/{instance_name}",
+                headers=_headers_evolution(apikey),
+                json={"url": wh_url, "webhook_by_events": False},
+            )
+    except Exception as exc:
+        print(f"[Evolution Service] Aviso: webhook por instância não configurado ({exc}).")
+
+
 def _extrair_token_instancia_criada(payload: dict | None) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -568,7 +688,10 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
             "conexao_id": str(existente.id),
         }
 
-    instance_name = f"wa_{str(empresa_uuid).replace('-', '')}"
+    try:
+        instance_name = _nome_instancia_padrao_empresa(empresa_uuid)
+    except ValueError as exc:
+        return {"success": False, "detail": str(exc)}
     headers = _headers_evolution(gkey)
     body = {
         "instanceName": instance_name,
@@ -584,8 +707,55 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         return {"success": False, "detail": f"Falha ao criar instância na Evolution: {exc}"}
 
     if resp.status_code not in (200, 201):
-        texto = (resp.text or "")[:500]
-        return {"success": False, "detail": texto or f"Evolution retornou status {resp.status_code}."}
+        if not _evolution_create_indicates_existing_instance(resp):
+            texto = (resp.text or "")[:500]
+            return {"success": False, "detail": texto or f"Evolution retornou status {resp.status_code}."}
+
+        inst_key = await _buscar_apikey_instancia_evolution(base, gkey, instance_name)
+        token_inst = (inst_key or gkey).strip()
+        qr_b64, key_para_usar = await _solicitar_qrcode_connect(
+            base,
+            instance_name,
+            token_inst,
+            gkey if token_inst != gkey else None,
+        )
+        if not qr_b64:
+            return {
+                "success": False,
+                "detail": (
+                    "A instância WhatsApp desta empresa já existe na Evolution, mas não foi possível obter o QR Code. "
+                    "Utilize «Forçar reinício» no modal para apagar a instância e voltar a tentar."
+                ),
+            }
+
+        await _configurar_webhook_instancia(base, instance_name, key_para_usar, empresa_id)
+
+        conexao = Conexao(
+            empresa_id=empresa_uuid,
+            tipo=TipoConexao.EVOLUTION,
+            nome_instancia=instance_name,
+            credenciais={
+                "evolution_instance": instance_name,
+                "evolution_apikey": key_para_usar,
+            },
+            status="ativo",
+        )
+        db.add(conexao)
+        try:
+            await db.commit()
+            await db.refresh(conexao)
+        except Exception as exc:
+            await db.rollback()
+            return {"success": False, "detail": f"Erro ao salvar conexão: {exc}"}
+
+        return {
+            "success": True,
+            "conexao_id": str(conexao.id),
+            "instance_name": instance_name,
+            "base64": qr_b64,
+            "detail": "Instância já existia na Evolution; ligámo-nos a ela e geramos um novo QR Code.",
+            "reaproveitada": True,
+        }
 
     try:
         data = resp.json() if resp.content else {}
@@ -655,4 +825,72 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         "base64": qr_b64,
         "detail": "Instância criada. Escaneie o QR Code para conectar.",
         "reaproveitada": False,
+    }
+
+
+async def reset_evolution_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dict:
+    """
+    Remove apenas a instância Evolution automática deste tenant (wa_<uuid da empresa>).
+
+    Isolamento: o segmento do DELETE é derivado exclusivamente de empresa_id autenticado na rota;
+    não há listagem nem remoção em massa de instâncias na Evolution.
+    """
+    base = evolution_base_url()
+    gkey = evolution_global_api_key()
+    if not base or not gkey:
+        return {"success": False, "detail": "Defina EVOLUTION_API_URL e EVOLUTION_API_TOKEN no servidor."}
+
+    try:
+        empresa_uuid = UUID(str(empresa_id))
+    except ValueError:
+        return {"success": False, "detail": "Identificador de empresa inválido."}
+
+    try:
+        instance_name = _nome_instancia_padrao_empresa(empresa_uuid)
+    except ValueError as exc:
+        return {"success": False, "detail": str(exc)}
+
+    root = base.rstrip("/")
+    # Um único recurso: path fixo com nome canónico do tenant (sem parâmetros de bulk).
+    url_del = f"{root}/instance/delete/{instance_name}"
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=15.0), follow_redirects=True) as client:
+            resp = await client.delete(url_del, headers={"apikey": gkey})
+    except Exception as exc:
+        return {"success": False, "detail": f"Falha ao contactar a Evolution: {exc}"}
+
+    if resp.status_code >= 400 and resp.status_code != 404:
+        texto = (resp.text or "")[:400]
+        return {
+            "success": False,
+            "detail": texto or f"A Evolution recusou apagar a instância (HTTP {resp.status_code}).",
+        }
+
+    res_con = await db.execute(
+        select(Conexao).where(
+            Conexao.empresa_id == empresa_uuid,
+            Conexao.tipo == TipoConexao.EVOLUTION,
+        )
+    )
+    apagadas = 0
+    for conexao in res_con.scalars().all():
+        cred = conexao.credenciais or {}
+        inst_cred = str(cred.get("evolution_instance") or "").strip()
+        # Só remove linhas desta empresa que apontam explicitamente para a instância canónica deste tenant.
+        if conexao.nome_instancia == instance_name or inst_cred == instance_name:
+            await db.delete(conexao)
+            apagadas += 1
+
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        return {"success": False, "detail": f"Instância apagada na Evolution, mas erro ao atualizar a BD: {exc}"}
+
+    return {
+        "success": True,
+        "detail": f"Instância {instance_name} removida. Pode voltar a conectar o WhatsApp.",
+        "instance_name": instance_name,
+        "conexoes_removidas": apagadas,
     }

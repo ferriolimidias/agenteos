@@ -13,6 +13,7 @@ from app.services.evolution_service import (
     evolution_base_url,
     obter_qr_code,
     provisionar_whatsapp_empresa,
+    reset_evolution_whatsapp_empresa,
 )
 from app.schemas import ConexaoCreate, ConexaoResponse, ConexaoUpdate
 from db.database import get_db
@@ -353,6 +354,29 @@ async def provisionar_whatsapp(
         "base64": resultado.get("base64"),
         "detail": resultado.get("detail"),
         "reaproveitada": resultado.get("reaproveitada", False),
+    }
+
+
+@router.post("/reset-evolution-whatsapp", status_code=status.HTTP_200_OK)
+async def reset_evolution_whatsapp(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
+    """
+    Apaga na Evolution API a instância automática wa_<uuid> e remove a Conexão correspondente na BD.
+    """
+    await _buscar_empresa(db, empresa_id)
+    resultado = await reset_evolution_whatsapp_empresa(empresa_id, db)
+    if not resultado.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=resultado.get("detail") or "Não foi possível reiniciar a instância WhatsApp.",
+        )
+    return {
+        "detail": resultado.get("detail"),
+        "instance_name": resultado.get("instance_name"),
+        "conexoes_removidas": resultado.get("conexoes_removidas", 0),
     }
 
 
