@@ -4,10 +4,12 @@ from app.services.websocket_manager import manager
 
 
 router = APIRouter()
+print("Router de WebSockets carregado!")
 
 
 @router.websocket("/empresas/{empresa_id}/ws")
 async def websocket_empresa(websocket: WebSocket, empresa_id: str):
+    print("WebSocket conectado para empresa:", empresa_id)
     await manager.connect(empresa_id, websocket)
     try:
         while True:
