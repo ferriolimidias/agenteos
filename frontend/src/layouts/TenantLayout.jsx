@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
-import { Outlet, Link, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Brain, BookOpenText, Users, Webhook, LogOut, Timer } from "lucide-react";
+import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import {
+  LayoutDashboard,
+  Brain,
+  BookOpenText,
+  Users,
+  Webhook,
+  LogOut,
+  Timer,
+  MessageCircle,
+  Tags,
+} from "lucide-react";
 import api from "../services/api";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
 
@@ -50,86 +60,105 @@ export default function TenantLayout() {
     };
   }, []);
 
+  const navBaseClass =
+    "mx-3 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-200";
+  const navInactiveClass =
+    "text-slate-400 hover:bg-slate-800 hover:text-white";
+  const navActiveClass =
+    "bg-indigo-600 text-white shadow-md";
+
   return (
-    <div className="min-h-screen flex bg-[#0b0b0c] text-gray-100">
+    <div className="min-h-screen flex bg-slate-50 text-slate-900">
       {/* Sidebar */}
-      <aside className="w-64 bg-[#0f0f10] text-white p-5 flex flex-col border-r border-[#2d2d2d]">
-        <div className="mb-8">
+      <aside className="w-72 bg-zinc-950 text-white py-6 flex flex-col border-r border-zinc-800 shadow-2xl">
+        <div className="mb-8 px-5">
           {configVisual.logoBase64 ? (
             <img
               src={configVisual.logoBase64}
               alt="Logo"
-              className="h-12 max-w-[180px] object-contain bg-white rounded-md p-1"
+              className="h-12 max-w-[190px] object-contain rounded-lg bg-white p-1.5"
             />
           ) : (
-            <h2 className="text-xl font-semibold truncate">{configVisual.nomeSistema}</h2>
+            <h2 className="truncate text-xl font-semibold text-white">{configVisual.nomeSistema}</h2>
           )}
-          <span className="text-xs text-gray-400 font-medium tracking-wide">PAINEL CLIENTE</span>
+          <span className="mt-2 inline-block text-xs font-medium tracking-[0.18em] text-slate-400">
+            PAINEL CLIENTE
+          </span>
         </div>
-        
-        <nav className="flex-1 space-y-2">
-          <Link to="/painel" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <LayoutDashboard size={18} />
+
+        <nav className="flex-1 space-y-1.5">
+          <NavLink to="/painel" end className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <LayoutDashboard className="h-5 w-5 shrink-0" />
             <span>Dashboard</span>
-          </Link>
-          <Link to="/painel/agentes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <Brain size={18} />
-            <span>Meus Agentes</span>
-          </Link>
-          <Link to="/painel/followups" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <Timer size={18} />
+          </NavLink>
+          <NavLink to="/painel/chat" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <MessageCircle className="h-5 w-5 shrink-0" />
+            <span>Chat (WhatsApp Web)</span>
+          </NavLink>
+          <NavLink to="/painel/crm" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Users className="h-5 w-5 shrink-0" />
+            <span>Leads / CRM</span>
+          </NavLink>
+          <NavLink to="/painel/tags" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Tags className="h-5 w-5 shrink-0" />
+            <span>Tags</span>
+          </NavLink>
+          <NavLink to="/painel/integracoes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Webhook className="h-5 w-5 shrink-0" />
+            <span>Conexões</span>
+          </NavLink>
+          <NavLink to="/painel/agentes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Brain className="h-5 w-5 shrink-0" />
+            <span>Agente</span>
+          </NavLink>
+          <NavLink to="/painel/followups" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Timer className="h-5 w-5 shrink-0" />
             <span>Cadências / Follow-up</span>
-          </Link>
-          <Link to="/painel/rag" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <BookOpenText size={18} />
+          </NavLink>
+          <NavLink to="/painel/rag" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <BookOpenText className="h-5 w-5 shrink-0" />
             <span>Base de Conhecimento</span>
-          </Link>
-          <Link to="/painel/crm" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <Users size={18} />
-            <span>Leads</span>
-          </Link>
-          <Link to="/painel/integracoes" className="flex items-center space-x-3 text-gray-300 hover:text-white hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <Webhook size={18} />
-            <span>Conexão WhatsApp</span>
-          </Link>
+          </NavLink>
         </nav>
-        
-        <div className="pt-6 border-t border-[#2d2d2d]">
-          <button onClick={handleLogout} className="w-full flex items-center space-x-3 text-red-400 hover:text-red-300 hover:bg-[#1a1a1b] px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-[#2d2d2d]">
-            <LogOut size={18} />
+
+        <div className="mt-6 border-t border-zinc-800 px-3 pt-6">
+          <button onClick={handleLogout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-red-300 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-200">
+            <LogOut className="h-5 w-5 shrink-0" />
             <span>Sair</span>
           </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto flex flex-col bg-[#0b0b0c]">
+      <main className="flex-1 overflow-auto flex flex-col bg-slate-50">
         {isImpersonating && (
-          <div className="bg-emerald-700/70 border-b border-emerald-500/40 text-white px-8 py-2 flex justify-between items-center text-sm font-medium shadow-sm z-10 relative">
+          <div className="relative z-10 flex items-center justify-between border-b border-emerald-200 bg-emerald-50 px-8 py-2 text-sm font-medium text-emerald-800 shadow-sm">
             <span className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse"></span>
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
               Acessando como: <strong>{impersonatingEmpresa}</strong>
             </span>
-            <button 
+            <button
               onClick={handleReturnToAdmin}
-              className="bg-emerald-900/70 hover:bg-emerald-900 px-4 py-1.5 rounded transition-colors flex items-center gap-2"
+              className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-4 py-1.5 text-emerald-700 transition-colors hover:bg-emerald-100"
             >
               <LogOut size={14} /> Sair e Voltar
             </button>
           </div>
         )}
-        <header className="bg-[#101012] border-b border-[#2d2d2d] py-4 px-8 flex justify-between items-center z-0 relative">
-          <h1 className="text-lg font-semibold text-gray-100">
+        <header className="relative z-0 flex items-center justify-between border-b border-slate-200 bg-white px-8 py-4 shadow-sm">
+          <h1 className="text-lg font-medium text-slate-800">
             {user ? `Olá, ${user.nome}` : "Bem-vindo(a)"}
           </h1>
           <div className="flex items-center space-x-4">
-            <div className="w-8 h-8 rounded-full bg-indigo-500/80 overflow-hidden text-white flex items-center justify-center font-bold">
+            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-indigo-600 text-sm font-semibold text-white shadow-sm">
               {user && user.nome ? user.nome.charAt(0).toUpperCase() : "A"}
             </div>
           </div>
         </header>
-        <div className="p-8 max-w-7xl mx-auto w-full">
-          <Outlet />
+        <div className="mx-auto w-full max-w-7xl p-8">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
+            <Outlet />
+          </div>
         </div>
       </main>
     </div>

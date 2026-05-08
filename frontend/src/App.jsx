@@ -20,6 +20,7 @@ import Campanhas from "./pages/tenant/Campanhas";
 import GestaoTags from "./pages/tenant/GestaoTags";
 import Unidades from "./pages/tenant/Unidades";
 import ConfiguracoesConversoes from "./pages/tenant/ConfiguracoesConversoes";
+import api from "./services/api";
 
 function App() {
   useEffect(() => {
@@ -43,11 +44,8 @@ function App() {
 
     const loadGlobalFavicon = async () => {
       try {
-        const response = await fetch("/api/public/configuracoes-branding");
-        if (!response.ok) {
-          return;
-        }
-        const data = await response.json();
+        const response = await api.get("/public/configuracoes-branding");
+        const data = response?.data || {};
         applyFavicon(data?.favicon_base64);
       } catch (error) {
         // Branding é público e opcional: nunca deve impactar estado de autenticação.
@@ -88,6 +86,8 @@ function App() {
         <Route path="agenda" element={<Agenda />} />
         <Route path="simulador" element={<Simulador />} />
         <Route path="inbox" element={<Inbox />} />
+        <Route path="chat" element={<Inbox />} />
+        <Route path="conversas" element={<Inbox />} />
         <Route path="integracoes" element={<Integracoes />} />
         <Route path="transferencias" element={<Transferencias />} />
         <Route path="campanhas" element={<Campanhas />} />
