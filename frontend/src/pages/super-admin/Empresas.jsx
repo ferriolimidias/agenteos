@@ -214,7 +214,7 @@ export default function Empresas() {
   useEffect(() => {
     const tickId = setInterval(() => {
       setNowTick(Date.now());
-    }, 1000);
+    }, 15000);
     return () => {
       clearInterval(tickId);
     };

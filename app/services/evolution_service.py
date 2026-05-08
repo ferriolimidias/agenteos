@@ -16,6 +16,19 @@ def evolution_global_api_key() -> str:
     return (os.getenv("EVOLUTION_API_TOKEN") or "").strip()
 
 
+def webhook_base_url() -> str:
+    """
+    URL pública base do sistema para callbacks externos.
+    Prioriza URL_BASE_DO_SISTEMA e aceita aliases comuns.
+    """
+    return (
+        os.getenv("URL_BASE_DO_SISTEMA")
+        or os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("APP_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+
+
 def _headers_evolution(apikey: str) -> dict:
     return {
         "apikey": str(apikey or "").strip(),
@@ -610,17 +623,37 @@ async def _solicitar_qrcode_connect(
     return None, apikey_primary
 
 
-async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: str, empresa_id: str) -> None:
-    wh_url = f"http://backend:8000/api/webhook/{empresa_id}/evolution"
+def _montar_url_webhook_empresa(empresa_id: str) -> str:
+    base = webhook_base_url() or "http://backend:8000"
+    return f"{base.rstrip('/')}/api/webhook/{empresa_id}/evolution"
+
+
+async def _configurar_webhook_instancia(base: str, instance_name: str, apikey: str, empresa_id: str) -> bool:
+    wh_url = _montar_url_webhook_empresa(empresa_id)
+    payload = {
+        "enabled": True,
+        "url": wh_url,
+        "byEvents": False,
+        "webhook_by_events": False,
+        "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"],
+    }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
-            await client.post(
+            resp = await client.post(
                 f"{base.rstrip('/')}/webhook/set/{instance_name}",
                 headers=_headers_evolution(apikey),
-                json={"url": wh_url, "webhook_by_events": False},
+                json=payload,
             )
+        if resp.status_code >= 400:
+            print(
+                f"[Evolution Service] Falha ao configurar webhook da instância {instance_name} "
+                f"(status={resp.status_code}, body={resp.text[:300]})"
+            )
+            return False
+        return True
     except Exception as exc:
-        print(f"[Evolution Service] Aviso: webhook por instância não configurado ({exc}).")
+        print(f"[Evolution Service] Falha ao configurar webhook por instância ({exc}).")
+        return False
 
 
 def _extrair_token_instancia_criada(payload: dict | None) -> str | None:
@@ -728,7 +761,15 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
                 ),
             }
 
-        await _configurar_webhook_instancia(base, instance_name, key_para_usar, empresa_id)
+        webhook_ok = await _configurar_webhook_instancia(base, instance_name, key_para_usar, empresa_id)
+        if not webhook_ok:
+            return {
+                "success": False,
+                "detail": (
+                    "A instância foi encontrada, mas não foi possível configurar o webhook obrigatório da Evolution. "
+                    "Verifique URL_BASE_DO_SISTEMA no servidor e tente novamente."
+                ),
+            }
 
         conexao = Conexao(
             empresa_id=empresa_uuid,
@@ -781,16 +822,15 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
         except Exception as exc:
             print(f"[Evolution Service] Aviso ao solicitar QR após create: {exc}")
 
-    wh_url = f"http://backend:8000/api/webhook/{empresa_id}/evolution"
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
-            await client.post(
-                f"{base}/webhook/set/{instance_name}",
-                headers=_headers_evolution(gkey or token_inst),
-                json={"url": wh_url, "webhook_by_events": False},
-            )
-    except Exception as exc:
-        print(f"[Evolution Service] Aviso: webhook por instância não configurado ({exc}). Use WEBHOOK_GLOBAL_URL se necessário.")
+    webhook_ok = await _configurar_webhook_instancia(base, instance_name, gkey or token_inst, empresa_id)
+    if not webhook_ok:
+        return {
+            "success": False,
+            "detail": (
+                "Instância criada, mas falhou a configuração do webhook obrigatório da Evolution. "
+                "Verifique URL_BASE_DO_SISTEMA no servidor e tente novamente."
+            ),
+        }
 
     conexao = Conexao(
         empresa_id=empresa_uuid,

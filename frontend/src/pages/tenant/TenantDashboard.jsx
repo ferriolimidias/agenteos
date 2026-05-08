@@ -84,6 +84,7 @@ function CardSkeleton() {
 
 export default function TenantDashboard() {
   const user = getStoredUser();
+  const hasUser = Boolean(user);
   const empresaId = getActiveEmpresaId();
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
@@ -103,7 +104,7 @@ export default function TenantDashboard() {
     let mounted = true;
 
     const carregarDashboard = async ({ silent = false } = {}) => {
-      if (!user || !empresaId) {
+      if (!hasUser || !empresaId) {
         if (mounted) setLoading(false);
         return;
       }
@@ -240,7 +241,7 @@ export default function TenantDashboard() {
       mounted = false;
       window.clearInterval(intervalId);
     };
-  }, [empresaId, user]);
+  }, [empresaId, hasUser]);
 
   const robotBadgeClass = useMemo(
     () =>

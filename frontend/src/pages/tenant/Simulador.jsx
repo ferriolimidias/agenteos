@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { clearImpersonation, getActiveEmpresaId } from "../../utils/auth";
 import api from "../../services/api";
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 15000;
 
 export default function Simulador() {
   const navigate = useNavigate();

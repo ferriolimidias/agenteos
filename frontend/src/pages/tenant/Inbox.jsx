@@ -99,14 +99,15 @@ export default function Inbox() {
     }
   };
 
-  const scheduleFetchLeads = (delayMs = 300) => {
+  const scheduleFetchLeads = (delayMs = 15000) => {
+    const safeDelay = Math.max(10000, Number(delayMs || 0));
     if (leadsRefreshTimerRef.current) {
       window.clearTimeout(leadsRefreshTimerRef.current);
     }
     leadsRefreshTimerRef.current = window.setTimeout(() => {
       leadsRefreshTimerRef.current = null;
       void fetchLeads();
-    }, delayMs);
+    }, safeDelay);
   };
 
   const fetchMessages = async (telefone) => {
@@ -252,7 +253,7 @@ export default function Inbox() {
             const leadPayload = data?.lead || {};
             const leadId = String(leadPayload?.id || data?.lead_id || "");
             if (!leadId) {
-              scheduleFetchLeads(150);
+              scheduleFetchLeads(10000);
               return;
             }
             setLeads((prev) => {
@@ -283,7 +284,7 @@ export default function Inbox() {
                 foto_url: leadPayload?.foto_url || prev.foto_url || null,
               };
             });
-            scheduleFetchLeads(150);
+            scheduleFetchLeads(10000);
             return;
           }
 
@@ -319,7 +320,7 @@ export default function Inbox() {
             });
           }
 
-          scheduleFetchLeads(250);
+          scheduleFetchLeads(10000);
         } catch (err) {
           console.error("Erro ao processar evento websocket do Inbox:", err);
         }
@@ -395,7 +396,7 @@ export default function Inbox() {
 
   useEffect(() => () => {
     if (recordingIntervalRef.current) {
-      window.clearInterval(recordingIntervalRef.current);
+      window.clearTimeout(recordingIntervalRef.current);
       recordingIntervalRef.current = null;
     }
     if (audioStreamRef.current) {
@@ -598,11 +599,15 @@ export default function Inbox() {
       setRecordingTime(0);
       setIsRecording(true);
       if (recordingIntervalRef.current) {
-        window.clearInterval(recordingIntervalRef.current);
+        window.clearTimeout(recordingIntervalRef.current);
       }
-      recordingIntervalRef.current = window.setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      const tickRecording = () => {
+        recordingIntervalRef.current = window.setTimeout(() => {
+          setRecordingTime((prev) => prev + 1);
+          tickRecording();
+        }, 1000);
+      };
+      tickRecording();
     } catch (err) {
       console.error("Erro ao iniciar gravação:", err);
       alert("Não foi possível acessar o microfone. Verifique as permissões do navegador.");
@@ -614,7 +619,7 @@ export default function Inbox() {
     setIsRecording(false);
     setRecordingTime(0);
     if (recordingIntervalRef.current) {
-      window.clearInterval(recordingIntervalRef.current);
+      window.clearTimeout(recordingIntervalRef.current);
       recordingIntervalRef.current = null;
     }
     const recorder = mediaRecorderRef.current;

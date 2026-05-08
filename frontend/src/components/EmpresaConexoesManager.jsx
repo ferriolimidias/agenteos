@@ -159,7 +159,7 @@ export default function EmpresaConexoesManager({
       } catch (err) {
         console.error("Erro no polling de status da conexão:", err);
       }
-    }, 5000);
+    }, 15000);
 
     return () => window.clearInterval(intervalId);
   }, [qrModalConexao]);
