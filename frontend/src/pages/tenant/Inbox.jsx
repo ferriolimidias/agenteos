@@ -261,6 +261,20 @@ export default function Inbox() {
         try {
           const data = JSON.parse(event.data || "{}");
           const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
+          const tipoEventoV2 = String(data?.type || "").toLowerCase();
+
+          if (tipoEventoV2 === "status_ia_changed" || tipoEvento === "status_ia_changed") {
+            const payload = data?.payload || {};
+            const leadId = String(payload?.lead_id || data?.lead_id || "");
+            if (!leadId) return;
+            const iaAtiva = Boolean(payload?.ia_ativa);
+            updateLeadInState(leadId, {
+              ia_ativa: iaAtiva,
+              bot_pausado: !iaAtiva,
+            });
+            return;
+          }
+
           if (tipoEvento === "atualizacao_lead") {
             const leadPayload = data?.lead || {};
             const leadId = String(leadPayload?.id || data?.lead_id || "");

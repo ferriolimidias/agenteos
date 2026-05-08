@@ -10,6 +10,7 @@ import {
   Timer,
   MessageCircle,
   Tags,
+  Megaphone,
 } from "lucide-react";
 import api from "../services/api";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
@@ -114,6 +115,10 @@ export default function TenantLayout() {
           <NavLink to="/painel/followups" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
             <Timer className="h-5 w-5 shrink-0" />
             <span>Cadências / Follow-up</span>
+          </NavLink>
+          <NavLink to="/painel/campanhas" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Megaphone className="h-5 w-5 shrink-0" />
+            <span>Campanhas</span>
           </NavLink>
           <NavLink to="/painel/rag" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
             <BookOpenText className="h-5 w-5 shrink-0" />

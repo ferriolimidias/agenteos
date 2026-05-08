@@ -387,6 +387,7 @@ async def enviar_mensagem(
         )
         db.add(nova_msg)
         lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
+        lead.ia_ativa = False
         await db.commit()
         mensagem_payload = {
             "id": str(nova_msg.id),
@@ -402,6 +403,16 @@ async def enviar_mensagem(
                 "tipo_evento": "nova_mensagem_outbound",
                 "telefone": telefone,
                 "mensagem": mensagem_payload,
+            },
+        )
+        await manager.broadcast_to_empresa(
+            empresa_id,
+            {
+                "type": "STATUS_IA_CHANGED",
+                "payload": {
+                    "lead_id": str(lead.id),
+                    "ia_ativa": False,
+                },
             },
         )
         
@@ -497,7 +508,19 @@ async def enviar_midia(
             session.add(nova_msg)
 
             lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
+            lead.ia_ativa = False
             await session.commit()
+
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "type": "STATUS_IA_CHANGED",
+                    "payload": {
+                        "lead_id": str(lead.id),
+                        "ia_ativa": False,
+                    },
+                },
+            )
 
             return {"status": "success", "tipo_mensagem": tipo_mensagem}
     except HTTPException:
