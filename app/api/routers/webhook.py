@@ -259,36 +259,34 @@ async def save_history_and_check_pause(
             conexao_uuid = uuid.UUID(conexao_id) if conexao_id else None
         except (ValueError, TypeError):
             conexao_uuid = None
-        result = await session.execute(
-            select(CRMLead).where(CRMLead.empresa_id == empresa_uuid, CRMLead.telefone_contato == telefone)
+        # ── UPSERT seguro via app.services.lead_service ─────────────────────
+        # Centraliza criação/busca de lead com advisory lock para impedir
+        # duplicação por race condition (mensagens em paralelo do mesmo número).
+        from app.services.lead_service import (
+            get_or_create_lead,
+            precisa_atualizar_nome,
+            sanitize_telefone,
         )
-        lead = result.scalars().first()
+
         nome_contato_limpo = str(nome_contato or "").strip()
-        nome_fallback = nome_contato_limpo or telefone or "Usuário (Auto)"
         profile_pic_limpa = str(profile_pic_url or "").strip() or None
         agora = datetime.utcnow()
+        telefone_sanitizado = sanitize_telefone(telefone)
 
-        # GET OR CREATE obrigatório do Lead
-        if not lead:
-            result_etapa = await session.execute(
-                select(CRMEtapa.id)
-                .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
-                .where(CRMFunil.empresa_id == empresa_uuid)
-                .order_by(CRMEtapa.ordem.asc())
-            )
-            primeira_etapa_id = result_etapa.scalars().first()
-            lead = CRMLead(
-                empresa_id=empresa_uuid,
-                nome_contato=nome_fallback,
-                telefone_contato=telefone,
-                etapa_id=primeira_etapa_id,
-                foto_url=profile_pic_limpa,
-                foto_atualizada_em=agora if profile_pic_limpa else None,
-                gclid=gclid,
-                fbclid=fbclid,
-            )
-            session.add(lead)
-            await session.flush()
+        lead, lead_criado = await get_or_create_lead(
+            session,
+            empresa_id=empresa_uuid,
+            telefone=telefone,
+            nome_inicial=nome_contato_limpo or telefone_sanitizado or "Usuário (Auto)",
+            extras={
+                "foto_url": profile_pic_limpa,
+                "foto_atualizada_em": agora if profile_pic_limpa else None,
+                "gclid": gclid,
+                "fbclid": fbclid,
+            },
+        )
+
+        if lead_criado:
             await session.commit()
             await session.refresh(lead)
             lead_criado_ou_identidade_atualizada = True
@@ -299,21 +297,9 @@ async def save_history_and_check_pause(
                 "foto_url": str(lead.foto_url) if lead.foto_url else None,
             }
         else:
-            nome_atual = str(lead.nome_contato or "").strip()
-            nome_atual_digitos = re.sub(r"\D", "", nome_atual)
-            telefone_digitos = re.sub(r"\D", "", str(telefone or ""))
-            nome_eh_apenas_numero = bool(nome_atual_digitos) and bool(re.fullmatch(r"[\d\+\-\(\)\s]+", nome_atual))
-            nome_eh_numero_do_contato = bool(telefone_digitos) and (nome_atual_digitos == telefone_digitos)
-            nome_precisa_atualizar = (
-                not nome_atual
-                or nome_atual == "Usuário (Auto)"
-                or nome_eh_apenas_numero
-                or nome_eh_numero_do_contato
-            )
-
             lead_alterado = False
             identidade_lead_atualizada = False
-            if nome_contato_limpo and nome_precisa_atualizar:
+            if nome_contato_limpo and precisa_atualizar_nome(lead.nome_contato, telefone_sanitizado):
                 lead.nome_contato = nome_contato_limpo
                 lead_alterado = True
                 identidade_lead_atualizada = True

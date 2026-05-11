@@ -1472,60 +1472,55 @@ async def node_crm(state: AgentState):
             state["lead_id"] = str(lead.id)
             print(f"[NODE CRM] Lead existente encontrado. ID: {state['lead_id']}")
         else:
-            print(f"[NODE CRM] Lead não encontrado. Iniciando criação automática...")
-            
+            print(f"[NODE CRM] Lead não encontrado. Iniciando criação automática via lead_service...")
+
             nome_recebido = str(state.get("nome_contato") or "").strip()
             possivel_nome = nome_recebido or "Usuário (Auto)"
-            if "novo" in origem.lower(): 
-                possivel_nome = nome_recebido or None
 
             try:
-                # Buscar o funil padrao ou criar se não existir
+                # Garante que existe um funil padrão antes de tentar criar o lead
+                # (a helper get_or_create_lead resolve a etapa, mas o funil padrão
+                # precisa existir caso a empresa ainda nunca tenha aberto o CRM).
                 result_funil = await session.execute(
                     select(CRMFunil)
                     .where(CRMFunil.empresa_id == empresa_id)
                     .options(selectinload(CRMFunil.etapas))
                 )
                 funil = result_funil.scalars().first()
-                
-                etapa_inicial_id = None
-                
-                if funil and funil.etapas:
-                    # Pega a primeira etapa (ordem)
-                    etapa_inicial = min(funil.etapas, key=lambda x: x.ordem)
-                    etapa_inicial_id = etapa_inicial.id
-                elif not funil:
-                    # Precisa criar o funil padrao aqui também caso chegue a msg antes do admin abrir o relatorio
+                if not funil:
                     novo_funil = CRMFunil(empresa_id=empresa_id, nome="Pipeline Padrão")
                     session.add(novo_funil)
                     await session.flush()
-                    
-                    etapa_padrao = CRMEtapa(funil_id=novo_funil.id, nome="Novo Lead", ordem=1)
-                    session.add(etapa_padrao)
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Novo Lead", ordem=1))
                     session.add(CRMEtapa(funil_id=novo_funil.id, nome="Em Atendimento", ordem=2))
                     session.add(CRMEtapa(funil_id=novo_funil.id, nome="Fechado", ordem=3))
                     await session.flush()
-                    
-                    etapa_inicial_id = etapa_padrao.id
-                
-                # Criar Lead
+
+                # UPSERT centralizado (advisory lock + sanitização de telefone)
+                from app.services.lead_service import get_or_create_lead
+
+                import uuid
+
+                try:
+                    conexao_uuid = uuid.UUID(str(state.get("conexao_id"))) if state.get("conexao_id") else None
+                except (ValueError, TypeError):
+                    conexao_uuid = None
+
                 if possivel_nome:
-                    import uuid
-
-                    try:
-                        conexao_uuid = uuid.UUID(str(state.get("conexao_id"))) if state.get("conexao_id") else None
-                    except (ValueError, TypeError):
-                        conexao_uuid = None
-
-                    novo_lead = CRMLead(
+                    novo_lead, foi_criado = await get_or_create_lead(
+                        session,
                         empresa_id=empresa_id,
-                        telefone_contato=origem,
-                        nome_contato=possivel_nome,
-                        etapa_id=etapa_inicial_id,
-                        historico_resumo="Lead capturado automaticamente via integração."
+                        telefone=origem,
+                        nome_inicial=possivel_nome,
+                        historico_resumo_inicial="Lead capturado automaticamente via integração.",
                     )
-                    session.add(novo_lead)
-                    await session.flush()
+
+                    if not foi_criado:
+                        # Outro caminho (ex.: webhook.save_history_and_check_pause)
+                        # já criou o lead antes da gente. Apenas usamos.
+                        print(
+                            f"[NODE CRM] Lead encontrado durante UPSERT concorrente. ID: {novo_lead.id}"
+                        )
 
                     primeira_msg_inbound = None
                     for texto_inbound in mensagens_pendentes:
@@ -1541,10 +1536,11 @@ async def node_crm(state: AgentState):
 
                     await session.commit()
                     await session.refresh(novo_lead)
-                    
+
                     state["nome_contato"] = novo_lead.nome_contato
                     state["lead_id"] = str(novo_lead.id)
-                    print(f"[NODE CRM] Novo Lead criado com sucesso. ID: {state['lead_id']}")
+                    if foi_criado:
+                        print(f"[NODE CRM] Novo Lead criado com sucesso. ID: {state['lead_id']}")
 
                 else:
                     state["nome_contato"] = None
@@ -2469,12 +2465,16 @@ async def node_especialista_saudacao(state: AgentState):
     print("[NODE ESPECIALISTA SAUDACAO] Gerando saudação inicial dedicada...")
     import uuid
 
+    from app.services.lead_service import classificar_nome_contato
+
     empresa_id = state.get("empresa_id")
     ultima_mensagem = _ultima_mensagem_cliente(state)
     historico_global = str(state.get("historico_bd") or "").strip() or "(sem histórico global)"
 
     saudacao_base_empresa = ""
     prompt_painel = ""
+    nome_sistema = ""
+    lead_id_state = str(state.get("lead_id") or "").strip()
     if empresa_id:
         try:
             empresa_uuid = uuid.UUID(str(empresa_id))
@@ -2492,31 +2492,83 @@ async def node_especialista_saudacao(state: AgentState):
                 esp_db = result_esp.scalars().first()
                 if esp_db and esp_db.prompt_sistema:
                     prompt_painel = esp_db.prompt_sistema
+
+                # Recupera o nome JÁ NORMALIZADO/CAPTURADO pelo sistema. Damos
+                # prioridade à BD (fonte de verdade do CRM) e caímos no state
+                # apenas se o lead ainda não tiver sido criado.
+                if lead_id_state:
+                    try:
+                        lead_uuid = uuid.UUID(lead_id_state)
+                        res_lead = await session.execute(
+                            select(CRMLead).where(CRMLead.id == lead_uuid)
+                        )
+                        lead_atual = res_lead.scalars().first()
+                        if lead_atual:
+                            nome_sistema = str(lead_atual.nome_contato or "").strip()
+                    except (ValueError, TypeError):
+                        pass
         except Exception as e:
             logger.error("[NODE ESPECIALISTA SAUDACAO] Falha ao carregar empresa %s: %s", empresa_id, e)
 
+    if not nome_sistema:
+        nome_sistema = str(state.get("nome_contato") or "").strip()
+
+    tipo_nome = classificar_nome_contato(nome_sistema)
+    print(
+        f"[NODE ESPECIALISTA SAUDACAO] nome_sistema='{nome_sistema}' "
+        f"tipo_nome='{tipo_nome}'"
+    )
+
     hora_atual = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M")
-    
+
     # Validação do momento da conversa
     primeiro_contato = _is_primeiro_contato(state)
-    
+
     if primeiro_contato:
         regra_mensagem_base = (
-            "MENSAGEM BASE DA EMPRESA OBRIGATÓRIA (COPIE-A LITERALMENTE):\n"
-            f"{saudacao_base_empresa}\n\n"
-            "REGRA CRÍTICA: Você DEVE incluir a MENSAGEM BASE DA EMPRESA na sua resposta final exatamente como ela está escrita. Se ela contiver um menu numérico, não o resuma e não altere a estrutura.\n"
+            "MENSAGEM_SAUDACAO_OFICIAL (frase oficial cadastrada pelo cliente no painel — COPIE LITERALMENTE no início da resposta):\n"
+            f"\"\"\"\n{saudacao_base_empresa or '(não cadastrada — improvise uma saudação curta e cordial)'}\n\"\"\"\n\n"
+            "REGRA CRÍTICA 1 (SAUDAÇÃO OFICIAL): Você DEVE começar a resposta reproduzindo a MENSAGEM_SAUDACAO_OFICIAL EXATAMENTE como cadastrada acima. Se ela contiver um menu numérico, NÃO o resuma e NÃO altere a estrutura.\n"
         )
     else:
         regra_mensagem_base = (
-            "REGRA CRÍTICA: O cliente enviou uma saudação ou mensagem curta no MEIO de uma conversa em andamento.\n"
+            "REGRA CRÍTICA 1 (CONVERSA EM ANDAMENTO): O cliente enviou uma saudação ou mensagem curta no MEIO de uma conversa em andamento.\n"
             "NÃO reenvie a mensagem de boas-vindas padrão nem o menu inicial. Responda de forma natural, curta e empática, baseando-se no contexto das mensagens anteriores.\n"
+        )
+
+    # ── Regras hierárquicas de identidade (PF vs PJ vs indeterminado) ────────
+    if tipo_nome == "pessoa_fisica":
+        regra_identidade = (
+            "REGRA CRÍTICA 2 (IDENTIDADE — PESSOA FÍSICA):\n"
+            f"O sistema já identificou que o nome do contato é \"{nome_sistema}\" e é PROVAVELMENTE um nome de pessoa real.\n"
+            "Você NÃO deve perguntar o nome. Cumprimente o cliente pelo primeiro nome de forma natural.\n"
+            "Em seguida, conclua a triagem: chame a ferramenta `tool_consultar_tags_empresa`, localize a tag \"[Triagem Concluída]\" e chame `tool_aplicar_tag_dinamica` com o tag_id correspondente. Não invente IDs.\n"
+            "Depois faça UMA pergunta curta para descobrir o que ele precisa, para o roteador encaminhar ao especialista certo.\n"
+        )
+    elif tipo_nome == "pessoa_juridica":
+        regra_identidade = (
+            "REGRA CRÍTICA 2 (IDENTIDADE — NOME PARECE EMPRESA):\n"
+            f"O sistema identificou que o contato está cadastrado como \"{nome_sistema}\", mas isso parece ser o nome de uma EMPRESA, não de uma pessoa.\n"
+            "Pergunte de forma cordial: \"Com quem eu falo?\" (ou variação natural).\n"
+            "Assim que o cliente confirmar o nome dele, chame OBRIGATORIAMENTE a ferramenta `tool_atualizar_nome_lead` para atualizar o CRM com o nome da pessoa física.\n"
+            "Não conclua a triagem antes de confirmar a identidade.\n"
+        )
+    else:
+        regra_identidade = (
+            "REGRA CRÍTICA 2 (IDENTIDADE — INDETERMINADO):\n"
+            f"O sistema não conseguiu identificar com clareza o nome do contato (valor atual: \"{nome_sistema or '(vazio)'}\").\n"
+            "Pergunte de forma educada e curta: \"Como prefere ser chamado(a)?\" ou \"Com quem eu falo?\".\n"
+            "Quando o cliente responder com o nome, chame OBRIGATORIAMENTE a ferramenta `tool_atualizar_nome_lead` com o nome confirmado.\n"
         )
 
     prompt_saudacao = (
         f"{prompt_painel}\n\n"
         "--- DADOS DE SISTEMA OBRIGATÓRIOS (USE-OS PARA RESPONDER O CLIENTE) ---\n"
         f"Agora são {hora_atual}.\n"
+        f"NOME_IDENTIFICADO_PELO_SISTEMA: \"{nome_sistema or '(vazio)'}\"\n"
+        f"TIPO_NOME_DETECTADO: {tipo_nome}\n"
         f"{regra_mensagem_base}"
+        f"{regra_identidade}"
         f"Considere este histórico global apenas para leitura contextual: {historico_global}.\n"
         "-----------------------------------------------------------------------\n"
     )
