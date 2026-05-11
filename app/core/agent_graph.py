@@ -1621,6 +1621,9 @@ async def node_atendente(state: AgentState):
 
     ia_personalidade = str(getattr(empresa, "ia_personalidade", "") or "").strip()
     ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
+    mensagem_saudacao_empresa = (
+        str(getattr(empresa, "mensagem_saudacao", "") or "").strip() if empresa else ""
+    )
     prompt_base_config = "\n\n".join(
         [bloco for bloco in [ia_personalidade, ia_regras_negocio] if bloco]
     ).strip()
@@ -1640,8 +1643,18 @@ async def node_atendente(state: AgentState):
     objetivo_atual = str(state.get("objetivo_atual") or "").strip() or "(não definido)"
     proxima_acao = str(state.get("proxima_acao") or "").strip() or "(não definida)"
 
-    prompt_final = f"""{prompt_base_config}
+    bloco_saudacao_atendente = ""
+    if mensagem_saudacao_empresa:
+        bloco_saudacao_atendente = (
+            "\n<saudacao_oficial_empresa>\n"
+            "Conteúdo da Saudação Oficial (texto cadastrado no painel; quando for adequado ao momento da conversa, "
+            "preserve-o literalmente na sua mensagem ao cliente — sem parafrasear):\n"
+            f"{json.dumps(mensagem_saudacao_empresa, ensure_ascii=False)}\n"
+            "</saudacao_oficial_empresa>\n"
+        )
 
+    prompt_final = f"""{prompt_base_config}
+{bloco_saudacao_atendente}
 <contexto_funil>
 etapa_funil: {etapa_funil}
 objetivo_atual: {objetivo_atual}
@@ -1712,6 +1725,7 @@ async def node_agente_condutor(state: AgentState):
 
         condutor_ativo = bool(getattr(empresa, "condutor_ativo", False))
         condutor_prompt = str(getattr(empresa, "condutor_prompt", "") or "").strip()
+        mensagem_saudacao = str(getattr(empresa, "mensagem_saudacao", "") or "").strip()
 
         tags_lead_nomes: list[str] = []
         etapa_atual_por_tag: str | None = None
@@ -1766,10 +1780,20 @@ async def node_agente_condutor(state: AgentState):
                 state["etapa_funil"] = etapa_atual_por_tag
             return state
 
+        contexto_saudacao_condutor = ""
+        if mensagem_saudacao:
+            contexto_saudacao_condutor = (
+                "\nReferência fixa da empresa — Saudação oficial cadastrada no painel (esta é a redação que o cliente deve ver "
+                "nos primeiros contatos; o atendente deve repassá-la literalmente quando aplicável, sem resumir):\n"
+                f"{json.dumps(mensagem_saudacao, ensure_ascii=False)}\n"
+            )
+
         prompt_sistema = (
-            f"{condutor_prompt}\n\n"
+            f"{condutor_prompt}\n"
+            f"{contexto_saudacao_condutor}\n"
             "Instrução técnica: retorne somente os campos estruturados "
-            "'etapa_funil', 'objetivo_atual' e 'proxima_acao'."
+            "'etapa_funil', 'objetivo_atual' e 'proxima_acao'. "
+            "Não inclua a saudação oficial na sua saída estruturada; apenas use esta referência para alinhar etapa, objetivo e próxima ação.\n"
         )
         contexto_usuario = (
             f"Historico completo:\n{historico}\n\n"
@@ -2525,11 +2549,25 @@ async def node_especialista_saudacao(state: AgentState):
     primeiro_contato = _is_primeiro_contato(state)
 
     if primeiro_contato:
-        regra_mensagem_base = (
-            "MENSAGEM_SAUDACAO_OFICIAL (frase oficial cadastrada pelo cliente no painel — COPIE LITERALMENTE no início da resposta):\n"
-            f"\"\"\"\n{saudacao_base_empresa or '(não cadastrada — improvise uma saudação curta e cordial)'}\n\"\"\"\n\n"
-            "REGRA CRÍTICA 1 (SAUDAÇÃO OFICIAL): Você DEVE começar a resposta reproduzindo a MENSAGEM_SAUDACAO_OFICIAL EXATAMENTE como cadastrada acima. Se ela contiver um menu numérico, NÃO o resuma e NÃO altere a estrutura.\n"
-        )
+        # Injeção explícita do texto real (evita rótulos tipo VARIAVEL que o modelo ecoa literalmente).
+        if saudacao_base_empresa:
+            bloco_conteudo_saudacao = (
+                "Conteúdo da Saudação Oficial (texto exato cadastrado no painel da empresa; JSON string único abaixo):\n"
+                f"{json.dumps(saudacao_base_empresa, ensure_ascii=False)}\n\n"
+            )
+            regra_mensagem_base = (
+                bloco_conteudo_saudacao
+                + "REGRA CRÍTICA 1 (SAUDAÇÃO): Comece sua mensagem ao cliente reproduzindo literalmente o texto "
+                "definido acima em «Conteúdo da Saudação Oficial» (o valor JSON entre aspas). "
+                "Não parafraseie, não resuma e não prefixe com frases como 'a mensagem oficial é'. "
+                "Se houver menu numérico, mantenha a estrutura exata.\n"
+            )
+        else:
+            regra_mensagem_base = (
+                "Conteúdo da Saudação Oficial: (vazio — não há texto cadastrado no painel para esta empresa.)\n\n"
+                "REGRA CRÍTICA 1 (SAUDAÇÃO): Como não há saudação oficial cadastrada, abra com uma saudação curta e cordial "
+                "adequada ao tom da empresa; em seguida siga as demais regras deste prompt.\n"
+            )
     else:
         regra_mensagem_base = (
             "REGRA CRÍTICA 1 (CONVERSA EM ANDAMENTO): O cliente enviou uma saudação ou mensagem curta no MEIO de uma conversa em andamento.\n"

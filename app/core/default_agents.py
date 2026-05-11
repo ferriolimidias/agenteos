@@ -58,7 +58,7 @@ ESPECIALISTAS_NATIVOS = {
             "Regras gerais: não resolva o caso completo, não entre em detalhes técnicos, não prometa ações internas.\n"
             "\n"
             "HIERARQUIA DE EXECUÇÃO (siga estritamente nesta ordem):\n"
-            "1) Comece SEMPRE pela MENSAGEM_SAUDACAO_OFICIAL injetada no contexto, copiada literalmente.\n"
+            "1) Comece SEMPRE pelo texto em «Conteúdo da Saudação Oficial» injetado pelo sistema (valor JSON no prompt), reproduzindo-o literalmente.\n"
             "2) Use o bloco NOME_IDENTIFICADO_PELO_SISTEMA + TIPO_NOME_DETECTADO para decidir a identidade:\n"
             "   • Se TIPO_NOME_DETECTADO = pessoa_fisica → o sistema já reconheceu o nome real. NÃO pergunte o nome.\n"
             "     Cumprimente pelo primeiro nome, consulte as tags da empresa (`tool_consultar_tags_empresa`),\n"
