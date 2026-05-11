@@ -73,6 +73,7 @@ export default function Conexoes() {
   const [webhookMessage, setWebhookMessage] = useState(null);
 
   const pollIntervalRef = useRef(null);
+  const conexaoRef = useRef(null);
 
   const showToast = useCallback((type, message) => {
     setToast({ type, message });
@@ -95,14 +96,16 @@ export default function Conexoes() {
     return "disconnected";
   };
 
-  const fetchConexaoEvolution = useCallback(async () => {
-    if (!empresa_id) {
+  const fetchConexaoEvolution = useCallback(async (empresaIdAlvo) => {
+    const alvo = empresaIdAlvo || empresa_id;
+    if (!alvo) {
       return null;
     }
     try {
-      const res = await api.get(`/empresas/${empresa_id}/conexoes/`);
+      const res = await api.get(`/empresas/${alvo}/conexoes/`);
       const lista = Array.isArray(res.data) ? res.data : [];
       const whats = lista.find((item) => item.tipo === "evolution") || null;
+      conexaoRef.current = whats;
       setConexao(whats);
       return whats;
     } catch (err) {
@@ -111,52 +114,37 @@ export default function Conexoes() {
     }
   }, [empresa_id]);
 
-  const fetchStatus = useCallback(
-    async (conexaoAtual) => {
-      const alvo = conexaoAtual || conexao;
-      if (!alvo?.id) {
-        setWhatsStatus("disconnected");
-        setStatusLoading(false);
-        return "disconnected";
-      }
-      try {
-        const res = await api.get(`/conexoes/status/${alvo.id}`);
-        const normalizado = normalizeStatus(res.data?.status, res.data?.online);
-        setWhatsStatus(normalizado);
-        return normalizado;
-      } catch (err) {
-        console.error("Erro ao consultar status do WhatsApp:", err);
-        setWhatsStatus("disconnected");
-        return "disconnected";
-      } finally {
-        setStatusLoading(false);
-      }
-    },
-    [conexao]
-  );
+  const fetchStatus = useCallback(async (conexaoAtual) => {
+    const alvo = conexaoAtual || conexaoRef.current;
+    if (!alvo?.id) {
+      setWhatsStatus("disconnected");
+      setStatusLoading(false);
+      return "disconnected";
+    }
+    try {
+      const res = await api.get(`/conexoes/status/${alvo.id}`);
+      const normalizado = normalizeStatus(res.data?.status, res.data?.online);
+      setWhatsStatus(normalizado);
+      return normalizado;
+    } catch (err) {
+      console.error("Erro ao consultar status do WhatsApp:", err);
+      setWhatsStatus("disconnected");
+      return "disconnected";
+    } finally {
+      setStatusLoading(false);
+    }
+  }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const init = async () => {
-      if (!empresa_id) {
-        setStatusLoading(false);
-        return;
-      }
-      setStatusLoading(true);
-      const whats = await fetchConexaoEvolution();
-      if (!cancelled) {
-        await fetchStatus(whats);
-      }
-    };
-    init();
-    return () => {
-      cancelled = true;
-    };
-  }, [empresa_id, fetchConexaoEvolution, fetchStatus]);
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
 
   const startPolling = useCallback(
     (conexaoAlvo) => {
-      const alvo = conexaoAlvo || conexao;
+      const alvo = conexaoAlvo || conexaoRef.current;
       if (!alvo?.id) return;
       if (pollIntervalRef.current) {
         window.clearInterval(pollIntervalRef.current);
@@ -175,15 +163,30 @@ export default function Conexoes() {
         }
       }, POLL_INTERVAL_MS);
     },
-    [conexao, fetchStatus, showToast]
+    [fetchStatus, showToast]
   );
 
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      window.clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-  }, []);
+  // Carga inicial: roda APENAS quando empresa_id muda. As funções memoizadas
+  // são estáveis ou intencionalmente omitidas para evitar loop infinito.
+  useEffect(() => {
+    let cancelled = false;
+    const init = async () => {
+      if (!empresa_id) {
+        setStatusLoading(false);
+        return;
+      }
+      setStatusLoading(true);
+      const whats = await fetchConexaoEvolution(empresa_id);
+      if (!cancelled) {
+        await fetchStatus(whats);
+      }
+    };
+    init();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empresa_id]);
 
   useEffect(() => {
     return () => {
@@ -267,8 +270,15 @@ export default function Conexoes() {
     try {
       const res = await api.post(`/empresas/${empresa_id}/conexoes/logout-whatsapp`);
       showToast("success", res.data?.detail || "WhatsApp desconectado com sucesso.");
-      const whats = await fetchConexaoEvolution();
-      await fetchStatus(whats);
+      // Força o estado local sem refazer fetch (evita engatilhar loops/polling).
+      setWhatsStatus("disconnected");
+      setStatusLoading(false);
+      setConexao((prev) => {
+        if (!prev) return prev;
+        const atualizado = { ...prev, status: "disconnected" };
+        conexaoRef.current = atualizado;
+        return atualizado;
+      });
     } catch (err) {
       console.error("Erro ao desconectar WhatsApp:", err);
       const detail =
@@ -276,6 +286,7 @@ export default function Conexoes() {
       showToast("error", typeof detail === "string" ? detail : "Erro ao desconectar.");
     } finally {
       setLogoutLoading(false);
+      setStatusLoading(false);
     }
   };
 
