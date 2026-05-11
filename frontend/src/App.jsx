@@ -15,6 +15,7 @@ import Agenda from "./pages/tenant/Agenda";
 import Simulador from "./pages/tenant/Simulador";
 import Inbox from "./pages/tenant/Inbox";
 import Integracoes from "./pages/tenant/Integracoes";
+import Conexoes from "./pages/tenant/Conexoes";
 import Transferencias from "./pages/tenant/Transferencias";
 import Campanhas from "./pages/tenant/Campanhas";
 import GestaoTags from "./pages/tenant/GestaoTags";
@@ -88,6 +89,7 @@ function App() {
         <Route path="inbox" element={<Inbox />} />
         <Route path="chat" element={<Inbox />} />
         <Route path="conversas" element={<Inbox />} />
+        <Route path="conexoes" element={<Conexoes />} />
         <Route path="integracoes" element={<Integracoes />} />
         <Route path="transferencias" element={<Transferencias />} />
         <Route path="campanhas" element={<Campanhas />} />

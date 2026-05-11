@@ -104,7 +104,7 @@ export default function TenantLayout() {
             <Tags className="h-5 w-5 shrink-0" />
             <span>Tags</span>
           </NavLink>
-          <NavLink to="/painel/integracoes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+          <NavLink to="/painel/conexoes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
             <Webhook className="h-5 w-5 shrink-0" />
             <span>Conexões</span>
           </NavLink>

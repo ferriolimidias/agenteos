@@ -901,6 +901,83 @@ async def provisionar_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dic
     }
 
 
+async def logout_evolution_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dict:
+    """
+    Faz logout (encerra a sessão WhatsApp) da instância automática do tenant na Evolution
+    sem apagar a instância. Mantém a Conexão no BD para permitir reconectar com novo QR Code.
+
+    Isolamento: o segmento do POST é derivado exclusivamente do empresa_id autenticado.
+    """
+    base = evolution_base_url()
+    gkey = evolution_global_api_key()
+    if not base or not gkey:
+        return {"success": False, "detail": "Defina EVOLUTION_API_URL e EVOLUTION_API_TOKEN no servidor."}
+
+    try:
+        empresa_uuid = UUID(str(empresa_id))
+    except ValueError:
+        return {"success": False, "detail": "Identificador de empresa inválido."}
+
+    try:
+        instance_name = _nome_instancia_padrao_empresa(empresa_uuid)
+    except ValueError as exc:
+        return {"success": False, "detail": str(exc)}
+
+    res_con = await db.execute(
+        select(Conexao).where(
+            Conexao.empresa_id == empresa_uuid,
+            Conexao.tipo == TipoConexao.EVOLUTION,
+        )
+    )
+    conexoes = res_con.scalars().all()
+    if not conexoes:
+        return {"success": False, "detail": "Não há conexão WhatsApp configurada para esta empresa."}
+
+    nome_alvo = None
+    for conexao in conexoes:
+        cred = conexao.credenciais or {}
+        inst_cred = str(cred.get("evolution_instance") or "").strip()
+        if conexao.nome_instancia == instance_name or inst_cred == instance_name:
+            nome_alvo = inst_cred or conexao.nome_instancia
+            break
+
+    if not nome_alvo:
+        primeira = conexoes[0]
+        cred = primeira.credenciais or {}
+        nome_alvo = str(cred.get("evolution_instance") or primeira.nome_instancia or instance_name).strip()
+
+    root = base.rstrip("/")
+    url_logout = f"{root}/instance/logout/{nome_alvo}"
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True) as client:
+            resp = await client.delete(url_logout, headers={"apikey": gkey})
+    except Exception as exc:
+        return {"success": False, "detail": f"Falha ao contactar a Evolution: {exc}"}
+
+    if resp.status_code >= 400 and resp.status_code not in (404, 409):
+        texto = (resp.text or "")[:400]
+        return {
+            "success": False,
+            "detail": texto or f"A Evolution recusou o logout da instância (HTTP {resp.status_code}).",
+        }
+
+    for conexao in conexoes:
+        conexao.status = "disconnected"
+
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        return {"success": False, "detail": f"Logout efetuado na Evolution, mas erro ao atualizar a BD: {exc}"}
+
+    return {
+        "success": True,
+        "detail": "Sessão WhatsApp encerrada. Use «Conectar WhatsApp» para escanear um novo QR Code quando precisar.",
+        "instance_name": nome_alvo,
+    }
+
+
 async def reset_evolution_whatsapp_empresa(empresa_id: str, db: AsyncSession) -> dict:
     """
     Remove apenas a instância Evolution automática deste tenant (wa_<uuid da empresa>).

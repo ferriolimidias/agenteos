@@ -11,6 +11,7 @@ from app.api.routers.empresas import require_ia_config_access
 from app.services.evolution_service import (
     consultar_status_conexao,
     evolution_base_url,
+    logout_evolution_whatsapp_empresa,
     obter_qr_code,
     provisionar_whatsapp_empresa,
     reset_evolution_whatsapp_empresa,
@@ -354,6 +355,29 @@ async def provisionar_whatsapp(
         "base64": resultado.get("base64"),
         "detail": resultado.get("detail"),
         "reaproveitada": resultado.get("reaproveitada", False),
+    }
+
+
+@router.post("/logout-whatsapp", status_code=status.HTTP_200_OK)
+async def logout_whatsapp(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_ia_config_access),
+):
+    """
+    Encerra a sessão WhatsApp (logout) da instância automática do tenant na Evolution,
+    sem apagar a instância. Permite reconectar via QR Code logo em seguida.
+    """
+    await _buscar_empresa(db, empresa_id)
+    resultado = await logout_evolution_whatsapp_empresa(empresa_id, db)
+    if not resultado.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=resultado.get("detail") or "Não foi possível desconectar o WhatsApp.",
+        )
+    return {
+        "detail": resultado.get("detail"),
+        "instance_name": resultado.get("instance_name"),
     }
 
 
