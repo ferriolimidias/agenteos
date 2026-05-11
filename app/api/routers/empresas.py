@@ -275,58 +275,6 @@ async def _garantir_etapa_inicial_crm(db: AsyncSession, empresa_uuid: uuid.UUID)
     return etapa_inicial.id
 
 
-TAG_TRIAGEM_CONCLUIDA = "[Triagem Concluída]"
-
-
-async def _garantir_tag_triagem_concluida_seed(session: AsyncSession, empresa_uuid: uuid.UUID) -> None:
-    """
-    Garante que exista a tag oficial usada pelo agente de saudação para marcar
-    triagem concluída (tool_aplicar_tag_dinamica).
-    """
-    nome_tag = TAG_TRIAGEM_CONCLUIDA
-    result_tag = await session.execute(
-        select(TagCRM).where(
-            TagCRM.empresa_id == empresa_uuid,
-            TagCRM.nome == nome_tag,
-        )
-    )
-    if result_tag.scalars().first():
-        return
-
-    result_grupo = await session.execute(
-        select(TagGroup).where(
-            TagGroup.empresa_id == empresa_uuid,
-            TagGroup.nome.ilike("Sistema"),
-        )
-    )
-    grupo = result_grupo.scalars().first()
-    if not grupo:
-        grupo = TagGroup(
-            empresa_id=empresa_uuid,
-            nome="Sistema",
-            cor="#64748b",
-            ordem=0,
-        )
-        session.add(grupo)
-        await session.flush()
-
-    tag = TagCRM(
-        empresa_id=empresa_uuid,
-        grupo_id=grupo.id,
-        nome=nome_tag,
-        cor="#22c55e",
-        tipo="comportamento",
-        ordem=0,
-        ativa_no_funil=False,
-        instrucao_ia=(
-            "Aplicada automaticamente pelo agente de saudação quando o nome do "
-            "contato já foi identificado como pessoa física e não é necessário "
-            "perguntar novamente."
-        ),
-    )
-    session.add(tag)
-
-
 async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
     async with AsyncSessionLocal() as session:
         try:
@@ -367,11 +315,6 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                 session.add(especialista)
                 
             await session.commit()
-
-            # 3. Tag usada pelo especialista_saudacao (evita falha ao aplicar triagem)
-            await _garantir_tag_triagem_concluida_seed(session, empresa_id)
-            await session.commit()
-
             print(f"Setup automático concluído para a empresa {empresa_id}")
         except Exception as e:
             await session.rollback()

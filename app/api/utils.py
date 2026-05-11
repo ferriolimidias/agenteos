@@ -427,6 +427,8 @@ async def processar_bloco_mensagens(
         "etapas_concluidas": [],
         "objetivo_atual": None,
         "proxima_acao": None,
+        "termos_busca_condutor": [],
+        "search_terms_condutor": [],
     }
 
     if lead_id_hist and total_msgs_historico > 0:
