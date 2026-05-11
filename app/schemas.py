@@ -65,8 +65,6 @@ class IAConfigResponse(BaseModel):
     modelo_ia: str | None = None
     modelo_roteador: str | None = None
     followup_ativo: bool = False
-    followup_espera_nivel_1_minutos: int = 20
-    followup_espera_nivel_2_minutos: int = 10
     limite_certeza: float = 0.65
     limite_duvida: float = 0.45
     max_agentes_desempate: int = 3
@@ -88,8 +86,6 @@ class IAConfigUpdateRequest(BaseModel):
     modelo_ia: str | None = None
     modelo_roteador: str | None = None
     followup_ativo: bool | None = None
-    followup_espera_nivel_1_minutos: int | None = None
-    followup_espera_nivel_2_minutos: int | None = None
     limite_certeza: float | None = None
     limite_duvida: float | None = None
     max_agentes_desempate: int | None = None

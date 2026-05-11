@@ -602,8 +602,6 @@ async def get_ia_config(
         "modelo_ia": empresa.modelo_ia,
         "modelo_roteador": getattr(empresa, 'modelo_roteador', 'gpt-4o-mini'),
         "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
-        "followup_espera_nivel_1_minutos": getattr(empresa, 'followup_espera_nivel_1_minutos', 20) or 20,
-        "followup_espera_nivel_2_minutos": getattr(empresa, 'followup_espera_nivel_2_minutos', 10) or 10,
         "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
         "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,
         "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
@@ -644,10 +642,6 @@ async def put_ia_config(
         empresa.modelo_roteador = data.modelo_roteador
     if data.followup_ativo is not None:
         empresa.followup_ativo = data.followup_ativo
-    if data.followup_espera_nivel_1_minutos is not None:
-        empresa.followup_espera_nivel_1_minutos = data.followup_espera_nivel_1_minutos
-    if data.followup_espera_nivel_2_minutos is not None:
-        empresa.followup_espera_nivel_2_minutos = data.followup_espera_nivel_2_minutos
     if data.limite_certeza is not None:
         empresa.limite_certeza = data.limite_certeza
     if data.limite_duvida is not None:
@@ -688,8 +682,6 @@ async def put_ia_config(
             "modelo_ia": empresa.modelo_ia,
             "modelo_roteador": getattr(empresa, 'modelo_roteador', 'gpt-4o-mini'),
             "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
-            "followup_espera_nivel_1_minutos": getattr(empresa, 'followup_espera_nivel_1_minutos', 20) or 20,
-            "followup_espera_nivel_2_minutos": getattr(empresa, 'followup_espera_nivel_2_minutos', 10) or 10,
             "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
             "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,
             "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,

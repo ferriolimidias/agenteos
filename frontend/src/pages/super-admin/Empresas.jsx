@@ -54,8 +54,6 @@ export default function Empresas() {
     modelo_ia: "gpt-4o-mini",
     modelo_roteador: "gpt-4o-mini",
     followup_ativo: false,
-    followup_espera_nivel_1_minutos: 20,
-    followup_espera_nivel_2_minutos: 10,
     limite_certeza: 0.65,
     limite_duvida: 0.45,
     max_agentes_desempate: 3,
@@ -387,8 +385,6 @@ export default function Empresas() {
         modelo_ia: res.data.modelo_ia || "gpt-4o-mini",
         modelo_roteador: res.data.modelo_roteador || "gpt-4o-mini",
         followup_ativo: res.data.followup_ativo || false,
-        followup_espera_nivel_1_minutos: res.data.followup_espera_nivel_1_minutos || 20,
-        followup_espera_nivel_2_minutos: res.data.followup_espera_nivel_2_minutos || 10,
         limite_certeza: typeof res.data.limite_certeza === "number" ? res.data.limite_certeza : 0.65,
         limite_duvida: typeof res.data.limite_duvida === "number" ? res.data.limite_duvida : 0.45,
         max_agentes_desempate: typeof res.data.max_agentes_desempate === "number" ? res.data.max_agentes_desempate : 3,
@@ -1110,34 +1106,15 @@ export default function Empresas() {
                       />
                       <div>
                         <p className="text-sm font-semibold text-white">Ativar Reengajamento (Follow-up)</p>
-                        <p className="text-xs text-gray-400 mt-0.5">Se ligado, a IA enviará mensagens automáticas se o lead parar de responder.</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Chave-mestra global: liga ou desliga o motor de follow-up para esta empresa.</p>
                       </div>
                     </label>
 
-                    {configIAData.followup_ativo && (
-                      <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1">Espera Nível 1 (Min)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={configIAData.followup_espera_nivel_1_minutos}
-                            onChange={(e) => setConfigIAData({...configIAData, followup_espera_nivel_1_minutos: parseInt(e.target.value) || 0})}
-                            className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1">Espera Nível 2 (Min)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={configIAData.followup_espera_nivel_2_minutos}
-                            onChange={(e) => setConfigIAData({...configIAData, followup_espera_nivel_2_minutos: parseInt(e.target.value) || 0})}
-                            className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
-                          />
-                        </div>
-                      </div>
-                    )}
+                    <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/30 p-3">
+                      <p className="text-xs text-indigo-200">
+                        As mensagens e os tempos de espera agora são configurados no menu <span className="font-semibold">Cadências / Follow-up</span>.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="pt-4 border-t border-gray-800 space-y-4">

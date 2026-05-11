@@ -667,151 +667,18 @@ async def processar_bloco_mensagens(
     else:
         print("\n[Aviso] Nenhuma 'resposta_final' gerada pelo grafo.")
 
-    # ── Motor de Follow-up Resiliente ─────────────────────────────────────────
-    # Estratégia:
-    #   followup_ativo:{canal}:{origem} → token único (guardião do job)
-    #   followup_nivel:{canal}:{origem} → "1" ou "2" (memória de estado)
-    #
-    # Quando o lead responde → ambas as chaves são DELETADAS → a task acorda,
-    # verifica que a chave não existe e ABORTA. Sem race condition.
+    # ── Motor de Follow-up legado (Nível 1 / Nível 2) — DEPRECADO ─────────────
+    # Substituído pelo módulo de Cadências (tabela `config_followups`) executado
+    # pelo worker `app/services/followup_service.py`. Este bloco agora só limpa
+    # chaves Redis residuais de execuções anteriores para não deixar lixo.
     # ──────────────────────────────────────────────────────────────────────────
-    status_conv = estado_final.get("status_conversa", "ABERTA")
-    if status_conv == "ABERTA":
-        import time as _time_mod
-        canal_orig     = mensagens[0].canal
-        id_orig        = mensagens[0].identificador_origem
-        empresa_id_fu  = mensagens[0].empresa_id
-        job_token      = str(_time_mod.time())
-
-        ativo_key  = f"followup_ativo:{canal_orig}:{id_orig}"
-        nivel_key  = f"followup_nivel:{canal_orig}:{id_orig}"
-        
-        # ── BUSCA CONFIGURAÇÃO DINÂMICA DA EMPRESA ──────────────────────────
-        from db.database import AsyncSessionLocal as _ASL
-        from db.models import Empresa as _Empresa
-        from sqlalchemy import select as _sel
-        import uuid as _uuid_mod
-
-        try:
-            async with _ASL() as sess_fu:
-                emp_uuid = _uuid_mod.UUID(empresa_id_fu)
-                res_emp = await sess_fu.execute(_sel(_Empresa).where(_Empresa.id == emp_uuid))
-                emp_fu = res_emp.scalars().first()
-
-                if not emp_fu or not getattr(emp_fu, 'followup_ativo', False):
-                    print(f"[Follow-up] ⏩ Ignorado — Follow-up desativado nas configurações da empresa (ID: {empresa_id_fu}).")
-                    return
-
-                delay_n1 = (getattr(emp_fu, 'followup_espera_nivel_1_minutos', 20) or 20) * 60
-                delay_n2 = (getattr(emp_fu, 'followup_espera_nivel_2_minutos', 10) or 10) * 60
-                print(f"[Follow-up] Configurações carregadas: Ativo=Sim | N1={delay_n1}s | N2={delay_n2}s")
-        except Exception as e_cfg:
-            print(f"[Follow-up] Erro ao carregar configurações (usando defaults): {e_cfg}")
-            delay_n1 = 1200 # 20min default
-            delay_n2 = 600  # 10min default
-        # ──────────────────────────────────────────────────────────────────
-
-        print(f"\n[Follow-up] Status 'ABERTA'. Agendando Nível 1 em {delay_n1}s para {ativo_key}...")
-
-        # Grava o token de vida e o nível inicial
-        await redis_client.setex(ativo_key, delay_n1 + 60, job_token)   # TTL ligeiramente maior que o delay
-        await redis_client.setex(nivel_key, delay_n1 + 120, "1")
-
-        async def _job_followup(delay: int, nivel: int):
-            await asyncio.sleep(delay)
-
-            # Verificação de vida: a chave ativo ainda existe com o MESMO token?
-            token_atual = await redis_client.get(ativo_key)
-            if token_atual is None:
-                print(f"\n[Follow-up] ⛔ ABORTADO — chave '{ativo_key}' não existe. Lead respondeu. Nenhuma mensagem enviada.")
-                return
-            if token_atual != job_token:
-                print(f"\n[Follow-up] ⛔ ABORTADO — token divergente. Um novo ciclo assumiu. Nenhuma mensagem enviada.")
-                return
-
-            print(f"\n{'='*50}")
-            print(f"⏰ [REENGAJAMENTO PROATIVO NÍVEL {nivel} INICIADO] — Canal={canal_orig} | Origem={id_orig}")
-
-            try:
-                from app.services.channel_factory import despachar_mensagem
-                from app.core.agent_graph import gerar_followup_contextual, gerar_followup_encerramento
-
-                if nivel == 1:
-                    texto = await gerar_followup_contextual(canal_orig, id_orig, empresa_id_fu)
-                    _conversation_debug_log(f"[Follow-up Nível 1] Texto gerado: '{texto}'")
-
-                    await despachar_mensagem(
-                        canal=canal_orig,
-                        identificador_origem=id_orig,
-                        texto=texto,
-                        conexao_id=conexao_id_dispatch,
-                        empresa_id=empresa_id_fu,
-                    )
-
-                    novo_token = str(_time_mod.time() + 1)
-                    await redis_client.setex(ativo_key, delay_n2 + 60, novo_token)
-                    await redis_client.setex(nivel_key, delay_n2 + 120, "2")
-                    print(f"[Follow-up] Nível 2 agendado em {delay_n2}s.", flush=True)
-
-                    # Cria nova task para o Nível 2 com o novo token capturado em closure
-                    async def _job_n2(delay_inner: int, token_inner: str):
-                        await asyncio.sleep(delay_inner)
-                        token_check = await redis_client.get(ativo_key)
-                        if token_check is None:
-                            print(f"\n[Follow-up] ⛔ N2 ABORTADO — lead respondeu antes do encerramento.")
-                            return
-                        if token_check != token_inner:
-                            print(f"\n[Follow-up] ⛔ N2 ABORTADO — token divergente.")
-                            return
-
-                        print(f"\n{'='*50}")
-                        print(f"⏰ [REENGAJAMENTO PROATIVO NÍVEL 2 INICIADO] — Canal={canal_orig} | Origem={id_orig}")
-                        try:
-                            texto_enc = await gerar_followup_encerramento(canal_orig, id_orig, empresa_id_fu)
-                            _conversation_debug_log(f"[Follow-up Nível 2] Texto gerado: '{texto_enc}'")
-                            await despachar_mensagem(
-                                canal=canal_orig,
-                                identificador_origem=id_orig,
-                                texto=texto_enc,
-                                conexao_id=conexao_id_dispatch,
-                                empresa_id=empresa_id_fu,
-                            )
-                        except Exception as e_n2:
-                            print(f"[Follow-up Nível 2] Erro: {e_n2}")
-                        finally:
-                            await redis_client.delete(ativo_key)
-                            await redis_client.delete(nivel_key)
-                        print("="*50 + "\n")
-
-                    asyncio.create_task(_job_n2(delay_n2, novo_token))
-
-                elif nivel == 2:
-                    # Fallback seguro (caso a task de N2 fosse iniciada via outro caminho)
-                    texto_enc = await gerar_followup_encerramento(canal_orig, id_orig, empresa_id_fu)
-                    _conversation_debug_log(f"[Follow-up Nível 2 — fallback] Texto: '{texto_enc}'")
-                    await despachar_mensagem(
-                        canal=canal_orig,
-                        identificador_origem=id_orig,
-                        texto=texto_enc,
-                        conexao_id=conexao_id_dispatch,
-                        empresa_id=empresa_id_fu,
-                    )
-                    await redis_client.delete(ativo_key)
-                    await redis_client.delete(nivel_key)
-
-            except Exception as e:
-                print(f"[Follow-up Nível {nivel}] Erro inesperado: {e}")
-
-            print("="*50 + "\n")
-
-        asyncio.create_task(_job_followup(delay_n1, 1))
-
-    else:
-        print(f"\n[Follow-up] Status '{status_conv}'. Deletando chaves de follow-up...")
+    try:
         canal_orig = mensagens[0].canal
-        id_orig    = mensagens[0].identificador_origem
+        id_orig = mensagens[0].identificador_origem
         await redis_client.delete(f"followup_ativo:{canal_orig}:{id_orig}")
         await redis_client.delete(f"followup_nivel:{canal_orig}:{id_orig}")
+    except Exception as _e_cleanup_legacy:
+        print(f"[Follow-up Legacy Cleanup] Falha ao limpar chaves Redis residuais: {_e_cleanup_legacy}")
     # ──────────────────────────────────────────────────────────────────────────
 
 

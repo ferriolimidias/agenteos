@@ -11,7 +11,15 @@ from app.api.utils import is_ai_blocked
 from app.core.llm_factory import get_llm_for_tenant
 from app.services.channel_factory import despachar_mensagem
 from db.database import AsyncSessionLocal
-from db.models import CRMLead, ConfigFollowUp, Especialista, LeadFollowUpLog, MensagemHistorico, TagCRM
+from db.models import (
+    CRMLead,
+    ConfigFollowUp,
+    Empresa,
+    Especialista,
+    LeadFollowUpLog,
+    MensagemHistorico,
+    TagCRM,
+)
 
 
 async def _gerar_texto_followup(
@@ -118,6 +126,22 @@ async def processar_followups_pendentes() -> dict[str, int]:
 
     try:
         now = datetime.utcnow()
+        # Cache por execução: evita reler a mesma Empresa N vezes quando ela tem
+        # várias cadências ativas. Chave = empresa_id (UUID); valor = bool da flag.
+        empresa_followup_cache: dict[uuid.UUID, bool] = {}
+
+        async def _empresa_tem_followup_ativo(
+            session: AsyncSession, empresa_id: uuid.UUID
+        ) -> bool:
+            if empresa_id in empresa_followup_cache:
+                return empresa_followup_cache[empresa_id]
+            result_emp = await session.execute(
+                select(Empresa.followup_ativo).where(Empresa.id == empresa_id)
+            )
+            ativo = bool(result_emp.scalar() or False)
+            empresa_followup_cache[empresa_id] = ativo
+            return ativo
+
         async with AsyncSessionLocal() as session:
             result_configs = await session.execute(
                 select(ConfigFollowUp).where(ConfigFollowUp.ativo.is_(True))
@@ -127,6 +151,14 @@ async def processar_followups_pendentes() -> dict[str, int]:
             for cfg in configs:
                 try:
                     empresa_id = cfg.empresa_id
+
+                    # Chave-mestra global: se a empresa desligou follow-up no
+                    # painel ("Ativar Reengajamento"), pulamos TODAS as cadências
+                    # dela mesmo que `ConfigFollowUp.ativo` esteja true.
+                    if not await _empresa_tem_followup_ativo(session, empresa_id):
+                        ignorados += 1
+                        continue
+
                     gatilho = int(getattr(cfg, "tempo_gatilho_minutos", 0) or 0)
                     if gatilho <= 0:
                         ignorados += 1
