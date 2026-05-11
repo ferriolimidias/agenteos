@@ -565,6 +565,25 @@ async def require_ia_config_access(
 ):
     return current_user
 
+
+def _empresa_tem_chave_openai(empresa: Empresa) -> bool:
+    """
+    Verdadeiro quando a empresa tem chave OpenAI BYOK configurada — seja na
+    coluna dedicada `openai_api_key` ou no JSONB legado `credenciais_canais`.
+    Esta flag é independente do `status_openai`, que é apenas uma bandeira
+    reativa de saúde da chave (degrada após falha em runtime).
+    """
+    direta = str(getattr(empresa, "openai_api_key", "") or "").strip()
+    if direta:
+        return True
+    credenciais = getattr(empresa, "credenciais_canais", None) or {}
+    if isinstance(credenciais, dict):
+        legada = str(credenciais.get("openai_api_key") or "").strip()
+        if legada:
+            return True
+    return False
+
+
 @router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
 async def get_ia_config(
     empresa_id: str,
@@ -595,6 +614,7 @@ async def get_ia_config(
         "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
         "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
         "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
+        "openai_configurada": _empresa_tem_chave_openai(empresa),
     }
 
 @router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
@@ -680,6 +700,7 @@ async def put_ia_config(
             "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
             "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
             "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
+            "openai_configurada": _empresa_tem_chave_openai(empresa),
         }
     except Exception as e:
         await db.rollback()

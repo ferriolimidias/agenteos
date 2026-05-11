@@ -159,7 +159,22 @@ def _extrair_tipo_mensagem(data_json: dict) -> str:
 
 
 async def _transcrever_audio(base64_string: str, openai_api_key: str | None = None) -> str:
-    """Transcreve áudio base64 via Whisper com fallback resiliente."""
+    """
+    Transcreve áudio base64 via Whisper estritamente em modo BYOK.
+
+    Política multi-tenant: se a empresa não tem chave OpenAI configurada,
+    NÃO podemos instanciar AsyncOpenAI sem `api_key` — isso faria o SDK ler
+    a env var `OPENAI_API_KEY` do servidor e cobraria a transcrição na
+    chave-mestra do operador do SaaS, vazando billing entre tenants.
+    """
+    chave_str = str(openai_api_key or "").strip()
+    if not chave_str:
+        print(
+            "[WEBHOOK EVOLUTION] Transcrição abortada: tenant sem chave OpenAI configurada "
+            "(bloqueio BYOK — recusando fallback para chave global do servidor)."
+        )
+        return "[Áudio não transcrito: Empresa sem chave da OpenAI configurada]"
+
     try:
         bruto = str(base64_string or "").strip()
         if not bruto:
@@ -173,13 +188,14 @@ async def _transcrever_audio(base64_string: str, openai_api_key: str | None = No
             tmp_audio.write(audio_bytes)
             tmp_audio.flush()
 
-            client = AsyncOpenAI(api_key=openai_api_key) if openai_api_key else AsyncOpenAI()
+            # Sempre passamos api_key explícita. Nunca AsyncOpenAI() vazio.
+            client = AsyncOpenAI(api_key=chave_str)
             with open(tmp_audio.name, "rb") as f:
                 transcricao = await client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                response_format="text",
-            )
+                    model="whisper-1",
+                    file=f,
+                    response_format="text",
+                )
         texto_transcrito = str(transcricao or "").strip()
         return texto_transcrito or "[Erro ao transcrever áudio]"
     except Exception as exc:
@@ -520,7 +536,10 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
 
             if media_base64_audio:
                 transcricao = await _transcrever_audio(media_base64_audio, openai_api_key=openai_key)
-                if transcricao == "[Erro ao transcrever áudio]":
+                # Mensagens entre colchetes são marcadores de erro/bloqueio
+                # devolvidos por _transcrever_audio (ex.: tenant sem chave).
+                # Preservamos o texto literal sem prefixar "[Áudio Transcrito]:".
+                if transcricao.startswith("[") and transcricao.endswith("]"):
                     texto_transcrito = transcricao
                 else:
                     texto_transcrito = f"[Áudio Transcrito]: {transcricao}"

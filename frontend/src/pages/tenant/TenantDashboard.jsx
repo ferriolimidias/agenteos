@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Bot,
   CheckCircle2,
+  KeyRound,
   MessageSquare,
   Save,
   UserPlus,
@@ -96,6 +97,7 @@ export default function TenantDashboard() {
   const [activitySeries, setActivitySeries] = useState(buildLast7DaysSeries());
   const [recentLeads, setRecentLeads] = useState([]);
   const [aiStatus, setAiStatus] = useState("ok");
+  const [aiConfigurada, setAiConfigurada] = useState(false);
   const [telefoneNotificacao, setTelefoneNotificacao] = useState("");
   const [savingPhone, setSavingPhone] = useState(false);
   const initialLoadDoneRef = useRef(false);
@@ -210,6 +212,7 @@ export default function TenantDashboard() {
           mensagensMes,
         });
         setAiStatus(String(resIaConfig?.data?.status_openai || "ok").toLowerCase());
+        setAiConfigurada(Boolean(resIaConfig?.data?.openai_configurada));
         setTelefoneNotificacao(String(resIaConfig?.data?.telefone_notificacao || ""));
         setRecentLeads(recent);
         setActivitySeries(baseSeries);
@@ -252,29 +255,43 @@ export default function TenantDashboard() {
   );
 
   const aiConnection = useMemo(() => {
+    // Regra: a ausência de chave configurada tem prioridade sobre o status reativo,
+    // que só pode ser confiável quando há chave para verificar.
+    if (!aiConfigurada) {
+      return {
+        label: "Não Configurada",
+        helper: "Cadastre sua chave da OpenAI em IA / Configurações.",
+        className:
+          "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.22)]",
+        icon: KeyRound,
+      };
+    }
     if (aiStatus === "sem_credito") {
       return {
         label: "Sem saldo",
         helper: "Creditos OpenAI esgotados",
-        className: "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
+        className:
+          "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
         icon: AlertTriangle,
       };
     }
     if (aiStatus === "chave_invalida") {
       return {
-        label: "Erro de autenticacao",
-        helper: "Chave invalida ou nao configurada",
-        className: "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.22)]",
+        label: "Erro de autenticação",
+        helper: "Chave rejeitada pela OpenAI. Revise-a em IA / Configurações.",
+        className:
+          "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
         icon: WalletCards,
       };
     }
     return {
       label: "Operacional",
       helper: "Chave configurada e ativa",
-      className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_24px_rgba(16,185,129,0.22)]",
+      className:
+        "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_24px_rgba(16,185,129,0.22)]",
       icon: CheckCircle2,
     };
-  }, [aiStatus]);
+  }, [aiStatus, aiConfigurada]);
   const AiConnectionIcon = aiConnection.icon;
 
   const salvarTelefoneNotificacao = async () => {

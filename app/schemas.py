@@ -77,6 +77,7 @@ class IAConfigResponse(BaseModel):
     condutor_ativo: bool = False
     telefone_notificacao: str | None = None
     status_openai: str = "ok"
+    openai_configurada: bool = False
 
 
 class IAConfigUpdateRequest(BaseModel):
