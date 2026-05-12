@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2, GripVertical } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
@@ -22,6 +23,7 @@ function formatCurrency(value) {
 const CRM_LEAD_DRAG_MIME = "application/x-agenteos-crm-lead+json";
 
 export default function Crm() {
+  const location = useLocation();
   const [funil, setFunil] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -77,7 +79,16 @@ export default function Crm() {
       void fetchCrmData();
       void fetchOfficialTags();
     }
-  }, [empresaId, fetchCrmData, fetchOfficialTags]);
+  }, [empresaId, location.key, fetchCrmData, fetchOfficialTags]);
+
+  /** Recarrega etapas/nomes ao voltar ao separador (ex.: após renomear etapa nas configurações). */
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && empresaId) void fetchCrmData();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [empresaId, fetchCrmData]);
 
   const showToast = useCallback((message) => {
     setToastMessage(message);

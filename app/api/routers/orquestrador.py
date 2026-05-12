@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -22,6 +23,43 @@ status_router = APIRouter(
     dependencies=[Depends(require_super_admin)],
 )
 
+CRM_FERR_MOVER = frozenset({"tool_listar_etapas_funil", "tool_atualizar_etapa_lead"})
+CRM_FERR_TAG = frozenset({"tool_consultar_tags_empresa", "tool_aplicar_tag_dinamica", "tool_adicionar_tag_lead"})
+
+
+async def _ajustar_ids_ferramentas_com_flags_crm(
+    db: AsyncSession,
+    empresa_uuid: uuid.UUID,
+    ids_escolhidos: list[str] | None,
+    mover: bool,
+    tagar: bool,
+) -> list[str]:
+    res = await db.execute(select(FerramentaAPI).where(FerramentaAPI.empresa_id == empresa_uuid))
+    todas = list(res.scalars().all())
+    por_nome = {str(f.nome_ferramenta): str(f.id) for f in todas}
+
+    def conjunto_ids(nomes: frozenset[str]) -> set[str]:
+        out: set[str] = set()
+        for n in nomes:
+            fid = por_nome.get(n)
+            if fid:
+                out.add(fid)
+        return out
+
+    mover_ids = conjunto_ids(CRM_FERR_MOVER)
+    tag_ids = conjunto_ids(CRM_FERR_TAG)
+    s = {str(i).strip() for i in (ids_escolhidos or []) if str(i).strip()}
+    if mover:
+        s |= mover_ids
+    else:
+        s -= mover_ids
+    if tagar:
+        s |= tag_ids
+    else:
+        s -= tag_ids
+    return list(s)
+
+
 class EspecialistaCreate(BaseModel):
     nome: str
     descricao_missao: Optional[str] = None
@@ -33,6 +71,8 @@ class EspecialistaCreate(BaseModel):
     fixo_no_roteador: Optional[bool] = False
     usar_busca_web: Optional[bool] = False
     ferramentas_ids: Optional[List[str]] = Field(default_factory=list)
+    crm_ferramentas_mover: bool = False
+    crm_ferramentas_tag: bool = False
 
 
 WEB_SEARCH_MARKER = "[GOOGLE_SEARCH_ENABLED=true]"
@@ -135,15 +175,24 @@ async def criar_especialista(empresa_id: str, payload: EspecialistaCreate, db: A
         fixo_no_roteador=bool(payload.fixo_no_roteador),
         ativo=True
     )
-    
-    # Associar ferramentas
-    if payload.ferramentas_ids:
-        ferramentas_result = await db.execute(
-            select(FerramentaAPI).where(FerramentaAPI.id.in_(payload.ferramentas_ids), FerramentaAPI.empresa_id == empresa_id)
-        )
-        ferramentas_objs = ferramentas_result.scalars().all()
-        novo.ferramentas = ferramentas_objs
 
+    emp_uuid = uuid.UUID(str(empresa.id))
+    merged_ids = await _ajustar_ids_ferramentas_com_flags_crm(
+        db,
+        emp_uuid,
+        list(payload.ferramentas_ids or []),
+        bool(payload.crm_ferramentas_mover),
+        bool(payload.crm_ferramentas_tag),
+    )
+    if merged_ids:
+        ferramentas_result = await db.execute(
+            select(FerramentaAPI).where(
+                FerramentaAPI.id.in_(merged_ids),
+                FerramentaAPI.empresa_id == empresa_id,
+            )
+        )
+        novo.ferramentas = ferramentas_result.scalars().all()
+    
     router_service = SemanticRouterService(db)
     await router_service.refresh_specialist_embedding(novo)
 
@@ -212,9 +261,20 @@ async def atualizar_especialista(empresa_id: str, especialista_id: str, payload:
     
     # Atualizar ferramentas
     if payload.ferramentas_ids is not None:
-        if payload.ferramentas_ids:
+        emp_uuid = uuid.UUID(str(empresa_id))
+        merged_ids = await _ajustar_ids_ferramentas_com_flags_crm(
+            db,
+            emp_uuid,
+            list(payload.ferramentas_ids),
+            bool(payload.crm_ferramentas_mover),
+            bool(payload.crm_ferramentas_tag),
+        )
+        if merged_ids:
             ferramentas_result = await db.execute(
-                select(FerramentaAPI).where(FerramentaAPI.id.in_(payload.ferramentas_ids), FerramentaAPI.empresa_id == empresa_id)
+                select(FerramentaAPI).where(
+                    FerramentaAPI.id.in_(merged_ids),
+                    FerramentaAPI.empresa_id == empresa_id,
+                )
             )
             especialista.ferramentas = ferramentas_result.scalars().all()
         else:

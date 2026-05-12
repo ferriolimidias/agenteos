@@ -261,17 +261,22 @@ export default function FunnelRoutingManager({ empresaId, onNotify }) {
                       const id = String(et.id);
                       const checked = rule.etapa_ids.includes(id);
                       return (
-                        <label key={id} className="flex cursor-pointer items-center gap-2 text-xs text-gray-300">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) =>
-                              atualizarRegra(rule._key, {
-                                etapa_ids: toggleIdEmLista(rule.etapa_ids, id, e.target.checked),
-                              })
-                            }
-                          />
-                          <span>{mapaEtapas.get(id) || id}</span>
+                        <label key={id} className="flex cursor-pointer flex-col gap-0.5 text-xs text-gray-300">
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) =>
+                                atualizarRegra(rule._key, {
+                                  etapa_ids: toggleIdEmLista(rule.etapa_ids, id, e.target.checked),
+                                })
+                              }
+                            />
+                            <span>{mapaEtapas.get(id) || id}</span>
+                          </span>
+                          <span className="pl-6 font-mono text-[10px] text-gray-500" title="UUID gravado em funnel_routing">
+                            {id}
+                          </span>
                         </label>
                       );
                     })
@@ -288,17 +293,22 @@ export default function FunnelRoutingManager({ empresaId, onNotify }) {
                       const id = String(tg.id);
                       const checked = rule.tag_ids.includes(id);
                       return (
-                        <label key={id} className="flex cursor-pointer items-center gap-2 text-xs text-gray-300">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) =>
-                              atualizarRegra(rule._key, {
-                                tag_ids: toggleIdEmLista(rule.tag_ids, id, e.target.checked),
-                              })
-                            }
-                          />
-                          <span>{mapaTags.get(id) || id}</span>
+                        <label key={id} className="flex cursor-pointer flex-col gap-0.5 text-xs text-gray-300">
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) =>
+                                atualizarRegra(rule._key, {
+                                  tag_ids: toggleIdEmLista(rule.tag_ids, id, e.target.checked),
+                                })
+                              }
+                            />
+                            <span>{mapaTags.get(id) || id}</span>
+                          </span>
+                          <span className="pl-6 font-mono text-[10px] text-gray-500" title="UUID gravado em funnel_routing">
+                            {id}
+                          </span>
                         </label>
                       );
                     })

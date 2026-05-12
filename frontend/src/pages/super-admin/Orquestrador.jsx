@@ -2,6 +2,21 @@ import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { BrainCircuit, PenTool, Plus, X, Building, CheckCircle, RefreshCw, Pencil, Trash2 } from "lucide-react";
 
+const CRM_MOVER_NOMES = ["tool_listar_etapas_funil", "tool_atualizar_etapa_lead"];
+const CRM_TAG_NOMES = ["tool_consultar_tags_empresa", "tool_aplicar_tag_dinamica", "tool_adicionar_tag_lead"];
+
+function inferCrmFlagsFromFerramentas(ferramentasIds, todasFerramentas) {
+  const nomes = new Set(
+    (todasFerramentas || [])
+      .filter((f) => (ferramentasIds || []).includes(f.id))
+      .map((f) => f.nome_ferramenta)
+  );
+  return {
+    crm_ferramentas_mover: CRM_MOVER_NOMES.every((n) => nomes.has(n)),
+    crm_ferramentas_tag: CRM_TAG_NOMES.every((n) => nomes.has(n)),
+  };
+}
+
 export default function Orquestrador({ empresaId = "", embedded = false }) {
   const [empresas, setEmpresas] = useState([]);
   const [empresaSelecionadaId, setEmpresaSelecionadaId] = useState(empresaId || "");
@@ -22,7 +37,20 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
   const [submitting, setSubmitting] = useState(false);
 
   // Forms
-  const [formEspecialista, setFormEspecialista] = useState({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+  const [formEspecialista, setFormEspecialista] = useState({
+    nome: "",
+    descricao_missao: "",
+    prompt_sistema: "",
+    modelo_ia: "gpt-4o-mini",
+    usar_rag: false,
+    usar_agenda: false,
+    usar_busca_web: false,
+    peso_prioridade: 1,
+    fixo_no_roteador: false,
+    ferramentas_ids: [],
+    crm_ferramentas_mover: false,
+    crm_ferramentas_tag: false,
+  });
   const [formFerramenta, setFormFerramenta] = useState({ 
     nome_ferramenta: "", 
     descricao_ia: "",
@@ -123,6 +151,8 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
       const payloadEspecialista = {
         ...formEspecialista,
         peso_prioridade: Math.max(1, Math.trunc(pesoPrioridadeNumero)),
+        crm_ferramentas_mover: Boolean(formEspecialista.crm_ferramentas_mover),
+        crm_ferramentas_tag: Boolean(formEspecialista.crm_ferramentas_tag),
       };
       if (editingEspecialistaId) {
         await api.put(`/admin/orquestrador/empresas/${empresaSelecionadaId}/especialistas/${editingEspecialistaId}`, payloadEspecialista);
@@ -133,7 +163,20 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
       }
       setShowEspecialistaModal(false);
       setEditingEspecialistaId(null);
-      setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+      setFormEspecialista({
+        nome: "",
+        descricao_missao: "",
+        prompt_sistema: "",
+        modelo_ia: "gpt-4o-mini",
+        usar_rag: false,
+        usar_agenda: false,
+        usar_busca_web: false,
+        peso_prioridade: 1,
+        fixo_no_roteador: false,
+        ferramentas_ids: [],
+        crm_ferramentas_mover: false,
+        crm_ferramentas_tag: false,
+      });
       fetchEspecialistas();
     } catch (err) {
       alert("Erro ao salvar especialista");
@@ -153,6 +196,8 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
   };
 
   const openEditEspecialista = (esp) => {
+    const fids = esp.ferramentas_ids || [];
+    const flags = inferCrmFlagsFromFerramentas(fids, ferramentas);
     setFormEspecialista({
       nome: esp.nome,
       descricao_missao: esp.descricao_missao || "",
@@ -163,7 +208,9 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
       usar_busca_web: esp.usar_busca_web || false,
       peso_prioridade: Number(esp.peso_prioridade || 1),
       fixo_no_roteador: esp.fixo_no_roteador || false,
-      ferramentas_ids: esp.ferramentas_ids || []
+      ferramentas_ids: fids,
+      crm_ferramentas_mover: flags.crm_ferramentas_mover,
+      crm_ferramentas_tag: flags.crm_ferramentas_tag,
     });
     setEditingEspecialistaId(esp.id);
     setShowEspecialistaModal(true);
@@ -303,7 +350,20 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
                 <button 
                   onClick={() => {
                     setEditingEspecialistaId(null);
-                    setFormEspecialista({ nome: "", descricao_missao: "", prompt_sistema: "", modelo_ia: "gpt-4o-mini", usar_rag: false, usar_agenda: false, usar_busca_web: false, peso_prioridade: 1, fixo_no_roteador: false, ferramentas_ids: [] });
+                    setFormEspecialista({
+                      nome: "",
+                      descricao_missao: "",
+                      prompt_sistema: "",
+                      modelo_ia: "gpt-4o-mini",
+                      usar_rag: false,
+                      usar_agenda: false,
+                      usar_busca_web: false,
+                      peso_prioridade: 1,
+                      fixo_no_roteador: false,
+                      ferramentas_ids: [],
+                      crm_ferramentas_mover: false,
+                      crm_ferramentas_tag: false,
+                    });
                     setShowEspecialistaModal(true);
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
@@ -546,6 +606,77 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
                 </label>
               </div>
 
+              {/* Ferramentas de sistema (CRM) */}
+              <div className="pt-4 border-t border-gray-800 mt-6">
+                <h3 className="text-sm font-bold text-white mb-2">Ferramentas de sistema (CRM)</h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  Atalho para vincular as ferramentas nativas de mover o lead entre etapas e aplicar tags. Os UUIDs gravados
+                  são os das linhas em <span className="font-mono">ferramentas_api</span> (visíveis na aba Ferramentas).
+                </p>
+                <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors mb-2">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                    checked={Boolean(formEspecialista.crm_ferramentas_mover)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setFormEspecialista((prev) => {
+                        const moverIds = ferramentas
+                          .filter((f) => CRM_MOVER_NOMES.includes(f.nome_ferramenta))
+                          .map((f) => f.id);
+                        const next = new Set(prev.ferramentas_ids || []);
+                        if (checked) moverIds.forEach((id) => next.add(id));
+                        else moverIds.forEach((id) => next.delete(id));
+                        const ferramentas_ids = [...next];
+                        return {
+                          ...prev,
+                          ferramentas_ids,
+                          crm_ferramentas_mover: checked,
+                        };
+                      });
+                    }}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Mover lead no CRM</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Inclui listagem de etapas e atualização de etapa (<span className="font-mono">tool_listar_etapas_funil</span>,{" "}
+                      <span className="font-mono">tool_atualizar_etapa_lead</span>).
+                    </p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                    checked={Boolean(formEspecialista.crm_ferramentas_tag)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setFormEspecialista((prev) => {
+                        const tagIds = ferramentas
+                          .filter((f) => CRM_TAG_NOMES.includes(f.nome_ferramenta))
+                          .map((f) => f.id);
+                        const next = new Set(prev.ferramentas_ids || []);
+                        if (checked) tagIds.forEach((id) => next.add(id));
+                        else tagIds.forEach((id) => next.delete(id));
+                        const ferramentas_ids = [...next];
+                        return {
+                          ...prev,
+                          ferramentas_ids,
+                          crm_ferramentas_tag: checked,
+                        };
+                      });
+                    }}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-white">Taguear lead</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Consulta de tags, aplicação por UUID e por nome (<span className="font-mono">tool_consultar_tags_empresa</span>,{" "}
+                      <span className="font-mono">tool_aplicar_tag_dinamica</span>, <span className="font-mono">tool_adicionar_tag_lead</span>).
+                    </p>
+                  </div>
+                </label>
+              </div>
+
               {/* Ferramentas do Especialista */}
               {ferramentas.length > 0 && (
                 <div className="pt-4 border-t border-gray-800 mt-6">
@@ -559,11 +690,17 @@ export default function Orquestrador({ empresaId = "", embedded = false }) {
                           checked={formEspecialista.ferramentas_ids?.includes(tool.id)}
                           onChange={(e) => {
                             const isChecked = e.target.checked;
-                            setFormEspecialista(prev => {
-                              const novasIds = isChecked 
+                            setFormEspecialista((prev) => {
+                              const novasIds = isChecked
                                 ? [...(prev.ferramentas_ids || []), tool.id]
-                                : (prev.ferramentas_ids || []).filter(id => id !== tool.id);
-                              return { ...prev, ferramentas_ids: novasIds };
+                                : (prev.ferramentas_ids || []).filter((id) => id !== tool.id);
+                              const flags = inferCrmFlagsFromFerramentas(novasIds, ferramentas);
+                              return {
+                                ...prev,
+                                ferramentas_ids: novasIds,
+                                crm_ferramentas_mover: flags.crm_ferramentas_mover,
+                                crm_ferramentas_tag: flags.crm_ferramentas_tag,
+                              };
                             });
                           }}
                         />

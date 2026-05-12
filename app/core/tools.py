@@ -285,6 +285,61 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) 
 
 
 @tool
+async def tool_adicionar_tag_lead(lead_id: str, empresa_id: str, tag_id: str = "", tag_nome: str = "") -> str:
+    """
+    Aplica uma etiqueta oficial ao lead usando `tag_id` (UUID) ou, alternativamente,
+    o nome exato (`tag_nome`) da tag cadastrada no CRM. Prefira UUID após consultar `tool_consultar_tags_empresa`.
+    """
+    try:
+        lead_uuid = uuid.UUID(str(lead_id))
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError):
+        return "Falha ao adicionar tag: lead_id ou empresa_id inválido."
+
+    tid = str(tag_id or "").strip()
+    tnome = str(tag_nome or "").strip()
+    if not tid and not tnome:
+        return "Erro: informe tag_id (UUID) ou tag_nome (nome exato da etiqueta oficial)."
+
+    if tid:
+        try:
+            uuid.UUID(tid)
+        except (ValueError, TypeError):
+            return "Erro: tag_id não é um UUID válido."
+        return await tool_aplicar_tag_dinamica.coroutine(
+            str(lead_uuid), str(empresa_uuid), tid
+        )
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_tag = await session.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == empresa_uuid,
+                    TagCRM.nome == tnome,
+                )
+            )
+            tag = result_tag.scalars().first()
+            if not tag:
+                result_ilike = await session.execute(
+                    select(TagCRM).where(
+                        TagCRM.empresa_id == empresa_uuid,
+                        TagCRM.nome.ilike(tnome),
+                    )
+                )
+                tag = result_ilike.scalars().first()
+            if not tag:
+                return (
+                    f"Erro: nenhuma etiqueta oficial encontrada com o nome '{tnome}'. "
+                    "Use tool_consultar_tags_empresa para listar nomes e UUIDs."
+                )
+            return await tool_aplicar_tag_dinamica.coroutine(
+                str(lead_uuid), str(empresa_uuid), str(tag.id)
+            )
+    except Exception as e:
+        return f"Falha ao resolver tag por nome: {str(e)}"
+
+
+@tool
 async def tool_transferir_para_humano(lead_id: str, empresa_id: str, motivo: str = None) -> str:
     """
     Use esta ferramenta QUANDO PRECISAR TRANSFERIR o atendimento para um humano, pausando o bot. 

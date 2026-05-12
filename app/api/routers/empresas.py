@@ -355,7 +355,11 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                     metodo="GET"
                 )
                 session.add(ferramenta)
-            
+            await session.flush()
+
+            res_fer = await session.execute(select(FerramentaAPI).where(FerramentaAPI.empresa_id == empresa_id))
+            ferramentas_sistema = list(res_fer.scalars().all())
+
             # 2. Criar os Especialistas Nativos
             embeddings = None
             try:
@@ -374,13 +378,13 @@ async def inicializar_dados_nova_empresa(empresa_id: uuid.UUID):
                     fixo_no_roteador=bool(dados.get("fixo_no_roteador", True)),
                     peso_prioridade=1
                 )
-                
+                especialista.ferramentas = list(ferramentas_sistema)
+
                 texto_base = f"{nome} {dados['descricao_missao']} {dados['descricao_roteamento']}"
                 if embeddings is not None:
                     especialista.embedding = await embeddings.aembed_query(texto_base)
-                
+
                 session.add(especialista)
-                
             await session.commit()
             print(f"Setup automático concluído para a empresa {empresa_id}")
         except Exception as e:

@@ -83,6 +83,29 @@ FERRAMENTAS_SISTEMA: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "nome_exibicao": "Adicionar Tag ao Lead (CRM)",
+        "nome_ferramenta": "tool_adicionar_tag_lead",
+        "descricao_ia": (
+            "Aplica uma etiqueta oficial ao lead. Informe tag_id (UUID) OU tag_nome (nome exato da tag). "
+            "Prefira UUID após tool_consultar_tags_empresa."
+        ),
+        "schema_parametros": {
+            "type": "object",
+            "properties": {
+                "tag_id": {
+                    "type": "string",
+                    "description": "UUID da etiqueta oficial (opcional se tag_nome for informado).",
+                },
+                "tag_nome": {
+                    "type": "string",
+                    "description": "Nome exato ou próximo da etiqueta oficial (opcional se tag_id for informado).",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 

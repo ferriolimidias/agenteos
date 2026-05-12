@@ -84,6 +84,7 @@ from app.core.tools import (
     tool_atualizar_nome_lead,
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
+    tool_adicionar_tag_lead,
     tool_consultar_tags_empresa,
     tool_listar_etapas_funil,
     tool_atualizar_etapa_lead,
@@ -1178,9 +1179,11 @@ MAP_FUNCOES_NATIVAS = {
     "tool_listar_etapas_funil": tool_listar_etapas_funil.coroutine,
     "consultar_agenda": consultar_agenda,
     "transferir_para_humano": transferir_para_humano,  # ADICIONE ESTA LINHA
+    "tool_transferir_para_humano": transferir_para_humano,
     "tool_atualizar_nome_lead": tool_atualizar_nome_lead,
     "tool_atualizar_tags_lead": tool_atualizar_tags_lead,
     "tool_aplicar_tag_dinamica": tool_aplicar_tag_dinamica.coroutine,
+    "tool_adicionar_tag_lead": tool_adicionar_tag_lead.coroutine,
     "tool_consultar_tags_empresa": tool_consultar_tags_empresa.coroutine,
 }
 
@@ -2680,6 +2683,24 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_aplicar_tag_dinamica_contextual
+                            elif chave_nativa == "tool_adicionar_tag_lead":
+                                async def _tool_adicionar_tag_lead_contextual(
+                                    tag_id: str = "",
+                                    tag_nome: str = "",
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _lead_id or not _empresa_id:
+                                        return "Falha ao adicionar tag: contexto de lead/empresa ausente."
+                                    return await _coroutine_native(
+                                        lead_id=_lead_id,
+                                        empresa_id=_empresa_id,
+                                        tag_id=str(tag_id or "").strip(),
+                                        tag_nome=str(tag_nome or "").strip(),
+                                    )
+
+                                coroutine_native = _tool_adicionar_tag_lead_contextual
                             elif chave_nativa == "tool_atualizar_tags_lead":
                                 async def _tool_atualizar_tags_lead_contextual(
                                     tags: List[str],
@@ -2748,7 +2769,7 @@ async def node_especialista_dinamico(state: AgentState):
                                     )
 
                                 coroutine_native = _tool_atualizar_etapa_lead_contextual
-                            elif chave_nativa == "transferir_para_humano":
+                            elif chave_nativa in ("transferir_para_humano", "tool_transferir_para_humano"):
                                 async def _tool_transferir_para_humano_contextual(
                                     *args,
                                     _telefone: str | None = str(state.get("identificador_origem") or "").strip() or None,
@@ -3057,6 +3078,7 @@ async def node_especialista_dinamico(state: AgentState):
                 chave in fontes_norm
                 for chave in {
                     "tool_aplicar_tag_dinamica",
+                    "tool_adicionar_tag_lead",
                     "tool_atualizar_tags_lead",
                 }
             )
