@@ -1008,6 +1008,12 @@ class CRMEtapaUpdateRequest(BaseModel):
     ordem: int | None = None
 
 
+class CRMEtapaCreateRequest(BaseModel):
+    nome: str
+    tipo: str | None = "custom"
+    ordem: int | None = None
+
+
 class CRMLeadUpdateRequest(BaseModel):
     nome_contato: str | None = None
     telefone_contato: str | None = None
@@ -1490,6 +1496,7 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(CRMFunil)
             .where(CRMFunil.empresa_id == empresa_id)
+            .order_by(CRMFunil.nome.asc(), CRMFunil.id.asc())
             .options(
                 selectinload(CRMFunil.etapas).selectinload(CRMEtapa.leads)
             )
@@ -1525,8 +1532,11 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
         except ValueError:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
 
-        # Ordena as etapas pela ordem
-        etapas_ordenadas = sorted(funil.etapas, key=lambda x: x.ordem)
+        # Ordena as etapas pela ordem (desempate estável por id)
+        etapas_ordenadas = sorted(
+            funil.etapas,
+            key=lambda x: (int(getattr(x, "ordem", 0) or 0), str(getattr(x, "id", ""))),
+        )
         tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, empresa_uuid)
 
         def _serializar_lead(lead: CRMLead) -> dict[str, Any]:
@@ -2556,6 +2566,117 @@ async def criar_campanha_disparo(
         "status": campanha.status.value if hasattr(campanha.status, "value") else str(campanha.status),
         "criado_em": campanha.criado_em.isoformat() if campanha.criado_em else None,
     }
+
+
+@router.post("/{empresa_id}/crm/etapas", status_code=status.HTTP_201_CREATED)
+async def criar_etapa_crm(
+    empresa_id: str,
+    data: CRMEtapaCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cria uma nova etapa (coluna) no funil principal da empresa (`CRMEtapa`).
+    """
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de empresa inválido")
+
+    result = await db.execute(
+        select(CRMFunil)
+        .where(CRMFunil.empresa_id == empresa_id)
+        .order_by(CRMFunil.nome.asc(), CRMFunil.id.asc())
+        .options(selectinload(CRMFunil.etapas))
+    )
+    funil = result.scalars().first()
+    if not funil:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhum funil CRM encontrado para esta empresa. Abra o CRM uma vez para inicializar o pipeline.",
+        )
+
+    nome_limpo = (data.nome or "").strip()
+    if not nome_limpo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da etapa é obrigatório.")
+
+    ordem_val = data.ordem
+    if ordem_val is None:
+        max_ordem = 0
+        for e in funil.etapas or []:
+            try:
+                max_ordem = max(max_ordem, int(e.ordem or 0))
+            except (TypeError, ValueError):
+                max_ordem = max(max_ordem, 0)
+        ordem_val = max_ordem + 1
+
+    tipo_val = (data.tipo or "custom").strip() or "custom"
+    nova = CRMEtapa(funil_id=funil.id, nome=nome_limpo, tipo=tipo_val, ordem=int(ordem_val))
+    db.add(nova)
+    try:
+        await db.commit()
+        await db.refresh(nova)
+        return {
+            "id": str(nova.id),
+            "nome": nova.nome,
+            "tipo": nova.tipo,
+            "ordem": nova.ordem,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao criar etapa: {str(e)}",
+        )
+
+
+@router.delete("/{empresa_id}/crm/etapas/{etapa_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def excluir_etapa_crm(
+    empresa_id: str,
+    etapa_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Remove uma etapa do funil. Leads nessa etapa são movidos para a etapa restante com menor `ordem`.
+    """
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+        etapa_uuid = uuid.UUID(etapa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID inválido")
+
+    result = await db.execute(
+        select(CRMEtapa)
+        .join(CRMFunil, CRMEtapa.funil_id == CRMFunil.id)
+        .where(CRMEtapa.id == etapa_uuid, CRMFunil.empresa_id == emp_uuid)
+        .options(selectinload(CRMEtapa.funil).selectinload(CRMFunil.etapas))
+    )
+    etapa = result.scalars().first()
+    if not etapa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Etapa não encontrada")
+
+    todas = list(etapa.funil.etapas or [])
+    if len(todas) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível excluir a única etapa do funil.",
+        )
+
+    outras = [e for e in todas if e.id != etapa.id]
+    alvo = sorted(outras, key=lambda x: (int(x.ordem or 0), str(x.id)))[0]
+
+    await db.execute(
+        update(CRMLead).where(CRMLead.etapa_id == etapa_uuid, CRMLead.empresa_id == emp_uuid).values(etapa_id=alvo.id)
+    )
+    await db.delete(etapa)
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao excluir etapa: {str(e)}",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put("/{empresa_id}/crm/etapas/{etapa_id}", status_code=status.HTTP_200_OK)

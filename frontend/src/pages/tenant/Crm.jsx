@@ -6,6 +6,7 @@ import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
+import { CRM_ETAPAS_ATUALIZADAS } from "../../components/EmpresaCrmEtapasManager";
 
 function formatDate(value) {
   if (!value) return "Hoje";
@@ -43,11 +44,18 @@ export default function Crm() {
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
 
-  /** Colunas do Kanban = etapas do funil da empresa (`crm_etapas`), ordenadas por `ordem`. */
+  /**
+   * Colunas do Kanban = apenas `etapas` do GET /empresas/:id/crm (tabela CRMEtapa).
+   * Não usar `colunas_tags` nem constantes fixas — espelho do banco, ordenado por `ordem`.
+   */
   const etapasOrdenadas = useMemo(() => {
     const lista = funil?.etapas;
     if (!Array.isArray(lista) || lista.length === 0) return [];
-    return [...lista].sort((a, b) => Number(a?.ordem ?? 0) - Number(b?.ordem ?? 0));
+    return [...lista].sort(
+      (a, b) =>
+        Number(a?.ordem ?? 0) - Number(b?.ordem ?? 0) ||
+        String(a?.id || "").localeCompare(String(b?.id || ""), "pt-BR"),
+    );
   }, [funil]);
 
   const fetchCrmData = useCallback(async () => {
@@ -55,7 +63,14 @@ export default function Crm() {
     try {
       setLoading(true);
       const res = await api.get(`/empresas/${empresaId}/crm`);
-      setFunil(res.data);
+      const raw = res.data;
+      const etapasApi = Array.isArray(raw?.etapas) ? raw.etapas : [];
+      setFunil({
+        funil_id: raw?.funil_id ?? null,
+        funil_nome: raw?.funil_nome ?? "",
+        etapas: etapasApi,
+        colunas_tags: Array.isArray(raw?.colunas_tags) ? raw.colunas_tags : [],
+      });
     } catch (err) {
       console.error("Erro ao buscar dados do CRM:", err);
     } finally {
@@ -88,6 +103,26 @@ export default function Crm() {
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [empresaId, fetchCrmData]);
+
+  /** Super Admin alterou etapas: mesmo separador (CustomEvent) ou outro separador (storage). */
+  useEffect(() => {
+    if (!empresaId) return undefined;
+    const chave = `crm_etapas_revision_${empresaId}`;
+    const onCustom = (ev) => {
+      if (String(ev?.detail?.empresaId || "") !== String(empresaId)) return;
+      void fetchCrmData();
+    };
+    const onStorage = (ev) => {
+      if (ev.key !== chave) return;
+      void fetchCrmData();
+    };
+    window.addEventListener(CRM_ETAPAS_ATUALIZADAS, onCustom);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CRM_ETAPAS_ATUALIZADAS, onCustom);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [empresaId, fetchCrmData]);
 
   const showToast = useCallback((message) => {
@@ -342,8 +377,8 @@ export default function Crm() {
           </h1>
           <p className="mt-1 max-w-2xl text-gray-500">
             {funil
-              ? `Funil ativo: ${funil.funil_nome}. As colunas são as etapas deste funil (campo ordem). Arraste um card para mudar a etapa no CRM; as tags do card são apenas rótulos.`
-              : "Gerencie os leads capturados pela IA. Os dados do funil vêm da API por empresa."}
+              ? `Funil: ${funil.funil_nome}. Colunas = etapas em crm_etapas (campo ordem). Edite no Super Admin → Gestão de Funil.`
+              : "Gerencie os leads capturados pela IA. As colunas vêm apenas do GET /crm (etapas reais)."}
           </p>
         </div>
 
@@ -382,6 +417,8 @@ export default function Crm() {
         <div className="custom-scrollbar flex-1 overflow-x-auto pb-4">
           <div className="flex h-full min-w-max space-x-6">
             {etapasOrdenadas.map((etapa) => {
+              const etapaId = etapa?.id;
+              if (!etapaId) return null;
               const totalVendasEtapa = (etapa.leads || []).reduce(
                 (subtotal, lead) => subtotal + Number(lead.valor_conversao || 0),
                 0
@@ -396,14 +433,14 @@ export default function Crm() {
 
               return (
                 <div
-                  key={etapa.id}
+                  key={etapaId}
                   role="region"
                   aria-label={`Etapa ${etapa.nome}`}
-                  onDragOver={(ev) => handleEtapaDragOver(ev, etapa.id)}
+                  onDragOver={(ev) => handleEtapaDragOver(ev, etapaId)}
                   onDragLeave={handleEtapaDragLeave}
-                  onDrop={(ev) => handleEtapaDrop(ev, etapa.id)}
+                  onDrop={(ev) => handleEtapaDrop(ev, etapaId)}
                   className={`flex w-80 flex-col overflow-hidden rounded-2xl border bg-gray-50/80 shadow-sm transition-colors ${
-                    dragOverEtapaId === etapa.id
+                    dragOverEtapaId === etapaId
                       ? "border-blue-400 ring-2 ring-blue-200"
                       : "border-gray-200/60"
                   }`}
@@ -532,14 +569,6 @@ export default function Crm() {
                 </div>
               );
             })}
-
-            <div className="flex min-h-[500px] w-80 max-w-xs flex-col items-center justify-center rounded-2xl border border-dashed border-gray-200 bg-gray-50/40 px-4 text-center">
-              <p className="text-sm font-medium text-gray-600">Funil por empresa</p>
-              <p className="mt-2 text-xs leading-relaxed text-gray-500">
-                Novas etapas e reordenação poderão ser editadas aqui ou via API administrativa; as colunas atuais refletem
-                apenas o cadastro em <span className="font-mono text-[11px]">crm_etapas</span> deste tenant.
-              </p>
-            </div>
           </div>
         </div>
       )}

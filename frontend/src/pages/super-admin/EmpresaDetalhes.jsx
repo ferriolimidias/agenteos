@@ -6,6 +6,7 @@ import {
   BrainCircuit,
   Building2,
   CheckCircle2,
+  Columns3,
   GitBranch,
   Link2,
   MessageSquare,
@@ -19,10 +20,12 @@ import api from "../../services/api";
 import Orquestrador from "./Orquestrador";
 import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import FunnelRoutingManager from "../../components/FunnelRoutingManager";
+import EmpresaCrmEtapasManager from "../../components/EmpresaCrmEtapasManager";
 
 const TABS = [
   { id: "visao-geral", label: "Visão Geral", icon: Building2 },
   { id: "agentes", label: "Agentes", icon: BrainCircuit },
+  { id: "gestao-funil", label: "Gestão de Funil", icon: Columns3 },
   { id: "roteamento-funil", label: "Roteamento de Funil", icon: GitBranch },
   { id: "configuracoes", label: "Configurações", icon: Settings2 },
   { id: "conexoes", label: "Conexões", icon: Link2 },
@@ -320,6 +323,10 @@ export default function EmpresaDetalhes() {
       )}
 
       {tabAtiva === "agentes" && <Orquestrador empresaId={String(empresa.id)} embedded />}
+
+      {tabAtiva === "gestao-funil" && (
+        <EmpresaCrmEtapasManager empresaId={String(empresa.id)} onNotify={setToast} />
+      )}
 
       {tabAtiva === "roteamento-funil" && (
         <FunnelRoutingManager empresaId={String(empresa.id)} onNotify={setToast} />
