@@ -400,13 +400,17 @@ export default function Inbox() {
               if (Boolean(novaMensagem?.from_me)) {
                 const textoNovo = String(novaMensagem?.texto || "").trim();
                 const tipoNovo = String(novaMensagem?.tipo_mensagem || "text").toLowerCase();
-                const idxTemp = lista.findIndex(
-                  (msg) =>
-                    isPendingMessage(msg) &&
-                    Boolean(msg?.from_me) &&
-                    String(msg?.texto || "").trim() === textoNovo &&
-                    String(msg?.tipo_mensagem || "text").toLowerCase() === tipoNovo
-                );
+                const tiposMidia = new Set(["image", "audio", "video", "document"]);
+                const idxTemp = lista.findIndex((msg) => {
+                  if (!isPendingMessage(msg) || !Boolean(msg?.from_me)) return false;
+                  const tipoMsg = String(msg?.tipo_mensagem || "text").toLowerCase();
+                  if (tipoMsg !== tipoNovo) return false;
+                  if (tipoNovo === "text" || !tiposMidia.has(tipoNovo)) {
+                    return String(msg?.texto || "").trim() === textoNovo;
+                  }
+                  // Mídia: o texto otimista ("Enviando…") não coincide com o persistido ("Áudio enviado", etc.).
+                  return true;
+                });
                 if (idxTemp >= 0) {
                   lista = lista.filter((_, idx) => idx !== idxTemp);
                 }

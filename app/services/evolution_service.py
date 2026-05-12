@@ -188,13 +188,16 @@ async def enviar_midia_base64(
             "Content-Type": "application/json",
         }
 
+        numero_norm = _normalizar_numero_destino(numero)
         payload = {
-            "number": str(numero or "").strip(),
+            "number": numero_norm,
             "mediatype": str(tipo or "document").strip().lower(),
             "mimetype": mimetype or "application/octet-stream",
             "media": base64_data,
             "caption": caption or "",
         }
+        if str(tipo or "").strip().lower() == "audio":
+            payload["ptt"] = True
 
         async with httpx.AsyncClient() as client:
             response = await client.post(endpoint, headers=headers, json=payload, timeout=30.0)
@@ -491,12 +494,14 @@ async def consultar_status_conexao(conexao_id: str | UUID) -> dict:
 
 async def get_base64_media(
     empresa_id: UUID,
-    message: dict,
+    media_context: dict,
     db: AsyncSession,
     conexao_id: str | UUID | None = None,
 ) -> str | None:
     """
     Recupera a mídia em base64 através do endpoint da Evolution API.
+    `media_context` deve ser o objeto `data` completo do webhook (key + message + …),
+    não apenas o sub-dicionário `message`.
     """
     try:
         credenciais = await _obter_credenciais_evolution(empresa_id, db, conexao_id=conexao_id)
@@ -520,7 +525,7 @@ async def get_base64_media(
         }
         
         payload = {
-            "message": message
+            "message": media_context or {},
         }
         
         async with httpx.AsyncClient() as client:
@@ -529,9 +534,10 @@ async def get_base64_media(
             if response.status_code in (200, 201):
                 data = response.json()
                 return data.get("base64")
-            else:
-                print(f"[Evolution Service] Erro ao baixar mídia. Status: {response.status_code}.")
-                return None
+            print(
+                f"[Evolution Service] Erro ao baixar mídia. Status: {response.status_code} | Body: {response.text}"
+            )
+            return None
                 
     except Exception as e:
         print(f"[Evolution Service] 🔥 Erro ao obter base64 da mídia: {str(e)}")

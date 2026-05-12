@@ -532,6 +532,24 @@ async def enviar_midia(
             lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
             lead.ia_ativa = False
             await session.commit()
+            await session.refresh(nova_msg)
+
+            mensagem_payload = {
+                "id": str(nova_msg.id),
+                "texto": str(nova_msg.texto or ""),
+                "from_me": bool(nova_msg.from_me),
+                "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+                "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+                "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+            }
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "tipo_evento": "nova_mensagem_outbound",
+                    "telefone": telefone,
+                    "mensagem": mensagem_payload,
+                },
+            )
 
             await manager.broadcast_to_empresa(
                 empresa_id,
