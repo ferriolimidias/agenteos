@@ -15,6 +15,8 @@ from sqlalchemy import delete, update, func, or_
 from typing import List, Dict, Any, Optional, Literal
 from fastapi.responses import Response
 from sqlalchemy.orm import selectinload
+
+from db.database import get_db, AsyncSessionLocal
 from db.models import (
     ADMIN_EMPRESA_ROLE,
     ROOT_ADMIN_ROLE,
