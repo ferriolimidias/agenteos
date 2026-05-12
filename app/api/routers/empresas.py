@@ -12,10 +12,8 @@ from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_
-from typing import List
+from typing import List, Dict, Any, Optional, Literal
 from fastapi.responses import Response
-
-from db.database import get_db, AsyncSessionLocal
 from sqlalchemy.orm import selectinload
 from db.models import (
     ADMIN_EMPRESA_ROLE,
@@ -48,7 +46,10 @@ from db.models import (
     normalize_user_email,
 )
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, Literal
+
+from sqlalchemy.orm.attributes import flag_modified
+
+from app.core.funnel_router import normalizar_uuid_str, normalizar_conjunto_uuid
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
@@ -109,6 +110,67 @@ class EmpresaUnidadeUpdate(BaseModel):
 class EmpresaUnidadeResponse(EmpresaUnidadeBase):
     id: str
     empresa_id: str
+
+
+class FunnelRoutingRulePayload(BaseModel):
+    """Uma regra de roteamento (espelha `funnel_router.RegraFunil` serializada)."""
+
+    especialista_id: str = Field(..., description="UUID do especialista")
+    tag_ids: List[str] = Field(default_factory=list)
+    etapa_ids: List[str] = Field(default_factory=list)
+    ordem: int = 0
+
+
+class FunnelRoutingPatchPayload(BaseModel):
+    match_order: Literal["tags_first", "etapa_first"] = "tags_first"
+    rules: List[FunnelRoutingRulePayload] = Field(default_factory=list)
+    default_especialista_id: Optional[str] = None
+
+
+def _funil_routing_default() -> dict[str, Any]:
+    return {"match_order": "tags_first", "rules": [], "default_especialista_id": None}
+
+
+def _coerce_funnel_routing_from_credenciais(cred: Any) -> dict[str, Any]:
+    """Normaliza o bloco `funnel_routing` para o formato esperado por `parse_funil_routing_credenciais`."""
+    base = _funil_routing_default()
+    if not isinstance(cred, dict):
+        return dict(base)
+    block = cred.get("funnel_routing")
+    if not isinstance(block, dict):
+        return dict(base)
+    mo = str(block.get("match_order") or "tags_first").strip().lower()
+    if mo not in ("tags_first", "etapa_first"):
+        mo = "tags_first"
+    rules_out: list[dict[str, Any]] = []
+    raw_rules = block.get("rules")
+    if isinstance(raw_rules, list):
+        for item in raw_rules:
+            if not isinstance(item, dict):
+                continue
+            esp = normalizar_uuid_str(item.get("especialista_id"))
+            if not esp:
+                continue
+            tag_ids = sorted(normalizar_conjunto_uuid(item.get("tag_ids")))
+            etapa_ids = sorted(normalizar_conjunto_uuid(item.get("etapa_ids")))
+            try:
+                ordem = int(item.get("ordem", 0) or 0)
+            except (TypeError, ValueError):
+                ordem = 0
+            rules_out.append(
+                {
+                    "especialista_id": esp,
+                    "tag_ids": list(tag_ids),
+                    "etapa_ids": list(etapa_ids),
+                    "ordem": ordem,
+                }
+            )
+    def_id = normalizar_uuid_str(block.get("default_especialista_id"))
+    return {
+        "match_order": mo,
+        "rules": rules_out,
+        "default_especialista_id": def_id,
+    }
 
 
 def _parse_uuid_or_none(value: str | None) -> uuid.UUID | None:
@@ -3604,6 +3666,115 @@ async def obter_agenda(empresa_id: str, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao carregar dados da Agenda: {str(e)}"
         )
+
+
+@router.get("/{empresa_id}/funnel-routing")
+async def obter_funnel_routing(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    """
+    Retorna `credenciais_canais['funnel_routing']` normalizado ou o objeto default
+    (`match_order`, `rules`, `default_especialista_id`).
+    """
+    emp_uuid = _parse_uuid_or_none(empresa_id)
+    if not emp_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
+
+    result = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = result.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+
+    return _coerce_funnel_routing_from_credenciais(empresa.credenciais_canais or {})
+
+
+@router.patch("/{empresa_id}/funnel-routing")
+async def atualizar_funnel_routing(
+    empresa_id: str,
+    payload: FunnelRoutingPatchPayload,
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    """
+    Atualiza apenas a chave `funnel_routing` dentro de `credenciais_canais` (JSONB).
+    Valida UUIDs e garante que especialistas referenciados pertencem à empresa.
+    """
+    emp_uuid = _parse_uuid_or_none(empresa_id)
+    if not emp_uuid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID da empresa inválido")
+
+    result = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = result.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
+
+    result_esp = await db.execute(
+        select(Especialista.id).where(
+            Especialista.empresa_id == emp_uuid,
+            Especialista.ativo.is_(True),
+        )
+    )
+    ids_especialistas = {str(row[0]).lower() for row in result_esp.all() if row[0]}
+
+    def_id = normalizar_uuid_str(payload.default_especialista_id)
+    if def_id and def_id not in ids_especialistas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_especialista_id deve ser um especialista ativo desta empresa.",
+        )
+
+    rules_norm: list[dict[str, Any]] = []
+    for idx, rule in enumerate(payload.rules):
+        esp = normalizar_uuid_str(rule.especialista_id)
+        if not esp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Regra #{idx + 1}: especialista_id inválido ou vazio.",
+            )
+        if esp not in ids_especialistas:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Regra #{idx + 1}: especialista_id não corresponde a um especialista ativo desta empresa.",
+            )
+        tag_ids = sorted(normalizar_conjunto_uuid(rule.tag_ids))
+        etapa_ids = sorted(normalizar_conjunto_uuid(rule.etapa_ids))
+        rules_norm.append(
+            {
+                "especialista_id": esp,
+                "tag_ids": list(tag_ids),
+                "etapa_ids": list(etapa_ids),
+                "ordem": int(rule.ordem or 0),
+            }
+        )
+
+    mo = str(payload.match_order or "tags_first").strip().lower()
+    if mo not in ("tags_first", "etapa_first"):
+        mo = "tags_first"
+
+    novo_bloco: dict[str, Any] = {
+        "match_order": mo,
+        "rules": rules_norm,
+        "default_especialista_id": def_id,
+    }
+
+    base = dict(empresa.credenciais_canais or {})
+    base["funnel_routing"] = novo_bloco
+    empresa.credenciais_canais = base
+    flag_modified(empresa, "credenciais_canais")
+
+    try:
+        await db.commit()
+        await db.refresh(empresa)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao salvar funnel_routing: {str(e)}",
+        )
+
+    return _coerce_funnel_routing_from_credenciais(empresa.credenciais_canais or {})
 
 
 @router.put("/{empresa_id}/credenciais")
