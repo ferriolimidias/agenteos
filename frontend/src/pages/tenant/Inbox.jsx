@@ -302,6 +302,7 @@ export default function Inbox() {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data || "{}");
+          console.log("WebSocket Recebido:", data);
           const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
           const tipoEventoV2 = String(data?.type || "").toLowerCase();
 

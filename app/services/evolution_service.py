@@ -169,7 +169,7 @@ async def enviar_midia_base64(
 ) -> bool:
     """
     Envia mídia em base64 via Evolution API.
-    Tipos suportados: image, audio, video, document (mediatype enviado à Evolution).
+    Tipos suportados: image, audio, video, document (`mediaType` enviado à Evolution).
     """
     try:
         credenciais = conexao.credenciais or {}
@@ -188,16 +188,21 @@ async def enviar_midia_base64(
             "Content-Type": "application/json",
         }
 
-        numero_norm = _normalizar_numero_destino(numero)
+        digitos = _normalizar_numero_destino(numero)
+        if not digitos:
+            print("[Evolution Service] Número de destino vazio após normalização; abortando envio de mídia.")
+            return False
+        destinatario = f"{digitos}@s.whatsapp.net"
         payload = {
-            "number": numero_norm,
-            "mediatype": str(tipo or "document").strip().lower(),
+            "number": destinatario,
+            "mediaType": str(tipo or "document").strip().lower(),
             "mimetype": mimetype or "application/octet-stream",
             "media": base64_data,
             "caption": caption or "",
         }
         if str(tipo or "").strip().lower() == "audio":
             payload["ptt"] = True
+            payload["fileName"] = "audio.mp3"
 
         async with httpx.AsyncClient() as client:
             response = await client.post(endpoint, headers=headers, json=payload, timeout=30.0)
@@ -500,8 +505,8 @@ async def get_base64_media(
 ) -> str | None:
     """
     Recupera a mídia em base64 através do endpoint da Evolution API.
-    `media_context` deve ser o objeto `data` completo do webhook (key + message + …),
-    não apenas o sub-dicionário `message`.
+    `media_context` deve incluir `key` e `message` do webhook, p.ex.
+    `{"key": data.get("key"), "message": data.get("message")}` (envolvido em `{"message": …}` no POST).
     """
     try:
         credenciais = await _obter_credenciais_evolution(empresa_id, db, conexao_id=conexao_id)

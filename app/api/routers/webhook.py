@@ -572,6 +572,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
         data = payload.get("data", {}) or {}
         key = data.get("key", {}) or {}
         message = data.get("message", {}) or {}
+        payload_download = {"key": data.get("key"), "message": data.get("message")}
         push_name = str(data.get("pushName") or payload.get("pushName") or "").strip() or None
         profile_pic_url = _extrair_profile_pic_url(payload, data)
         instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
@@ -619,7 +620,9 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             if not media_base64_audio:
                 try:
                     async with AsyncSessionLocal() as session:
-                        media_base64_audio = await get_base64_media(empresa_uuid, data, session, conexao_id=conexao_id)
+                        media_base64_audio = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
                 except Exception as e:
                     print(f"[WEBHOOK EVOLUTION] Erro ao baixar áudio (fallback): {e}")
 
@@ -689,7 +692,9 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                     from app.services.evolution_service import get_base64_media
 
                     async with AsyncSessionLocal() as session:
-                        media_base64 = await get_base64_media(empresa_uuid, data, session, conexao_id=conexao_id)
+                        media_base64 = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
                 except Exception as e:
                     print(f"[WEBHOOK EVOLUTION] Erro ao baixar imagem (fallback): {e}")
 
@@ -711,7 +716,9 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                     from app.services.evolution_service import get_base64_media
 
                     async with AsyncSessionLocal() as session:
-                        raw_vid = await get_base64_media(empresa_uuid, data, session, conexao_id=conexao_id)
+                        raw_vid = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
                     if raw_vid:
                         rs = str(raw_vid).strip()
                         if rs.lower().startswith("data:video") or rs.startswith("data:"):
@@ -726,7 +733,9 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 from app.services.evolution_service import get_base64_media
 
                 async with AsyncSessionLocal() as session:
-                    media_base64 = await get_base64_media(empresa_uuid, data, session, conexao_id=conexao_id)
+                    media_base64 = await get_base64_media(
+                        empresa_uuid, payload_download, session, conexao_id=conexao_id
+                    )
             except Exception as e:
                 print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {e}")
 
