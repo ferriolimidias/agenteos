@@ -67,6 +67,8 @@ export default function Inbox() {
   const recordingIntervalRef = useRef(null);
   const audioStreamRef = useRef(null);
   const shouldSendRecordingRef = useRef(true);
+  /** Por id de mensagem: transcrição de áudio expandida no chat */
+  const [transcriptVisibleByMsgId, setTranscriptVisibleByMsgId] = useState({});
 
   const scrollToBottom = () => {
     window.setTimeout(() => {
@@ -79,6 +81,32 @@ export default function Inbox() {
     const mm = String(Math.floor(secs / 60)).padStart(2, "0");
     const ss = String(secs % 60).padStart(2, "0");
     return `${mm}:${ss}`;
+  };
+
+  const buildAudioSrc = (media) => {
+    const m = String(media || "").trim();
+    if (!m) return "";
+    if (m.startsWith("http://") || m.startsWith("https://") || m.startsWith("data:")) return m;
+    return `data:audio/ogg;base64,${m}`;
+  };
+
+  const isTranscriptionPending = (texto) => String(texto || "").trim() === "[Transcrição pendente]";
+
+  const isTranscriptionError = (texto) => {
+    const t = String(texto || "").trim();
+    if (!t || isTranscriptionPending(t)) return false;
+    if (t.startsWith("[Erro")) return true;
+    const lower = t.toLowerCase();
+    if (lower.includes("não transcrito") || lower.includes("nao transcrito")) return true;
+    if (lower.includes("indisponível") || lower.includes("indisponivel")) return true;
+    if (lower.includes("mídia de áudio indisponível") || lower.includes("midia de audio indisponivel")) return true;
+    return false;
+  };
+
+  const toggleTranscriptVisibility = (msgId) => {
+    const id = String(msgId || "");
+    if (!id) return;
+    setTranscriptVisibleByMsgId((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   const isPendingMessage = (msg) => String(msg?.status || "").toLowerCase() === "pending";
@@ -272,6 +300,34 @@ export default function Inbox() {
               ia_ativa: iaAtiva,
               bot_pausado: !iaAtiva,
             });
+            return;
+          }
+
+          if (tipoEventoV2 === "atualizacao_mensagem" || tipoEvento === "mensagem_atualizada") {
+            const telefoneEvento = String(data?.telefone || "");
+            const atual = data?.mensagem;
+            const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
+            if (
+              telefoneSelecionado &&
+              telefoneEvento &&
+              telefoneSelecionado === telefoneEvento &&
+              atual?.id
+            ) {
+              setMessages((prev) =>
+                (prev || []).map((msg) =>
+                  String(msg?.id) === String(atual.id)
+                    ? {
+                        ...msg,
+                        texto: atual.texto !== undefined ? atual.texto : msg.texto,
+                        media_url: atual.media_url !== undefined ? atual.media_url : msg.media_url,
+                        tipo_mensagem: atual.tipo_mensagem || msg.tipo_mensagem,
+                        from_me: atual.from_me !== undefined ? atual.from_me : msg.from_me,
+                        criado_em: atual.criado_em || msg.criado_em,
+                      }
+                    : msg
+                )
+              );
+            }
             return;
           }
 
@@ -780,11 +836,41 @@ export default function Inbox() {
       );
     }
 
-    if (tipo === "audio" && media) {
+    if (tipo === "audio") {
+      const audioSrc = buildAudioSrc(media);
+      const mid = String(msg?.id || "");
+      const showTr = Boolean(transcriptVisibleByMsgId[mid]);
+      const textoRaw = String(msg?.texto || "");
+      const pending = isTranscriptionPending(textoRaw);
+      const err = isTranscriptionError(textoRaw);
+
       return (
-        <div className="space-y-2">
-          <audio controls src={`data:audio/mpeg;base64,${media}`} className="max-w-xs" />
-          {msg?.texto ? <p className="text-sm whitespace-pre-wrap">{msg.texto}</p> : null}
+        <div className="flex flex-col gap-2">
+          {audioSrc ? (
+            <audio controls src={audioSrc} className="max-w-full sm:max-w-xs" preload="metadata" />
+          ) : (
+            <p className="text-xs text-amber-800">Áudio registado; o ficheiro não está disponível para reprodução.</p>
+          )}
+          <button
+            type="button"
+            onClick={() => toggleTranscriptVisibility(mid)}
+            className="self-start text-xs font-medium text-blue-600 underline-offset-2 hover:text-blue-800 hover:underline"
+          >
+            {showTr ? "Ocultar transcrição" : "Ver transcrição"}
+          </button>
+          {showTr ? (
+            <div
+              className={`rounded-lg border px-3 py-2 text-sm italic leading-relaxed ${
+                err
+                  ? "border-red-200 bg-red-50 text-red-900"
+                  : pending
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : "border-gray-200 bg-gray-100 text-gray-800"
+              }`}
+            >
+              {pending ? "A transcrever…" : textoRaw || "(sem transcrição)"}
+            </div>
+          ) : null}
         </div>
       );
     }

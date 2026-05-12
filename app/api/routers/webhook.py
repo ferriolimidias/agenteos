@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter, BackgroundTasks, Request
-from typing import Dict, Any
+from typing import Any, Dict, Tuple
 import uuid
 import base64
 import json
@@ -21,6 +21,8 @@ from sqlalchemy import func, select
 router = APIRouter(prefix="/webhook", tags=["Webhook"])
 
 EVOLUTION_WEBHOOK_STATUS_VALIDOS = {"ativo", "connected", "open"}
+
+TEXTO_AUDIO_TRANSCRICAO_PENDENTE = "[Transcrição pendente]"
 
 
 def _mask_phone(telefone: str) -> str:
@@ -158,6 +160,31 @@ def _extrair_tipo_mensagem(data_json: dict) -> str:
     return "text"
 
 
+def _mimetype_audio_evolution(message: dict) -> str:
+    audio = (message or {}).get("audioMessage") or {}
+    m = str(audio.get("mimetype") or "").strip()
+    return m if m else "audio/ogg"
+
+
+def _build_playable_audio_media_url(base64_raw: str | None, mimetype: str) -> str | None:
+    """
+    Garante `media_url` reproduzível no browser (<audio src>).
+    Aceita base64 cru, data URI completa ou URL http(s).
+    """
+    if not base64_raw or not str(base64_raw).strip():
+        return None
+    raw = str(base64_raw).strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("data:audio") or raw.startswith("data:application"):
+        return raw
+    if raw.startswith("data:"):
+        return raw
+    mime = (mimetype or "audio/ogg").strip() or "audio/ogg"
+    b64 = raw.split(",", 1)[1] if "," in raw else raw
+    return f"data:{mime};base64,{b64}"
+
+
 async def _transcrever_audio(base64_string: str, openai_api_key: str | None = None) -> str:
     """
     Transcreve áudio base64 via Whisper estritamente em modo BYOK.
@@ -202,6 +229,83 @@ async def _transcrever_audio(base64_string: str, openai_api_key: str | None = No
         print(f"[WEBHOOK EVOLUTION] Falha na transcrição Whisper: {exc}")
         return "[Erro ao transcrever áudio]"
 
+
+async def _tarefa_transcricao_audio_e_opcional_ia(
+    *,
+    empresa_id: str,
+    telefone: str,
+    mensagem_id: uuid.UUID,
+    media_base64_para_whisper: str | None,
+    openai_api_key: str | None,
+    disparar_ia: bool,
+    conexao_id: str | None,
+    push_name: str | None,
+    background_tasks: BackgroundTasks | None,
+) -> None:
+    """
+    Atualiza apenas o campo `texto` da mensagem (tipo permanece `audio`).
+    Opcionalmente dispara o debouncer/IA com o texto transcrito.
+    """
+    try:
+        if media_base64_para_whisper and str(media_base64_para_whisper).strip():
+            texto_final = await _transcrever_audio(
+                media_base64_para_whisper, openai_api_key=openai_api_key
+            )
+        else:
+            texto_final = "[Erro ao transcrever: mídia de áudio indisponível]"
+        legado = "[Áudio Transcrito]:"
+        if legado in texto_final:
+            texto_final = texto_final.replace(legado, "", 1).strip()
+    except Exception as exc:
+        print(f"[WEBHOOK AUDIO] Falha na tarefa de transcrição: {exc}")
+        texto_final = "[Erro ao transcrever áudio]"
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(MensagemHistorico).where(MensagemHistorico.id == mensagem_id)
+        )
+        row = result.scalars().first()
+        if not row:
+            return
+        if str(row.tipo_mensagem or "").strip().lower() != "audio":
+            return
+        row.texto = texto_final or "[Erro ao transcrever áudio]"
+        await session.commit()
+        await session.refresh(row)
+        lead_id_str = str(row.lead_id)
+        payload = {
+            "id": str(row.id),
+            "texto": str(row.texto or ""),
+            "from_me": bool(row.from_me),
+            "tipo_mensagem": "audio",
+            "media_url": str(row.media_url) if row.media_url else None,
+            "criado_em": row.criado_em.isoformat() if row.criado_em else None,
+        }
+
+    await manager.broadcast_to_empresa(
+        str(empresa_id),
+        {
+            "type": "ATUALIZACAO_MENSAGEM",
+            "tipo_evento": "mensagem_atualizada",
+            "telefone": telefone,
+            "lead_id": lead_id_str,
+            "mensagem": payload,
+        },
+    )
+
+    if disparar_ia and (texto_final or "").strip():
+        msg = StandardMessage(
+            empresa_id=empresa_id,
+            canal="evolution",
+            identificador_origem=telefone,
+            conexao_id=conexao_id,
+            nome_contato=push_name,
+            texto_mensagem=str(texto_final).strip(),
+            is_human_agent=False,
+        )
+        await handle_debouncer(msg, background_tasks)
+
+
 async def get_conexao_id_por_tipo(
     session,
     empresa_uuid: uuid.UUID,
@@ -244,7 +348,7 @@ async def save_history_and_check_pause(
     gclid: str | None = None,
     fbclid: str | None = None,
     profile_pic_url: str | None = None,
-) -> bool:
+) -> Tuple[bool, uuid.UUID]:
     def _normalize_stage_name(value: str | None) -> str:
         texto = str(value or "").strip().lower()
         texto = unicodedata.normalize("NFKD", texto)
@@ -386,7 +490,8 @@ async def save_history_and_check_pause(
             from_me=from_me
         )
         session.add(nova_msg)
-        
+        await session.flush()
+
         now = datetime.utcnow()
         status_atendimento = str(lead.status_atendimento or "").strip().lower()
 
@@ -426,7 +531,7 @@ async def save_history_and_check_pause(
             },
         )
                 
-    return should_process
+    return should_process, nova_msg.id
 
 
 @router.post("/{empresa_id}/meta")
@@ -435,7 +540,7 @@ async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_task
     texto_bruto = payload.get("text", {}).get("body", "Mensagem de teste (Meta)")
     texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(
+    should_process, _ = await save_history_and_check_pause(
         empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
     )
     
@@ -526,42 +631,39 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             except Exception as e:
                 print(f"[WEBHOOK EVOLUTION] Erro ao buscar credencial OpenAI: {e}")
 
-            if media_base64_audio:
-                transcricao = await _transcrever_audio(media_base64_audio, openai_api_key=openai_key)
-                # Mensagens entre colchetes são marcadores de erro/bloqueio
-                # devolvidos por _transcrever_audio (ex.: tenant sem chave).
-                # Preservamos o texto literal sem prefixar "[Áudio Transcrito]:".
-                if transcricao.startswith("[") and transcricao.endswith("]"):
-                    texto_transcrito = transcricao
-                else:
-                    texto_transcrito = f"[Áudio Transcrito]: {transcricao}"
-            else:
-                texto_transcrito = "[Erro ao transcrever áudio]"
+            mime_audio = _mimetype_audio_evolution(message)
+            media_url_playable = _build_playable_audio_media_url(media_base64_audio, mime_audio)
 
-            should_process = await save_history_and_check_pause(
+            should_process, msg_uuid = await save_history_and_check_pause(
                 empresa_id,
                 telefone,
-                texto_transcrito,
+                TEXTO_AUDIO_TRANSCRICAO_PENDENTE,
                 fromMe,
                 conexao_id,
                 nome_contato=push_name,
                 tipo_mensagem="audio",
-                media_url=media_base64_audio,
+                media_url=media_url_playable,
                 gclid=gclid,
                 fbclid=fbclid,
                 profile_pic_url=profile_pic_url,
             )
-            if should_process:
-                msg = StandardMessage(
-                    empresa_id=empresa_id,
-                    canal="evolution",
-                    identificador_origem=telefone,
-                    conexao_id=conexao_id,
-                    nome_contato=push_name,
-                    texto_mensagem=texto_transcrito,
-                    is_human_agent=False,
-                )
-                background_tasks.add_task(handle_debouncer, msg, background_tasks)
+
+            background_tasks.add_task(
+                _tarefa_transcricao_audio_e_opcional_ia,
+                empresa_id=empresa_id,
+                telefone=telefone,
+                mensagem_id=msg_uuid,
+                media_base64_para_whisper=media_base64_audio,
+                openai_api_key=openai_key,
+                disparar_ia=bool(should_process),
+                conexao_id=conexao_id,
+                push_name=push_name,
+                background_tasks=background_tasks,
+            )
+
+            if not fromMe:
+                asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
+
             return {"status": "received", "message": "Processed"}
 
         media_base64 = None
@@ -596,7 +698,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             except Exception as e:
                 print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {e}")
 
-        should_process = await save_history_and_check_pause(
+        should_process, _ = await save_history_and_check_pause(
             empresa_id,
             telefone,
             texto_limpo or "[Mensagem não suportada]",
@@ -639,7 +741,7 @@ async def webhook_telegram(empresa_id: str, payload: Dict[Any, Any], background_
     texto_bruto = payload.get("message", {}).get("text", "Mensagem de teste (Telegram)")
     texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(
+    should_process, _ = await save_history_and_check_pause(
         empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
     )
     
@@ -657,7 +759,7 @@ async def webhook_chatwoot(empresa_id: str, payload: Dict[Any, Any], background_
     texto_bruto = payload.get("content", "Mensagem de teste (Chatwoot)")
     texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
     
-    should_process = await save_history_and_check_pause(
+    should_process, _ = await save_history_and_check_pause(
         empresa_id, identificador, texto, fromMe, gclid=gclid, fbclid=fbclid
     )
     

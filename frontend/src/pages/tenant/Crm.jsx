@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../../services/api";
-import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2 } from "lucide-react";
+import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2, GripVertical } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -18,6 +18,9 @@ function formatCurrency(value) {
   }).format(value || 0);
 }
 
+/** MIME type do payload de arrastar lead entre colunas (evita colisão com texto selecionado). */
+const CRM_LEAD_DRAG_MIME = "application/x-agenteos-crm-lead+json";
+
 export default function Crm() {
   const [funil, setFunil] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30,11 +33,23 @@ export default function Crm() {
   const [importSaving, setImportSaving] = useState(false);
   const [importInfo, setImportInfo] = useState("");
   const [toastMessage, setToastMessage] = useState("");
+  /** Lead em processo de mudança de etapa (evita arrastar duplicado). */
+  const [movingLeadId, setMovingLeadId] = useState(null);
+  /** Coluna sobre a qual o utilizador está a arrastar (feedback visual). */
+  const [dragOverEtapaId, setDragOverEtapaId] = useState(null);
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
 
-  const fetchCrmData = async () => {
+  /** Colunas do Kanban = etapas do funil da empresa (`crm_etapas`), ordenadas por `ordem`. */
+  const etapasOrdenadas = useMemo(() => {
+    const lista = funil?.etapas;
+    if (!Array.isArray(lista) || lista.length === 0) return [];
+    return [...lista].sort((a, b) => Number(a?.ordem ?? 0) - Number(b?.ordem ?? 0));
+  }, [funil]);
+
+  const fetchCrmData = useCallback(async () => {
+    if (!empresaId) return;
     try {
       setLoading(true);
       const res = await api.get(`/empresas/${empresaId}/crm`);
@@ -44,9 +59,10 @@ export default function Crm() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [empresaId]);
 
-  const fetchOfficialTags = async () => {
+  const fetchOfficialTags = useCallback(async () => {
+    if (!empresaId) return;
     try {
       const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
       setAvailableTags(res.data || []);
@@ -54,16 +70,21 @@ export default function Crm() {
       console.error("Erro ao carregar tags oficiais:", err);
       setAvailableTags([]);
     }
-  };
+  }, [empresaId]);
 
   useEffect(() => {
     if (empresaId) {
-      fetchCrmData();
-      fetchOfficialTags();
+      void fetchCrmData();
+      void fetchOfficialTags();
     }
-  }, [empresaId]);
+  }, [empresaId, fetchCrmData, fetchOfficialTags]);
 
-  const updateLeadInState = (leadId, updates) => {
+  const showToast = useCallback((message) => {
+    setToastMessage(message);
+    window.setTimeout(() => setToastMessage(""), 2800);
+  }, []);
+
+  const updateLeadInState = useCallback((leadId, updates) => {
     setFunil((prev) => {
       if (!prev?.etapas) return prev;
       return {
@@ -77,20 +98,103 @@ export default function Crm() {
       };
     });
     setSelectedLead((prev) => (prev?.id === leadId ? { ...prev, ...updates } : prev));
-  };
+  }, []);
 
-  const findLeadById = (leadId) => {
-    for (const etapa of funil?.etapas || []) {
-      const lead = (etapa?.leads || []).find((item) => item?.id === leadId);
-      if (lead) return lead;
-    }
-    return selectedLead?.id === leadId ? selectedLead : null;
-  };
+  const moveLeadOptimisticToEtapa = useCallback((leadId, targetEtapaId) => {
+    setFunil((prev) => {
+      if (!prev?.etapas?.length) return prev;
+      let payload = null;
+      for (const e of prev.etapas) {
+        const hit = (e.leads || []).find((l) => l?.id === leadId);
+        if (hit) {
+          payload = hit;
+          break;
+        }
+      }
+      if (!payload) return prev;
+      return {
+        ...prev,
+        etapas: prev.etapas.map((e) => {
+          const leadsSem = (e.leads || []).filter((l) => l?.id !== leadId);
+          if (e.id === targetEtapaId) return { ...e, leads: [...leadsSem, payload] };
+          return { ...e, leads: leadsSem };
+        }),
+      };
+    });
+  }, []);
 
-  const showToast = (message) => {
-    setToastMessage(message);
-    window.setTimeout(() => setToastMessage(""), 2800);
-  };
+  const persistLeadEtapa = useCallback(
+    (leadId, targetEtapaId) =>
+      api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { etapa_id: targetEtapaId }),
+    [empresaId]
+  );
+
+  const handleLeadDragStart = useCallback(
+    (e, leadId) => {
+      if (movingLeadId || !leadId) {
+        e.preventDefault();
+        return;
+      }
+      try {
+        e.dataTransfer.setData(CRM_LEAD_DRAG_MIME, JSON.stringify({ leadId: String(leadId) }));
+        e.dataTransfer.effectAllowed = "move";
+      } catch {
+        e.preventDefault();
+      }
+    },
+    [movingLeadId]
+  );
+
+  const handleEtapaDragOver = useCallback((e, etapaId) => {
+    const types = Array.from(e.dataTransfer?.types || []);
+    if (!types.includes(CRM_LEAD_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverEtapaId(etapaId);
+  }, []);
+
+  const handleEtapaDragLeave = useCallback((e) => {
+    const next = e.relatedTarget;
+    if (next && e.currentTarget.contains(next)) return;
+    setDragOverEtapaId(null);
+  }, []);
+
+  const handleEtapaDrop = useCallback(
+    async (e, targetEtapaId) => {
+      e.preventDefault();
+      setDragOverEtapaId(null);
+      let leadId = "";
+      try {
+        const raw = e.dataTransfer.getData(CRM_LEAD_DRAG_MIME);
+        const parsed = raw ? JSON.parse(raw) : {};
+        leadId = String(parsed.leadId || "").trim();
+      } catch {
+        return;
+      }
+      if (!leadId || !targetEtapaId) return;
+
+      const origem = (funil?.etapas || []).find((col) => (col.leads || []).some((l) => l?.id === leadId));
+      const origemId = origem?.id;
+      if (origemId === targetEtapaId) return;
+
+      setMovingLeadId(leadId);
+      moveLeadOptimisticToEtapa(leadId, targetEtapaId);
+      try {
+        const { data } = await persistLeadEtapa(leadId, targetEtapaId);
+        if (data?.tags) {
+          updateLeadInState(leadId, { tags: data.tags });
+        }
+        showToast("Lead movido para a nova etapa.");
+      } catch (err) {
+        console.error("Erro ao mover lead de etapa:", err);
+        await fetchCrmData();
+        alert(err.response?.data?.detail || "Não foi possível mover o lead. Os dados foram recarregados.");
+      } finally {
+        setMovingLeadId(null);
+      }
+    },
+    [funil, moveLeadOptimisticToEtapa, persistLeadEtapa, fetchCrmData, updateLeadInState, showToast]
+  );
 
   const handleLeadTagsChange = async (leadId, nextTags) => {
     try {
@@ -225,8 +329,10 @@ export default function Crm() {
             <Users className="text-blue-600" size={32} />
             CRM Dinâmico
           </h1>
-          <p className="mt-1 text-gray-500">
-            {funil ? `Funil ativo: ${funil.funil_nome}` : "Gerencie seus leads capturados pela IA."}
+          <p className="mt-1 max-w-2xl text-gray-500">
+            {funil
+              ? `Funil ativo: ${funil.funil_nome}. As colunas são as etapas deste funil (campo ordem). Arraste um card para mudar a etapa no CRM; as tags do card são apenas rótulos.`
+              : "Gerencie os leads capturados pela IA. Os dados do funil vêm da API por empresa."}
           </p>
         </div>
 
@@ -255,14 +361,16 @@ export default function Crm() {
             <span className="font-medium text-gray-400">Carregando funil...</span>
           </div>
         </div>
-      ) : !funil || !funil.etapas ? (
+      ) : !funil || !Array.isArray(funil.etapas) || etapasOrdenadas.length === 0 ? (
         <div className="flex flex-1 items-center justify-center rounded-2xl border border-gray-100 bg-white p-12">
-          <p className="text-gray-500">Nenhum dado de CRM encontrado.</p>
+          <p className="text-center text-gray-500">
+            Nenhum dado de CRM encontrado ou o funil ainda não tem etapas. Configure o funil para esta empresa.
+          </p>
         </div>
       ) : (
         <div className="custom-scrollbar flex-1 overflow-x-auto pb-4">
           <div className="flex h-full min-w-max space-x-6">
-            {funil.etapas.map((etapa) => {
+            {etapasOrdenadas.map((etapa) => {
               const totalVendasEtapa = (etapa.leads || []).reduce(
                 (subtotal, lead) => subtotal + Number(lead.valor_conversao || 0),
                 0
@@ -278,11 +386,22 @@ export default function Crm() {
               return (
                 <div
                   key={etapa.id}
-                  className="flex w-80 flex-col overflow-hidden rounded-2xl border border-gray-200/60 bg-gray-50/80 shadow-sm"
+                  role="region"
+                  aria-label={`Etapa ${etapa.nome}`}
+                  onDragOver={(ev) => handleEtapaDragOver(ev, etapa.id)}
+                  onDragLeave={handleEtapaDragLeave}
+                  onDrop={(ev) => handleEtapaDrop(ev, etapa.id)}
+                  className={`flex w-80 flex-col overflow-hidden rounded-2xl border bg-gray-50/80 shadow-sm transition-colors ${
+                    dragOverEtapaId === etapa.id
+                      ? "border-blue-400 ring-2 ring-blue-200"
+                      : "border-gray-200/60"
+                  }`}
                 >
                   <div className="flex items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
                     <div className="min-w-0">
-                      <h3 className="truncate font-semibold text-gray-800">{etapa.nome}</h3>
+                      <h3 className="truncate font-semibold text-gray-800" title={etapa.nome}>
+                        {etapa.nome}
+                      </h3>
                       <p
                         className={`mt-1 text-xs font-medium ${
                           totalLeadsConvertidosEtapa > 0 ? "text-emerald-700" : "text-gray-400"
@@ -305,11 +424,33 @@ export default function Crm() {
                       etapa.leads.map((lead) => (
                         <div
                           key={lead.id}
+                          role="button"
+                          tabIndex={0}
+                          draggable={!movingLeadId}
+                          onDragStart={(ev) => handleLeadDragStart(ev, lead.id)}
+                          onDragEnd={() => setDragOverEtapaId(null)}
                           onClick={() => setSelectedLead(lead)}
-                          className="group cursor-pointer rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md"
+                          onKeyDown={(ev) => {
+                            if (ev.key === "Enter" || ev.key === " ") {
+                              ev.preventDefault();
+                              setSelectedLead(lead);
+                            }
+                          }}
+                          className={`group rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md ${
+                            movingLeadId === lead.id ? "pointer-events-none opacity-60" : ""
+                          } ${!movingLeadId ? "cursor-grab active:cursor-grabbing" : "cursor-wait"}`}
                         >
                           <div className="mb-2 flex justify-between gap-3">
-                            <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <span
+                                className="shrink-0 text-gray-300 opacity-0 transition-opacity group-hover:opacity-100"
+                                title="Arrastar para outra etapa"
+                                aria-hidden
+                              >
+                                <GripVertical size={16} />
+                              </span>
+                              <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
+                            </div>
                             <div className="flex items-center gap-1">
                               <button
                                 className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100"
@@ -381,11 +522,12 @@ export default function Crm() {
               );
             })}
 
-            <div className="flex min-h-[500px] w-80 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 opacity-50 transition-all hover:border-blue-300 hover:bg-gray-50 hover:opacity-100">
-              <div className="flex items-center gap-2 pb-20 font-medium text-gray-500">
-                <Plus size={20} />
-                Nova Etapa
-              </div>
+            <div className="flex min-h-[500px] w-80 max-w-xs flex-col items-center justify-center rounded-2xl border border-dashed border-gray-200 bg-gray-50/40 px-4 text-center">
+              <p className="text-sm font-medium text-gray-600">Funil por empresa</p>
+              <p className="mt-2 text-xs leading-relaxed text-gray-500">
+                Novas etapas e reordenação poderão ser editadas aqui ou via API administrativa; as colunas atuais refletem
+                apenas o cadastro em <span className="font-mono text-[11px]">crm_etapas</span> deste tenant.
+              </p>
             </div>
           </div>
         </div>
