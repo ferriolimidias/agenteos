@@ -356,9 +356,21 @@ def _montar_human_message_multimodal(texto: str | None, tipo_mensagem: str | Non
     tipo = str(tipo_mensagem or "text").strip().lower()
     media = str(media_url or "").strip()
     texto_base = str(texto or "").strip()
+
+    if tipo == "video":
+        legenda = texto_base if texto_base else "(sem legenda)"
+        return HumanMessage(content=f"[Vídeo recebido do cliente] Legenda: {legenda}")
+
     if tipo == "image" and media:
         media_final = media
-        if not media_final.startswith("http://") and not media_final.startswith("https://") and not media_final.startswith("data:"):
+        mlow = media_final.lower()
+        if media_final.startswith("http://") or media_final.startswith("https://"):
+            pass
+        elif mlow.startswith("data:image/"):
+            pass
+        elif media_final.startswith("data:"):
+            pass
+        else:
             media_final = f"data:image/jpeg;base64,{media_final}"
         texto_complementar = texto_base if texto_base else "O utilizador enviou uma imagem anexa."
         conteudo = [

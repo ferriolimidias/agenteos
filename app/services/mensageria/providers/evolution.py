@@ -193,9 +193,12 @@ class EvolutionProvider(BaseProvider):
         evolution_url, evolution_apikey, instance_name = self._obter_config(credenciais)
         endpoint = f"{evolution_url}/message/sendMedia/{instance_name}"
         number = _normalizar_identificador_whatsapp(payload.identificador_contato)
+        tipo_norm = str(payload.tipo or "document").strip().lower()
+        if tipo_norm not in {"image", "audio", "video", "document"}:
+            tipo_norm = "document"
         body = {
             "number": number,
-            "mediatype": payload.tipo if payload.tipo in {"image", "document"} else "document",
+            "mediatype": tipo_norm,
             "media": str(payload.media_url or ""),
             "caption": str(payload.texto or ""),
         }

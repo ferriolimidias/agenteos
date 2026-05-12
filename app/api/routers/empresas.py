@@ -3,7 +3,6 @@ import io
 import csv
 import json
 import uuid
-import hashlib
 import time
 from datetime import datetime, timedelta
 import pdfplumber
@@ -53,7 +52,11 @@ from typing import Dict, Any, Optional, Literal
 
 from app.core.security import get_password_hash
 from app.services.campanha_service import extrair_variaveis_template, gerar_preview_campanha, processar_campanha_disparo
-from app.services.ads_integration_service import notificar_conversao_ads
+from app.services.ads_integration_service import (
+    disparar_meta_capi_por_tag,
+    hashear_ph_meta,
+    normalizar_telefone_para_meta_ph,
+)
 from app.services.tag_crm_service import (
     listar_tags_oficiais_ou_existentes,
     normalizar_tags,
@@ -2680,7 +2683,7 @@ async def atualizar_lead_crm(
     try:
         await db.commit()
         for tag in tags_para_notificar:
-            background_tasks.add_task(notificar_conversao_ads, str(lead.id), str(tag.nome), db)
+            background_tasks.add_task(disparar_meta_capi_por_tag, str(lead.id), str(tag.nome))
         await db.refresh(lead)
         tags_por_id, tags_por_nome = await _carregar_mapa_tags_empresa(db, emp_uuid)
         return {
@@ -2970,15 +2973,17 @@ async def teste_meta_capi(
         url += f"&test_event_code={test_event_code}"
 
     telefone_base = str(getattr(request, "telefone", "") or "").strip()
-    telefone_para_hash = telefone_base if telefone_base else "555484390411"
-    telefone_hash = hashlib.sha256(telefone_para_hash.encode("utf-8")).hexdigest()
+    tel_norm = normalizar_telefone_para_meta_ph(telefone_base)
+    if not tel_norm:
+        tel_norm = normalizar_telefone_para_meta_ph("55484390411") or "55484390411"
+    telefone_hash = hashear_ph_meta(tel_norm)
 
     payload = {
         "data": [
             {
                 "event_name": "Purchase",
                 "event_time": int(time.time()),
-                "action_source": "website",
+                "action_source": "chat",
                 "event_source_url": "https://agenteos.com",
                 "user_data": {
                     "ph": [telefone_hash],
@@ -3108,7 +3113,7 @@ async def importar_leads(
 
         await db.commit()
         for lead_id_notificacao, tag_nome_notificacao in notificacoes_ads_pendentes:
-            background_tasks.add_task(notificar_conversao_ads, lead_id_notificacao, tag_nome_notificacao, db)
+            background_tasks.add_task(disparar_meta_capi_por_tag, lead_id_notificacao, tag_nome_notificacao)
         return {
             "status": "sucesso",
             "mensagem": "Importação concluída.",

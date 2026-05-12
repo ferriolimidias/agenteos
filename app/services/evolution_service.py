@@ -169,7 +169,7 @@ async def enviar_midia_base64(
 ) -> bool:
     """
     Envia mídia em base64 via Evolution API.
-    Tipos suportados: image, audio, document.
+    Tipos suportados: image, audio, video, document (mediatype enviado à Evolution).
     """
     try:
         credenciais = conexao.credenciais or {}

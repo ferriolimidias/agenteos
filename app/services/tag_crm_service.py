@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from db.database import AsyncSessionLocal
-from db.models import CRMLead, CRMEtapa, CRMFunil, TagCRM
-from app.services.ads_integration_service import notificar_conversao_ads
+from db.models import CRMLead, CRMEtapa, CRMFunil, Empresa, TagCRM
+from app.services.ads_integration_service import disparar_meta_capi_por_tag, enviar_evento_meta_capi
 
 
 def normalizar_tags(tags: list[str] | None) -> list[str]:
@@ -91,9 +91,6 @@ async def processar_disparo_conversao_ads_para_tags(
     if not tags_aplicadas:
         return
 
-    if not (str(getattr(lead, "gclid", "") or "").strip() or str(getattr(lead, "fbclid", "") or "").strip()):
-        return
-
     tags_norm = {str(tag).strip().lower() for tag in tags_aplicadas if str(tag).strip()}
     if not tags_norm:
         return
@@ -106,16 +103,52 @@ async def processar_disparo_conversao_ads_para_tags(
     )
     tags_disparo = result.scalars().all()
 
+    empresa = (
+        await session.execute(select(Empresa).where(Empresa.id == lead.empresa_id))
+    ).scalars().first()
+    if not empresa:
+        return
+
     for tag in tags_disparo:
         nome_tag = str(tag.nome or "").strip().lower()
         if nome_tag in tags_norm:
-            await notificar_conversao_ads(str(lead.id), str(tag.nome), session)
+            await enviar_evento_meta_capi(lead, tag, empresa, session)
 
 
 def disparar_conversao_ads_background(lead_id: str, tag_nome: str) -> None:
+    asyncio.create_task(disparar_meta_capi_por_tag(lead_id, tag_nome))
+
+
+def agendar_processamento_disparo_meta_capi(lead_id: str, tag_ids_novos: list[str]) -> None:
+    """Dispara envio Meta CAPI em background após aplicar tags (ex.: ferramentas da IA)."""
+
     async def _runner() -> None:
+        try:
+            lid = uuid.UUID(str(lead_id))
+        except (ValueError, TypeError):
+            return
+        uuids: list[uuid.UUID] = []
+        for raw in tag_ids_novos or []:
+            try:
+                uuids.append(uuid.UUID(str(raw).strip()))
+            except (ValueError, TypeError):
+                continue
+        if not uuids:
+            return
         async with AsyncSessionLocal() as session:
-            await notificar_conversao_ads(lead_id, tag_nome, session)
+            lead = (await session.execute(select(CRMLead).where(CRMLead.id == lid))).scalars().first()
+            if not lead:
+                return
+            result_tags = await session.execute(
+                select(TagCRM).where(
+                    TagCRM.empresa_id == lead.empresa_id,
+                    TagCRM.id.in_(uuids),
+                )
+            )
+            nomes = [str(t.nome or "").strip() for t in result_tags.scalars().all() if str(t.nome or "").strip()]
+            if not nomes:
+                return
+            await processar_disparo_conversao_ads_para_tags(session, lead, nomes)
 
     asyncio.create_task(_runner())
 

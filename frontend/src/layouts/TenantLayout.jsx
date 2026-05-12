@@ -6,6 +6,7 @@ import {
   BookOpenText,
   Users,
   Webhook,
+  Cable,
   LogOut,
   Timer,
   MessageCircle,
@@ -107,6 +108,10 @@ export default function TenantLayout() {
           <NavLink to="/painel/conexoes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
             <Webhook className="h-5 w-5 shrink-0" />
             <span>Conexões</span>
+          </NavLink>
+          <NavLink to="/painel/integracoes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
+            <Cable className="h-5 w-5 shrink-0" />
+            <span>Integrações</span>
           </NavLink>
           <NavLink to="/painel/agentes" className={({ isActive }) => `${navBaseClass} ${isActive ? navActiveClass : navInactiveClass}`}>
             <Brain className="h-5 w-5 shrink-0" />

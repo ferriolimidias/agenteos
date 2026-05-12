@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { AlertCircle, ArrowRightLeft, Check, FileAudio, FileImage, FileText, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, Check, FileAudio, FileImage, FileText, FileVideo, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
@@ -88,6 +88,20 @@ export default function Inbox() {
     if (!m) return "";
     if (m.startsWith("http://") || m.startsWith("https://") || m.startsWith("data:")) return m;
     return `data:audio/ogg;base64,${m}`;
+  };
+
+  const buildImageSrc = (media) => {
+    const m = String(media || "").trim();
+    if (!m) return "";
+    if (m.startsWith("http://") || m.startsWith("https://") || m.startsWith("data:")) return m;
+    return `data:image/jpeg;base64,${m}`;
+  };
+
+  const buildVideoSrc = (media) => {
+    const m = String(media || "").trim();
+    if (!m) return "";
+    if (m.startsWith("http://") || m.startsWith("https://") || m.startsWith("data:")) return m;
+    return `data:video/mp4;base64,${m}`;
   };
 
   const isTranscriptionPending = (texto) => String(texto || "").trim() === "[Transcrição pendente]";
@@ -547,16 +561,34 @@ export default function Inbox() {
     }
   };
 
-  const sendMediaFile = async (file, caption = "") => {
-    if (!selectedLead || !file) return false;
+  const sendMediaFile = async (file, caption = "", options = {}) => {
+    if (!selectedLead || !file) {
+      const det = !selectedLead ? "Nenhum contacto selecionado." : "Ficheiro em falta.";
+      console.error("[Inbox sendMediaFile] Abortado:", det);
+      setToast({ type: "error", message: det });
+      return false;
+    }
     const telefone = selectedLead.telefone_contato;
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tipoMidia = file.type.startsWith("image/")
-      ? "image"
-      : file.type.startsWith("audio/")
-        ? "audio"
-        : "document";
-    const textoBaseEnvio = tipoMidia === "audio" ? "Enviando áudio..." : "Enviando arquivo...";
+    const forcedTipo = String(options?.tipoMensagem || "").trim().toLowerCase();
+    const tiposValidos = ["image", "audio", "video", "document"];
+    const tipoMidia = tiposValidos.includes(forcedTipo)
+      ? forcedTipo
+      : file.type.startsWith("image/")
+        ? "image"
+        : file.type.startsWith("audio/")
+          ? "audio"
+          : file.type.startsWith("video/")
+            ? "video"
+            : "document";
+    const textoBaseEnvio =
+      tipoMidia === "audio"
+        ? "Enviando áudio..."
+        : tipoMidia === "video"
+          ? "Enviando vídeo..."
+          : tipoMidia === "image"
+            ? "Enviando imagem..."
+            : "Enviando arquivo...";
     const textoOptimista = caption?.trim()
       ? `${textoBaseEnvio} ${caption.trim()}`
       : textoBaseEnvio;
@@ -579,13 +611,31 @@ export default function Inbox() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("caption", caption || "");
+      formData.append("tipo_mensagem", tipoMidia);
+      console.log("[Inbox sendMediaFile] envio", {
+        nome: file.name,
+        size: file.size,
+        fileType: file.type,
+        tipo_mensagem: tipoMidia,
+        telefone,
+      });
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send_media`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       void fetchLeads();
       return true;
     } catch (e) {
-      console.error("Erro ao enviar mídia", e);
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail ?? e?.response?.data;
+      const msg = typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : e?.message || String(e);
+      console.error("[Inbox sendMediaFile] Erro na API ou rede:", {
+        message: e?.message,
+        status,
+        detail,
+        file: file?.name,
+        fileType: file?.type,
+        tipoMidia,
+      });
       setMessages((prev) =>
         (prev || []).map((msg) =>
           msg?.id === tempId
@@ -593,14 +643,21 @@ export default function Inbox() {
                 ...msg,
                 status: "failed",
                 erro_envio: e.response?.data?.detail || "Falha ao enviar arquivo.",
-                texto: tipoMidia === "audio" ? "Falha ao enviar áudio." : "Falha ao enviar arquivo.",
+                texto:
+                  tipoMidia === "audio"
+                    ? "Falha ao enviar áudio."
+                    : tipoMidia === "video"
+                      ? "Falha ao enviar vídeo."
+                      : tipoMidia === "image"
+                        ? "Falha ao enviar imagem."
+                        : "Falha ao enviar arquivo.",
               }
             : msg
         )
       );
       setToast({
         type: "error",
-        message: e.response?.data?.detail || "Não foi possível enviar a mídia.",
+        message: status ? `[${status}] ${msg}` : msg || "Não foi possível enviar a mídia.",
       });
       return false;
     } finally {
@@ -647,7 +704,16 @@ export default function Inbox() {
       clearRecordedAudioPreview();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
-      const recorder = new MediaRecorder(stream);
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+      ];
+      const mimeEscolhido =
+        mimeCandidates.find((t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.(t)) || "";
+      const recorder = mimeEscolhido
+        ? new MediaRecorder(stream, { mimeType: mimeEscolhido })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
       shouldSendRecordingRef.current = true;
@@ -662,7 +728,8 @@ export default function Inbox() {
         const shouldSend = shouldSendRecordingRef.current;
         try {
           if (shouldSend && audioChunksRef.current.length > 0) {
-            const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+            const blobType = recorder.mimeType || "audio/webm";
+            const blob = new Blob(audioChunksRef.current, { type: blobType });
             const previewUrl = URL.createObjectURL(blob);
             setRecordedAudioBlob(blob);
             setRecordedAudioUrl(previewUrl);
@@ -716,11 +783,20 @@ export default function Inbox() {
   };
 
   const handleSendRecordedAudio = async () => {
-    if (!recordedAudioBlob) return;
-    const file = new File([recordedAudioBlob], "audio_record.webm", {
-      type: recordedAudioBlob.type || "audio/webm",
-    });
-    const ok = await sendMediaFile(file, "");
+    if (!selectedLead) {
+      setToast({ type: "error", message: "Selecione um contacto para enviar o áudio gravado." });
+      return;
+    }
+    if (!recordedAudioBlob || recordedAudioBlob.size < 1) {
+      setToast({ type: "error", message: "Não há gravação de áudio para enviar." });
+      return;
+    }
+    // Chrome costuma usar `video/webm` para gravações só de áudio — forçamos tipo "audio" no FormData.
+    const mime = recordedAudioBlob.type && recordedAudioBlob.type.startsWith("audio/")
+      ? recordedAudioBlob.type
+      : "audio/webm";
+    const audioFile = new File([recordedAudioBlob], "gravacao.webm", { type: mime });
+    const ok = await sendMediaFile(audioFile, "", { tipoMensagem: "audio" });
     if (ok) {
       clearRecordedAudioPreview();
     }
@@ -809,30 +885,43 @@ export default function Inbox() {
     const media = msg?.media_url;
 
     if (tipo === "image" && media) {
-      let imgSrc = "";
-      if (media.startsWith("http")) {
-        imgSrc = media;
-      } else if (media.startsWith("data:image")) {
-        imgSrc = media;
-      } else {
-        imgSrc = `data:image/jpeg;base64,${media}`;
-      }
+      const imgSrc = buildImageSrc(media);
+      const legenda = String(msg?.texto || "").trim();
 
       return (
         <div className="flex flex-col gap-1">
           <img
             src={imgSrc}
-            alt="Imagem enviada"
-            className="max-w-[250px] max-h-[300px] object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+            alt="Imagem"
+            className="max-w-[250px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
             onError={(e) => {
               console.error("Erro ao renderizar imagem no Inbox. Verifique o src no Network tab.");
               e.target.src = "https://placehold.co/250x200/e2e8f0/64748b?text=Erro+na+Imagem";
             }}
           />
-          {msg?.texto && msg.texto !== "[Imagem]" ? (
-            <span className="text-sm mt-1 whitespace-pre-wrap">{msg.texto}</span>
-          ) : null}
+          {legenda ? <span className="text-sm mt-1 whitespace-pre-wrap">{msg.texto}</span> : null}
         </div>
+      );
+    }
+
+    if (tipo === "video" && media) {
+      const videoSrc = buildVideoSrc(media);
+      const legenda = String(msg?.texto || "").trim();
+
+      return (
+        <div className="flex flex-col gap-1">
+          <video controls src={videoSrc} className="max-w-[250px] rounded-lg" preload="metadata" />
+          {legenda ? <span className="text-sm mt-1 whitespace-pre-wrap">{msg.texto}</span> : null}
+        </div>
+      );
+    }
+
+    if (tipo === "video" && !media) {
+      const legenda = String(msg?.texto || "").trim();
+      return legenda ? (
+        <p className="text-sm whitespace-pre-wrap">{msg.texto}</p>
+      ) : (
+        <p className="text-sm text-gray-500">[Vídeo sem pré-visualização]</p>
       );
     }
 
@@ -1451,7 +1540,15 @@ export default function Inbox() {
                   <div className="mb-2 rounded-xl border border-gray-200 bg-white p-2.5">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2 text-sm text-gray-700">
-                        {selectedFile.type.startsWith("image/") ? <FileImage size={16} /> : selectedFile.type.startsWith("audio/") ? <FileAudio size={16} /> : <FileText size={16} />}
+                        {selectedFile.type.startsWith("image/") ? (
+                          <FileImage size={16} />
+                        ) : selectedFile.type.startsWith("audio/") ? (
+                          <FileAudio size={16} />
+                        ) : selectedFile.type.startsWith("video/") ? (
+                          <FileVideo size={16} />
+                        ) : (
+                          <FileText size={16} />
+                        )}
                         <span className="max-w-[320px] truncate font-medium">{selectedFile.name}</span>
                       </div>
                       <button type="button" onClick={clearSelectedFile} className="rounded-md p-1 text-gray-500 hover:bg-gray-100">
@@ -1472,7 +1569,7 @@ export default function Inbox() {
                     ref={fileInputRef}
                     type="file"
                     className="hidden"
-                    accept="image/*,audio/*,application/pdf,.pdf,.doc,.docx"
+                    accept="image/*,audio/*,video/*,.mp4,.mov,.webm,application/pdf,.pdf,.doc,.docx"
                     onChange={handleSelectFile}
                   />
                   <button

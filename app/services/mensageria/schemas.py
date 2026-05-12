@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-MensagemTipo = Literal["text", "image", "audio", "document"]
+MensagemTipo = Literal["text", "image", "audio", "video", "document"]
 CanalTipo = Literal["whatsapp", "instagram", "web", "telegram", "meta"]
 
 

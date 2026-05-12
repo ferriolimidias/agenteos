@@ -38,6 +38,8 @@ def _inferir_tipo_mensagem(content_type: str | None) -> str:
         return "image"
     if ct.startswith("audio/"):
         return "audio"
+    if ct.startswith("video/"):
+        return "video"
     return "document"
 
 
@@ -432,6 +434,7 @@ async def enviar_midia(
     telefone: str,
     file: UploadFile = File(...),
     caption: str = Form(""),
+    tipo_mensagem: str = Form(""),
 ):
     if _telefone_eh_simulador(telefone):
         return {"status": "success", "tipo_mensagem": "document"}
@@ -444,8 +447,25 @@ async def enviar_midia(
     if not file:
         raise HTTPException(status_code=400, detail="Arquivo não informado")
 
-    tipo_mensagem = _inferir_tipo_mensagem(file.content_type)
-    mimetype = file.content_type or "application/octet-stream"
+    override = str(tipo_mensagem or "").strip().lower()
+    permitidos = {"image", "audio", "video", "document"}
+    if override in permitidos:
+        tipo_mensagem_resolvido = override
+    else:
+        tipo_mensagem_resolvido = _inferir_tipo_mensagem(file.content_type)
+    tipo_mensagem = tipo_mensagem_resolvido
+    mimetype = (file.content_type or "").strip() or "application/octet-stream"
+    if tipo_mensagem == "audio":
+        mt = mimetype.lower()
+        fn = (file.filename or "").lower()
+        if mt.startswith("audio/") and "octet-stream" not in mt:
+            pass
+        elif mt == "video/webm" or fn.endswith(".webm"):
+            mimetype = "audio/webm"
+        elif fn.endswith(".ogg") or fn.endswith(".opus") or "ogg" in mt:
+            mimetype = "audio/ogg"
+        elif not mt.startswith("audio/") or "octet-stream" in mt:
+            mimetype = "audio/webm"
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
@@ -494,6 +514,8 @@ async def enviar_midia(
                     texto = "Imagem enviada"
                 elif tipo_mensagem == "audio":
                     texto = "Áudio enviado"
+                elif tipo_mensagem == "video":
+                    texto = "Vídeo enviado"
                 else:
                     texto = f"Documento enviado: {file.filename or 'arquivo'}"
 

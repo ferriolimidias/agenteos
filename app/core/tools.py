@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 
 from db.database import AsyncSessionLocal
 from db.models import CRMLead, TagCRM, CRMFunil, CRMEtapa
-from app.services.tag_crm_service import processar_disparo_conversao_ads_para_tags, sync_tag_etapa_lead
+from app.services.tag_crm_service import agendar_processamento_disparo_meta_capi, sync_tag_etapa_lead
 
 
 def _normalizar_tags(tags: list[str] | None) -> list[str]:
@@ -25,6 +25,34 @@ def _normalizar_tags(tags: list[str] | None) -> list[str]:
         vistos.add(chave)
         output.append(limpa)
     return output
+
+
+def _ids_tags_novas(tags_existentes_ids: list[str], ids_finais: list[str]) -> list[str]:
+    antes = set(tags_existentes_ids)
+    return [tid for tid in ids_finais if tid not in antes]
+
+
+async def _ids_tags_novas_com_disparo_meta(
+    session,
+    empresa_id: uuid.UUID,
+    novos_ids: list[str],
+) -> list[str]:
+    uuids: list[uuid.UUID] = []
+    for raw in novos_ids or []:
+        try:
+            uuids.append(uuid.UUID(str(raw).strip()))
+        except (ValueError, TypeError):
+            continue
+    if not uuids:
+        return []
+    result = await session.execute(
+        select(TagCRM.id).where(
+            TagCRM.empresa_id == empresa_id,
+            TagCRM.id.in_(uuids),
+            TagCRM.disparar_conversao_ads.is_(True),
+        )
+    )
+    return [str(row[0]) for row in result.all()]
 
 
 @tool
@@ -148,12 +176,22 @@ async def tool_atualizar_tags_lead(lead_id: str, tags: list[str]):
             session.add(lead)
             await session.commit()  # OBRIGATÓRIO
             await session.refresh(lead)
+            novos_meta = _ids_tags_novas(tags_existentes_ids, ids_finais)
+            if novos_meta:
+                meta_ids = await _ids_tags_novas_com_disparo_meta(session, lead.empresa_id, novos_meta)
+                if meta_ids:
+                    agendar_processamento_disparo_meta_capi(str(lead.id), meta_ids)
             print("--- [DEBUG TOOL] Commit com pausa de bot realizado com sucesso! --- \n")
 
             mensagem_transferencia = str(getattr(tag, "mensagem_transferencia", "") or "").strip()
             return f"[SISTEMA_BOT_PAUSADO] INSTRUÇÃO CRÍTICA: Pare de responder. Diga EXATAMENTE: {mensagem_transferencia}"
 
         await session.commit()
+        novos_meta = _ids_tags_novas(tags_existentes_ids, ids_finais)
+        if novos_meta:
+            meta_ids = await _ids_tags_novas_com_disparo_meta(session, lead.empresa_id, novos_meta)
+            if meta_ids:
+                agendar_processamento_disparo_meta_capi(str(lead.id), meta_ids)
         print("--- [DEBUG TOOL] Commit realizado com sucesso! --- \n")
 
         return f"Tags atualizadas: {', '.join([t.nome for t in tags_encontradas])}"
@@ -219,12 +257,16 @@ async def tool_aplicar_tag_dinamica(lead_id: str, empresa_id: str, tag_id: str) 
                     session.add(lead)
                     await session.commit()
                     await session.refresh(lead)
-                    
+                    if getattr(tag, "disparar_conversao_ads", False):
+                        agendar_processamento_disparo_meta_capi(str(lead.id), [tag_id_oficial])
+
                     mensagem_transferencia = str(getattr(tag, "mensagem_transferencia", "") or "").strip()
                     return f"[SISTEMA_BOT_PAUSADO] INSTRUÇÃO CRÍTICA: Pare de responder. Diga EXATAMENTE: {mensagem_transferencia}"
                 # -----------------------------------
                 
                 await session.commit()
+                if getattr(tag, "disparar_conversao_ads", False):
+                    agendar_processamento_disparo_meta_capi(str(lead.id), [tag_id_oficial])
                 return f"Sucesso: etiqueta '{tag.nome}' aplicada ao lead."
             # Se a tag JÁ estava aplicada, mas exige transferência (evita que a IA ignore se repetir a tag)
             await sync_tag_etapa_lead(str(lead.id), session=session, preferencia="tag_to_crm")

@@ -142,7 +142,9 @@ def extrair_conteudo_mensagem(data_json: dict) -> str:
         return "[Áudio]"
     if message.get("imageMessage"):
         return "[Imagem]"
-    if message.get("videoMessage") or message.get("documentMessage"):
+    if message.get("videoMessage"):
+        return "[Vídeo]"
+    if message.get("documentMessage"):
         return "[Arquivo]"
     if message.get("stickerMessage"):
         return "[Sticker]"
@@ -155,7 +157,9 @@ def _extrair_tipo_mensagem(data_json: dict) -> str:
         return "image"
     if message.get("audioMessage"):
         return "audio"
-    if message.get("documentMessage") or message.get("videoMessage"):
+    if message.get("videoMessage"):
+        return "video"
+    if message.get("documentMessage"):
         return "document"
     return "text"
 
@@ -688,6 +692,34 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                         media_base64 = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
                 except Exception as e:
                     print(f"[WEBHOOK EVOLUTION] Erro ao baixar imagem (fallback): {e}")
+
+        elif tipo_mensagem == "video":
+            media_payload = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            )
+            if media_payload:
+                if media_payload.lower().startswith("data:video"):
+                    media_base64 = media_payload
+                elif media_payload.startswith("data:"):
+                    media_base64 = media_payload
+                else:
+                    media_base64 = f"data:video/mp4;base64,{media_payload}"
+
+            if not media_base64:
+                try:
+                    from app.services.evolution_service import get_base64_media
+
+                    async with AsyncSessionLocal() as session:
+                        raw_vid = await get_base64_media(empresa_uuid, message, session, conexao_id=conexao_id)
+                    if raw_vid:
+                        rs = str(raw_vid).strip()
+                        if rs.lower().startswith("data:video") or rs.startswith("data:"):
+                            media_base64 = rs
+                        else:
+                            media_base64 = f"data:video/mp4;base64,{rs}"
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar vídeo (fallback): {e}")
 
         elif tipo_mensagem == "document":
             try:

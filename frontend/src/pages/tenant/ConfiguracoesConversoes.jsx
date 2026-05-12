@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { BarChart3, Loader2, Target } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
@@ -43,7 +44,6 @@ export default function ConfiguracoesConversoes() {
         meta_pixel_id: metaPixelId || null,
         meta_access_token: metaAccessToken || null,
       };
-      console.log("[Configurações Conversões] Payload:", payload);
       await api.put(`/empresas/${empresa_id}`, payload);
       alert("Configurações guardadas com sucesso.");
     } catch (err) {
@@ -73,6 +73,12 @@ export default function ConfiguracoesConversoes() {
   return (
     <div className="min-h-full bg-gray-50 p-6">
       <div className="mx-auto max-w-4xl space-y-6">
+        <Link
+          to="/painel/integracoes"
+          className="inline-flex text-sm font-medium text-indigo-600 hover:text-indigo-800"
+        >
+          ← Voltar a Integrações
+        </Link>
         <header className="rounded-2xl border border-gray-200 bg-white px-6 py-5 shadow-sm">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-blue-50 p-2.5 text-blue-600">
@@ -154,8 +160,10 @@ export default function ConfiguracoesConversoes() {
             </div>
 
             <p className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              O sistema enviará eventos de &quot;Purchase&quot; automaticamente cruzando o número do WhatsApp do lead
-              quando uma Tag de fecho for aplicada.
+              Com CAPI ativo, o servidor envia eventos <strong>Lead</strong> ou <strong>Purchase</strong> à Meta quando uma tag com
+              &quot;Disparar conversão ads&quot; for aplicada (telefone normalizado e hasheado em <code className="font-mono">ph</code>).
+              <strong>Purchase</strong> usa <code className="font-mono">valor_conversao</code> do lead e nomes de tag que indiquem venda;
+              <strong>Lead</strong> para qualificação ou demais casos. <code className="font-mono">action_source</code>: chat.
             </p>
             </div>
           )}

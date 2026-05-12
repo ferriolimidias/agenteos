@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Webhook, Save, CheckCircle, AlertCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Webhook, Save, CheckCircle, AlertCircle, BarChart3, ChevronRight } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
 
@@ -55,9 +56,31 @@ export default function Integracoes() {
             <Webhook className="text-blue-600" size={28} />
             Integrações
           </h1>
-          <p className="text-gray-500 mt-1">Conecte sua plataforma a sistemas externos via Webhooks.</p>
+          <p className="text-gray-500 mt-1">
+            Conecte sua plataforma a webhooks externos e à Meta Ads (Conversions API).
+          </p>
         </div>
       </div>
+
+      <Link
+        to="/painel/conversoes"
+        className="group flex items-stretch gap-4 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-white p-5 shadow-sm transition hover:border-indigo-400 hover:shadow-md"
+      >
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-inner">
+          <BarChart3 size={24} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-bold text-gray-900">Meta Ads (API de Conversões)</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Configure o Pixel ID, o token de acesso e o envio direto de eventos Lead/Purchase (CAPI) para o Facebook e Instagram.
+          </p>
+          <p className="mt-2 text-xs font-medium text-indigo-700">
+            Abrir configurações de conversão
+            <ChevronRight className="ml-0.5 inline h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
+          </p>
+        </div>
+        <ChevronRight className="h-6 w-6 shrink-0 self-center text-indigo-400 transition group-hover:text-indigo-600" />
+      </Link>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-100 bg-gray-50 flex items-center gap-3">
