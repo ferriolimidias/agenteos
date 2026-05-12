@@ -607,9 +607,6 @@ async def get_ia_config(
         "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
         "informacoes_adicionais": getattr(empresa, 'informacoes_adicionais', None),
         "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
-        "atendente_prompt": str(getattr(empresa, "atendente_prompt", "") or "").strip() or None,
-        "condutor_prompt": str(getattr(empresa, "condutor_prompt", "") or "").strip() or None,
-        "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
         "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
         "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
         "openai_configurada": _empresa_tem_chave_openai(empresa),
@@ -652,12 +649,6 @@ async def put_ia_config(
         empresa.informacoes_adicionais = data.informacoes_adicionais
     if data.coletar_nome is not None:
         empresa.coletar_nome = data.coletar_nome
-    if data.atendente_prompt is not None:
-        empresa.atendente_prompt = str(data.atendente_prompt or "").strip() or None
-    if data.condutor_prompt is not None:
-        empresa.condutor_prompt = str(data.condutor_prompt or "").strip() or None
-    if data.condutor_ativo is not None:
-        empresa.condutor_ativo = bool(data.condutor_ativo)
     if data.telefone_notificacao is not None:
         empresa.telefone_notificacao = str(data.telefone_notificacao or "").strip() or None
     limite_duvida = empresa.limite_duvida if getattr(empresa, "limite_duvida", None) is not None else 0.45
@@ -687,9 +678,6 @@ async def put_ia_config(
             "max_agentes_desempate": getattr(empresa, "max_agentes_desempate", 3) if getattr(empresa, "max_agentes_desempate", None) is not None else 3,
             "informacoes_adicionais": getattr(empresa, 'informacoes_adicionais', None),
             "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
-            "atendente_prompt": str(getattr(empresa, "atendente_prompt", "") or "").strip() or None,
-            "condutor_prompt": str(getattr(empresa, "condutor_prompt", "") or "").strip() or None,
-            "condutor_ativo": bool(getattr(empresa, "condutor_ativo", False)),
             "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
             "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
             "openai_configurada": _empresa_tem_chave_openai(empresa),

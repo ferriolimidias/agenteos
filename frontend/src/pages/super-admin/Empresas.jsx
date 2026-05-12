@@ -51,15 +51,14 @@ export default function Empresas() {
   const [configIAData, setConfigIAData] = useState({
     ia_personalidade: "",
     ia_regras_negocio: "",
+    nome_agente: "",
+    mensagem_saudacao: "",
     modelo_ia: "gpt-4o-mini",
     modelo_roteador: "gpt-4o-mini",
     followup_ativo: false,
     limite_certeza: 0.65,
     limite_duvida: 0.45,
     max_agentes_desempate: 3,
-    atendente_prompt: "",
-    condutor_ativo: false,
-    condutor_prompt: "",
   });
   const [loadingConfigIA, setLoadingConfigIA] = useState(false);
   const [savingConfigIA, setSavingConfigIA] = useState(false);
@@ -388,9 +387,6 @@ export default function Empresas() {
         limite_certeza: typeof res.data.limite_certeza === "number" ? res.data.limite_certeza : 0.65,
         limite_duvida: typeof res.data.limite_duvida === "number" ? res.data.limite_duvida : 0.45,
         max_agentes_desempate: typeof res.data.max_agentes_desempate === "number" ? res.data.max_agentes_desempate : 3,
-        atendente_prompt: res.data.atendente_prompt || "",
-        condutor_ativo: !!res.data.condutor_ativo,
-        condutor_prompt: res.data.condutor_prompt || "",
       });
       await fetchEtapasFunil(emp.id);
     } catch (err) {
@@ -976,14 +972,16 @@ export default function Empresas() {
       {/* MODAL CONFIGURAÇÃO IA */}
       {showConfigIAModal && empresaSelecionada && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Brain className="text-purple-500" size={24} />
-                  Configuração do Agente
+                  Configuração da IA
                 </h2>
-                <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Empresa: {empresaSelecionada.nome_empresa} — identidade global e modelos; especialistas em <span className="text-gray-400">Agentes / Especialistas</span>.
+                </p>
               </div>
               <button 
                 onClick={() => setShowConfigIAModal(false)}
@@ -1000,6 +998,36 @@ export default function Empresas() {
                 </div>
               ) : (
                 <form id="config-ia-form" onSubmit={handleSaveConfigIA} className="space-y-6">
+                  <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4 space-y-4">
+                    <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider">
+                      Identidade e regras da empresa
+                    </h3>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Contexto global aplicado aos especialistas dinâmicos. Ajuste tom e políticas comerciais aqui; agentes
+                      específicos ficam em <span className="font-medium text-gray-400">Agentes / Especialistas</span>.
+                    </p>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Personalidade / tom de voz</label>
+                      <textarea
+                        value={configIAData.ia_personalidade}
+                        onChange={(e) => setConfigIAData({ ...configIAData, ia_personalidade: e.target.value })}
+                        rows={6}
+                        placeholder="Ex.: Tom acolhedor, uso moderado de emojis, como se fosse o consultor da marca."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Regras de negócio e diretrizes</label>
+                      <textarea
+                        value={configIAData.ia_regras_negocio}
+                        onChange={(e) => setConfigIAData({ ...configIAData, ia_regras_negocio: e.target.value })}
+                        rows={6}
+                        placeholder="Ex.: Não prometer prazos sem confirmar; sempre coletar e-mail antes de enviar proposta."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Agente Principal</label>
                     <input
@@ -1022,7 +1050,7 @@ export default function Empresas() {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Modelo do Atendente (IA)</label>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Modelo padrão (LLM)</label>
                       <select
                         value={configIAData.modelo_ia}
                         onChange={(e) => setConfigIAData({...configIAData, modelo_ia: e.target.value})}
@@ -1119,36 +1147,6 @@ export default function Empresas() {
 
                   <div className="pt-4 border-t border-gray-800 space-y-4">
                     <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
-                      Agente Condutor de Funil
-                    </h3>
-                    <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-xl cursor-pointer hover:border-indigo-500 transition-colors">
-                      <input
-                        type="checkbox"
-                        className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
-                        checked={!!configIAData.condutor_ativo}
-                        onChange={(e) => setConfigIAData({ ...configIAData, condutor_ativo: e.target.checked })}
-                      />
-                      <div>
-                        <p className="text-sm font-semibold text-white">Ativar condutor estratégico</p>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          O condutor interpreta o funil e injeta contexto para os especialistas sem responder o cliente.
-                        </p>
-                      </div>
-                    </label>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Prompt do Condutor</label>
-                      <textarea
-                        value={configIAData.condutor_prompt || ""}
-                        onChange={(e) => setConfigIAData({ ...configIAData, condutor_prompt: e.target.value })}
-                        rows={4}
-                        placeholder="Ex: Você é o condutor de funil. Defina etapa atual, objetivo e próxima ação com base no histórico e tags."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-800 space-y-4">
-                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
                       Etapas do Funil (Tags)
                     </h3>
                     <div className="flex gap-2">
@@ -1206,32 +1204,6 @@ export default function Empresas() {
                         ))}
                       </div>
                     )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">
-                      Personalidade / Tom de Voz
-                    </label>
-                    <textarea
-                      value={configIAData.ia_personalidade}
-                      onChange={(e) => setConfigIAData({...configIAData, ia_personalidade: e.target.value})}
-                      rows={8}
-                      placeholder="Ex: Você é a Gabi, consultora da clínica. Fale de forma acolhedora, empática e use emojis curtos."
-                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">
-                      Diretrizes e Regras do Atendente
-                    </label>
-                    <textarea
-                      value={configIAData.ia_regras_negocio}
-                      onChange={(e) => setConfigIAData({...configIAData, ia_regras_negocio: e.target.value})}
-                      rows={8}
-                      placeholder="Ex: Nunca dê descontos. Sempre tente descobrir o curso de interesse. Responda dúvidas de forma direta."
-                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                    />
                   </div>
                 </form>
               )}

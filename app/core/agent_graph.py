@@ -1640,26 +1640,26 @@ async def node_encerrar_resposta(state: AgentState):
     return state
 
 
-async def node_agente_condutor(state: AgentState):
+async def _sync_etapa_funil_state_from_crm(state: AgentState) -> None:
     """
     Sincroniza `etapa_funil` e metadados de CRM a partir do banco (sem LLM).
-    O roteamento para especialistas é determinístico no nó Maestro.
+    Invocado no Maestro no início do ciclo de roteamento (antes do Top-1).
     """
     empresa_id = str(state.get("empresa_id") or "").strip()
     lead_id = str(state.get("lead_id") or "").strip()
     if not empresa_id:
-        return state
+        return
 
     try:
         empresa_uuid = uuid.UUID(empresa_id)
     except (ValueError, TypeError):
-        return state
+        return
 
     async with AsyncSessionLocal() as session:
         result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
         empresa = result_empresa.scalars().first()
         if not empresa:
-            return state
+            return
 
         lead_obj: CRMLead | None = None
         etapa_atual_por_tag: str | None = None
@@ -1730,8 +1730,6 @@ async def node_agente_condutor(state: AgentState):
                     state["etapas_concluidas"] = concluidas
             state["etapa_funil"] = etapa_oficial_nome
 
-    return state
-
 
 async def node_roteador_maestro(state: AgentState):
     print("[NODE ROTEADOR] Roteamento determinístico por funil (Top-1, sem vetor/LLM)...")
@@ -1741,6 +1739,8 @@ async def node_roteador_maestro(state: AgentState):
     respostas_no_ciclo = state.get("respostas_especialistas") or []
     if isinstance(respostas_no_ciclo, list) and respostas_no_ciclo:
         return state
+
+    await _sync_etapa_funil_state_from_crm(state)
 
     empresa_id = state.get("empresa_id")
     try:
@@ -3084,7 +3084,7 @@ def router_crm(state: AgentState):
         return END
     if state.get("nome_contato") is None:
         return "capturar_nome"
-    return "node_agente_condutor"
+    return "node_roteador_maestro"
 
 # 3. Desenhar o Grafo
 workflow = StateGraph(AgentState)
@@ -3092,7 +3092,6 @@ workflow = StateGraph(AgentState)
 workflow.add_node("node_crm", node_crm)
 workflow.add_node("node_capturar_nome", node_capturar_nome)
 workflow.add_node("node_encerrar_resposta", node_encerrar_resposta)
-workflow.add_node("node_agente_condutor", node_agente_condutor)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("node_acao_sistema", node_acao_sistema)
 workflow.add_node("node_handoff", node_handoff)
@@ -3107,7 +3106,7 @@ workflow.add_conditional_edges(
         END: END,
         "capturar_nome": "node_capturar_nome",
         "node_handoff": "node_handoff",
-        "node_agente_condutor": "node_agente_condutor",
+        "node_roteador_maestro": "node_roteador_maestro",
     },
 )
 
@@ -3127,10 +3126,6 @@ workflow.add_conditional_edges(
         "node_acao_sistema": "node_acao_sistema",
     },
 )
-
-# Handoff síncrono na mesma invocação do grafo: Condutor → Maestro → router_maestro →
-# node_especialista_dinamico sem esperar novo input do usuário entre Condutor e o especialista escolhido.
-workflow.add_edge("node_agente_condutor", "node_roteador_maestro")
 
 def router_maestro(state: AgentState):
     # Curto-circuito para parar a fila se houve transferência

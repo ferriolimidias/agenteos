@@ -70,15 +70,14 @@ class IAConfigResponse(BaseModel):
     max_agentes_desempate: int = 3
     informacoes_adicionais: str | None = None
     coletar_nome: bool = True
-    atendente_prompt: str | None = None
-    condutor_prompt: str | None = None
-    condutor_ativo: bool = False
     telefone_notificacao: str | None = None
     status_openai: str = "ok"
     openai_configurada: bool = False
 
 
 class IAConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
     nome_agente: str | None = None
@@ -91,9 +90,6 @@ class IAConfigUpdateRequest(BaseModel):
     max_agentes_desempate: int | None = None
     informacoes_adicionais: str | None = None
     coletar_nome: bool | None = None
-    atendente_prompt: str | None = None
-    condutor_prompt: str | None = None
-    condutor_ativo: bool | None = None
     telefone_notificacao: str | None = None
 
 
