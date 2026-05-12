@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from db.database import AsyncSessionLocal, get_db
-from db.models import CRMLead, MensagemHistorico, CRMEtapa, CRMFunil, Conexao, TagCRM
+from db.models import CRMLead, MensagemHistorico, Conexao, TagCRM
 from sqlalchemy import select, func, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -547,25 +547,11 @@ async def reativar_bot(empresa_id: str, telefone: str):
             
             lead.bot_pausado_ate = None
             
-            result_funil = await session.execute(
-                select(CRMFunil).where(CRMFunil.empresa_id == empresa_uuid)
-            )
-            funil = result_funil.scalars().first()
-            if funil:
-                result_etapa = await session.execute(
-                    select(CRMEtapa).where(
-                        CRMEtapa.funil_id == funil.id,
-                        CRMEtapa.nome == 'Em Atendimento'
-                    )
-                )
-                etapa = result_etapa.scalars().first()
-                if not etapa:
-                    nova_etapa = CRMEtapa(funil_id=funil.id, nome="Em Atendimento", ordem=2)
-                    session.add(nova_etapa)
-                    await session.flush()
-                    lead.etapa_id = nova_etapa.id
-                else:
-                    lead.etapa_id = etapa.id
+            from app.services.crm_etapas_service import obter_ou_criar_etapa_por_tipo
+
+            etapa_atend = await obter_ou_criar_etapa_por_tipo(session, empresa_uuid, "atendimento")
+            if etapa_atend:
+                lead.etapa_id = etapa_atend
             
             await session.commit()
             return {"status": "success", "message": "Bot reativado"}

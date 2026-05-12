@@ -3,13 +3,11 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.services.channel_factory import despachar_mensagem
+from app.services.crm_etapas_service import obter_ou_criar_etapa_por_tipo
 from db.database import AsyncSessionLocal
 from db.models import (
-    CRMFunil,
-    CRMEtapa,
     CRMLead,
     Conexao,
     DestinosTransferencia,
@@ -50,40 +48,8 @@ async def listar_destinos_transferencia_para_prompt(empresa_id: str | uuid.UUID 
 
 
 async def _obter_ou_criar_etapa_aguardando_humano(session, empresa_uuid: uuid.UUID) -> uuid.UUID | None:
-    result_funil = await session.execute(
-        select(CRMFunil)
-        .where(CRMFunil.empresa_id == empresa_uuid)
-        .options(selectinload(CRMFunil.etapas))
-    )
-    funil = result_funil.scalars().first()
-
-    if not funil:
-        funil = CRMFunil(empresa_id=empresa_uuid, nome="Pipeline Padrão")
-        session.add(funil)
-        await session.flush()
-
-    etapa = None
-    if getattr(funil, "etapas", None):
-        for etapa_existente in funil.etapas:
-            if (etapa_existente.nome or "").strip().lower() == "aguardando humano":
-                etapa = etapa_existente
-                break
-
-    if not etapa:
-        result_etapa = await session.execute(
-            select(CRMEtapa).where(
-                CRMEtapa.funil_id == funil.id,
-                CRMEtapa.nome == "Aguardando Humano",
-            )
-        )
-        etapa = result_etapa.scalars().first()
-
-    if not etapa:
-        etapa = CRMEtapa(funil_id=funil.id, nome="Aguardando Humano", ordem=99, tipo="handoff")
-        session.add(etapa)
-        await session.flush()
-
-    return etapa.id
+    """Resolve etapa de handoff por `tipo='handoff'` (multi-tenant), sem nome fixo."""
+    return await obter_ou_criar_etapa_por_tipo(session, empresa_uuid, "handoff")
 
 
 async def _resolver_conexao_evolution_para_transferencia(
@@ -181,7 +147,8 @@ async def executar_transferencia_atendimento(
                 return "Erro ao transferir atendimento: destino de transferência não encontrado."
 
             etapa_aguardando_humano_id = await _obter_ou_criar_etapa_aguardando_humano(session, empresa_uuid)
-            lead.etapa_id = etapa_aguardando_humano_id
+            if etapa_aguardando_humano_id:
+                lead.etapa_id = etapa_aguardando_humano_id
             lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
 
             mensagem_destino = (

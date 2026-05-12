@@ -316,24 +316,30 @@ async def save_history_and_check_pause(
                     lead.fbclid = fbclid
                     lead_alterado = True
                 result_etapas = await session.execute(
-                    select(CRMEtapa.id, CRMEtapa.nome)
+                    select(CRMEtapa.id, CRMEtapa.nome, CRMEtapa.tipo)
                     .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
                     .where(CRMFunil.empresa_id == empresa_uuid)
                     .order_by(CRMEtapa.ordem.asc())
                 )
                 etapa_atendimento_id = None
                 etapa_atual_nome = None
-                for etapa_id, etapa_nome in result_etapas.all():
-                    nome_norm = _normalize_stage_name(etapa_nome)
+                etapa_atual_tipo = None
+                for etapa_id, etapa_nome, etapa_tipo in result_etapas.all():
+                    tipo_norm = str(etapa_tipo or "").strip().lower()
                     if etapa_id == lead.etapa_id:
                         etapa_atual_nome = str(etapa_nome or "")
-                    if etapa_atendimento_id is None and (
-                        "em atendimento" in nome_norm
-                        or (nome_norm == "atendimento")
-                    ):
+                        etapa_atual_tipo = tipo_norm
+                    if etapa_atendimento_id is None and tipo_norm == "atendimento":
                         etapa_atendimento_id = etapa_id
-                etapa_atual_norm = _normalize_stage_name(etapa_atual_nome)
-                etapa_atual_fechada = ("fechado" in etapa_atual_norm) or ("concluido" in etapa_atual_norm)
+                etapa_atual_fechada = False
+                if etapa_atual_tipo:
+                    etapa_atual_fechada = "fechamento" in etapa_atual_tipo or etapa_atual_tipo in (
+                        "fechado",
+                        "fechamento",
+                    )
+                if not etapa_atual_fechada and etapa_atual_nome:
+                    etapa_atual_norm = _normalize_stage_name(etapa_atual_nome)
+                    etapa_atual_fechada = ("fechado" in etapa_atual_norm) or ("concluido" in etapa_atual_norm)
                 if etapa_atendimento_id and lead.etapa_id != etapa_atendimento_id and not etapa_atual_fechada:
                     lead.etapa_id = etapa_atendimento_id
                     lead_alterado = True

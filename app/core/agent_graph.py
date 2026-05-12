@@ -71,8 +71,12 @@ from app.services.ferramentas_service import (
     criar_tool_rag_contextual,
     criar_tool_transferencia_contextual,
 )
-from app.services.semantic_router import SemanticRouterService
 from app.services.tag_crm_service import listar_tags_crm_para_prompt
+from app.core.funnel_router import (
+    parse_funil_routing_credenciais,
+    resolver_especialista_top1_por_funil,
+    normalizar_uuid_str,
+)
 from app.api.utils import is_ai_blocked
 from app.core.default_agents import ESPECIALISTAS_NATIVOS
 from app.core.llm_factory import normalize_model_name, handle_openai_runtime_exception, mark_openai_status_ok
@@ -81,9 +85,12 @@ from app.core.tools import (
     tool_atualizar_tags_lead,
     tool_aplicar_tag_dinamica,
     tool_consultar_tags_empresa,
+    tool_listar_etapas_funil,
+    tool_atualizar_etapa_lead,
+    atualizar_etapa_lead_core,
 )
 from langchain_core.tools import StructuredTool, tool
-from langgraph.prebuilt import create_react_agent, ToolNode
+from langgraph.prebuilt import ToolNode
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -474,19 +481,19 @@ async def disparar_webhook_saida(lead_id: str):
 
 # Mapeamento de funções Nativas para as Ferramentas do banco (FerramentaAPI)
 async def avancar_etapa_crm(lead_id: str, nova_etapa_id: str) -> str:
-    import uuid
+    """Compatível com ferramentas antigas: resolve empresa pelo lead e valida etapa no tenant."""
     try:
-        lead_uuid = uuid.UUID(lead_id)
-        etapa_uuid = uuid.UUID(nova_etapa_id)
+        lead_uuid = uuid.UUID(str(lead_id).strip())
+    except (ValueError, TypeError):
+        return "Erro ao atualizar etapa do CRM: lead_id inválido."
+    try:
         async with AsyncSessionLocal() as session:
-            await session.execute(
-                update(CRMLead).where(CRMLead.id == lead_uuid).values(etapa_id=etapa_uuid)
-            )
-            await session.commit()
-            
-        asyncio.create_task(disparar_webhook_saida(lead_id))
-        
-        return f"Sucesso: o lead de ID {lead_id} foi movido para a etapa {nova_etapa_id}."
+            result = await session.execute(select(CRMLead).where(CRMLead.id == lead_uuid))
+            lead = result.scalars().first()
+            if not lead:
+                return "Erro ao atualizar etapa do CRM: lead não encontrado."
+            empresa_id_str = str(lead.empresa_id)
+        return await atualizar_etapa_lead_core(lead_id=lead_id, empresa_id=empresa_id_str, etapa_id=nova_etapa_id)
     except Exception as e:
         return f"Erro ao atualizar etapa do CRM: {str(e)}"
 
@@ -757,29 +764,13 @@ async def transferir_para_humano(telefone: str, empresa_id: str) -> str:
             if lead:
                 # Update bot_pausado_ate to +24h
                 lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
-                
-                # Fetch standard funil
-                result_funil = await session.execute(
-                    select(CRMFunil).where(CRMFunil.empresa_id == empresa_uuid)
-                )
-                funil = result_funil.scalars().first()
-                if funil:
-                    # Find etapa 'Aguardando Humano'
-                    result_etapa = await session.execute(
-                        select(CRMEtapa).where(
-                            CRMEtapa.funil_id == funil.id,
-                            CRMEtapa.nome == 'Aguardando Humano'
-                        )
-                    )
-                    etapa = result_etapa.scalars().first()
-                    if not etapa:
-                        nova_etapa = CRMEtapa(funil_id=funil.id, nome="Aguardando Humano", ordem=99)
-                        session.add(nova_etapa)
-                        await session.flush()
-                        lead.etapa_id = nova_etapa.id
-                    else:
-                        lead.etapa_id = etapa.id
-                
+
+                from app.services.crm_etapas_service import obter_ou_criar_etapa_por_tipo
+
+                etapa_handoff_id = await obter_ou_criar_etapa_por_tipo(session, empresa_uuid, "handoff")
+                if etapa_handoff_id:
+                    lead.etapa_id = etapa_handoff_id
+
                 await session.commit()
                 
                 asyncio.create_task(disparar_webhook_saida(str(lead.id)))
@@ -1171,6 +1162,8 @@ def criar_ferramenta_transferir_atendimento_contextual(
 
 MAP_FUNCOES_NATIVAS = {
     "avancar_etapa_crm": avancar_etapa_crm,
+    "tool_atualizar_etapa_lead": tool_atualizar_etapa_lead.coroutine,
+    "tool_listar_etapas_funil": tool_listar_etapas_funil.coroutine,
     "consultar_agenda": consultar_agenda,
     "transferir_para_humano": transferir_para_humano,  # ADICIONE ESTA LINHA
     "tool_atualizar_nome_lead": tool_atualizar_nome_lead,
@@ -1341,19 +1334,10 @@ async def mover_lead_para_fechado(empresa_id: str | None, lead_id: str | None) -
     except (ValueError, TypeError):
         return
 
+    from app.services.crm_etapas_service import resolver_etapa_fechamento_id
+
     async with AsyncSessionLocal() as session:
-        result_etapas = await session.execute(
-            select(CRMEtapa.id, CRMEtapa.nome)
-            .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
-            .where(CRMFunil.empresa_id == empresa_uuid)
-            .order_by(CRMEtapa.ordem.asc())
-        )
-        etapa_fechamento_id = None
-        for etapa_id, etapa_nome in result_etapas.all():
-            nome_norm = _normalize_stage_name(etapa_nome)
-            if "fechado" in nome_norm or "concluido" in nome_norm:
-                etapa_fechamento_id = etapa_id
-                break
+        etapa_fechamento_id = await resolver_etapa_fechamento_id(session, empresa_uuid)
         if not etapa_fechamento_id:
             return
 
@@ -1363,7 +1347,6 @@ async def mover_lead_para_fechado(empresa_id: str | None, lead_id: str | None) -
             .values(etapa_id=etapa_fechamento_id)
         )
         await session.commit()
-from langgraph.prebuilt import create_react_agent
 
 async def buscar_conhecimento(pergunta: str, empresa_uuid):
     print(f"[RAG] Buscando conhecimento para a pergunta: '{pergunta}' na empresa {empresa_uuid}")
@@ -1446,24 +1429,6 @@ class AgentState(TypedDict):
     search_terms_condutor: Optional[List[str]]
     ia_bloqueada_entrada: Optional[bool]
 
-class AnaliseRoteador(BaseModel):
-    termos_busca: List[str] = Field(description="Lista de termos de busca otimizados para roteamento semântico de especialistas no banco vetorial.")
-    handoff_requested: bool = Field(description="True se o usuário pediu explicitamente para falar com humano ou atendente.")
-
-
-class AnaliseCondutor(BaseModel):
-    etapa_funil: str | None = Field(default=None, description="Nome da etapa ATUAL do lead no funil desta empresa.")
-    objetivo_atual: str | None = Field(default=None, description="Objetivo técnico do turno atual (ex.: 'qualificar interesse', 'oferecer proposta').")
-    proxima_acao: str | None = Field(default=None, description="Próxima ação concreta que o especialista a ser convocado deve executar.")
-    termos_busca: List[str] = Field(
-        default_factory=list,
-        description=(
-            "search_terms exclusivos para o Maestro: 3–6 strings curtas usadas só na "
-            "busca vetorial de especialistas. Não escreva mensagem ao cliente."
-        ),
-    )
-
-
 class ExtracaoEspecialista(BaseModel):
     model_config = {"extra": "forbid"}
     dados: StrictStr = Field(description="Dados crus extraidos pelo especialista.")
@@ -1545,9 +1510,9 @@ async def node_crm(state: AgentState):
                     novo_funil = CRMFunil(empresa_id=empresa_id, nome="Pipeline Padrão")
                     session.add(novo_funil)
                     await session.flush()
-                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Novo Lead", ordem=1))
-                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Em Atendimento", ordem=2))
-                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Fechado", ordem=3))
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Entrada", tipo="entrada", ordem=1))
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Atendimento", tipo="atendimento", ordem=2))
+                    session.add(CRMEtapa(funil_id=novo_funil.id, nome="Encerramento", tipo="fechamento", ordem=3))
                     await session.flush()
 
                 # UPSERT centralizado (advisory lock + sanitização de telefone)
@@ -1625,114 +1590,38 @@ async def node_capturar_nome(state: AgentState):
 
     return state
 
-async def node_atendente(state: AgentState):
-    print("[NODE ATENDENTE] Iniciando processamento...")
-    import uuid
-    from langchain_core.messages import SystemMessage
+async def node_encerrar_resposta(state: AgentState):
+    """
+    Finalização determinística do turno: não sintetiza texto com LLM.
+    A mensagem ao cliente vem do especialista (resposta_final) ou de fallbacks curtos.
+    """
+    print("[NODE ENCERRAR RESPOSTA] Normalizando estado pós-especialista (sem síntese LLM)...")
 
-    empresa_id = state.get("empresa_id")
-    lead_id = state.get("lead_id")
-    historico_bd = str(state.get("historico_bd") or "")
-    respostas_especialistas = state.get("respostas_especialistas", []) or []
-    super_contexto_especialistas = str(state.get("super_contexto_especialistas", "") or "").strip()
-    mensagens_estado = state.get("mensagens") or []
-    mensagens_recentes = mensagens_estado[-MAX_MSGS_CONTEXT:]
+    respostas_antes = state.get("respostas_especialistas") or []
+    if any("SISTEMA_BOT_PAUSADO" in str(r) for r in respostas_antes):
+        state["handoff_requested"] = True
+        state["bot_foi_pausado"] = True
 
-    if not historico_bd.strip() and lead_id:
-        try:
-            lead_uuid = uuid.UUID(str(lead_id))
-            async with AsyncSessionLocal() as session:
-                result_hist = await session.execute(
-                    select(MensagemHistorico)
-                    .where(MensagemHistorico.lead_id == lead_uuid)
-                    .order_by(MensagemHistorico.criado_em.desc())
-                    .limit(10)
+    if not str(state.get("resposta_final") or "").strip():
+        for bloco in reversed(respostas_antes):
+            texto = str(bloco or "")
+            if "SISTEMA_BOT_PAUSADO" in texto or "AGUARDANDO_HUMANO" in texto:
+                state["resposta_final"] = (
+                    "Perfeito! Vou te transferir agora para o time responsável. "
+                    "Um atendente humano continua com você em instantes."
                 )
-                mensagens_hist = list(reversed(result_hist.scalars().all()))
-                linhas_hist = []
-                for msg_hist in mensagens_hist:
-                    texto_hist = str(getattr(msg_hist, "texto", "") or "").strip()
-                    if not texto_hist:
-                        continue
-                    papel = "Assistente" if bool(getattr(msg_hist, "from_me", False)) else "Cliente"
-                    linhas_hist.append(f"{papel}: {texto_hist}")
-                historico_reconstruido = "\n".join(linhas_hist).strip()
-                if historico_reconstruido:
-                    state["historico_bd"] = historico_reconstruido
-                    historico_bd = historico_reconstruido
-        except Exception as e:
-            logger.warning("[NODE ATENDENTE] Failsafe de histórico falhou para lead_id=%s: %s", lead_id, e)
+                break
+        if not str(state.get("resposta_final") or "").strip() and state.get("handoff_requested"):
+            state["resposta_final"] = (
+                "Perfeito! Vou te transferir agora para o time responsável. "
+                "Um atendente humano continua com você em instantes."
+            )
+        if not str(state.get("resposta_final") or "").strip():
+            state["resposta_final"] = (
+                "No momento não consegui concluir a resposta automática. "
+                "Poderia reformular sua mensagem em poucas palavras?"
+            )
 
-    empresa = None
-    if empresa_id:
-        try:
-            empresa_uuid = uuid.UUID(str(empresa_id))
-            async with AsyncSessionLocal() as session:
-                result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
-                empresa = result_empresa.scalars().first()
-        except Exception as e:
-            logger.error("[NODE ATENDENTE] Falha ao carregar empresa %s: %s", empresa_id, e)
-
-    ia_personalidade = str(getattr(empresa, "ia_personalidade", "") or "").strip()
-    ia_regras_negocio = str(getattr(empresa, "ia_regras_negocio", "") or "").strip()
-    mensagem_saudacao_empresa = (
-        str(getattr(empresa, "mensagem_saudacao", "") or "").strip() if empresa else ""
-    )
-    prompt_base_config = "\n\n".join(
-        [bloco for bloco in [ia_personalidade, ia_regras_negocio] if bloco]
-    ).strip()
-    if not prompt_base_config:
-        prompt_base_config = (
-            "Você é o atendente da empresa.\n"
-            "Use o histórico, o contexto de funil e os dados de especialistas para responder o cliente.\n"
-            "Mantenha consistência com as configurações da empresa e com o contexto recebido."
-        )
-
-    bloco_historico = historico_bd.strip() or "(sem histórico disponível)"
-    bloco_especialistas = "\n".join([str(item) for item in respostas_especialistas if str(item).strip()]).strip()
-    if not bloco_especialistas:
-        bloco_especialistas = "(sem respostas de especialistas neste turno)"
-
-    etapa_funil = str(state.get("etapa_funil") or "").strip() or "(não definida)"
-
-    bloco_saudacao_atendente = ""
-    if mensagem_saudacao_empresa:
-        bloco_saudacao_atendente = (
-            "\n<saudacao_oficial_empresa>\n"
-            "Conteúdo da Saudação Oficial (texto cadastrado no painel; quando for adequado ao momento da conversa, "
-            "preserve-o literalmente na sua mensagem ao cliente — sem parafrasear):\n"
-            f"{json.dumps(mensagem_saudacao_empresa, ensure_ascii=False)}\n"
-            "</saudacao_oficial_empresa>\n"
-        )
-
-    prompt_final = f"""{prompt_base_config}
-{bloco_saudacao_atendente}
-<contexto_funil>
-etapa_funil: {etapa_funil}
-</contexto_funil>
-
-IMPORTANTE: objetivo_atual, proxima_acao e search_terms do Condutor são uso interno de roteamento;
-não aparecem aqui de propósito — não os invente nem os exponha ao cliente.
-
-<historico_conversa>
-{bloco_historico}
-</historico_conversa>
-
-<respostas_especialistas>
-{bloco_especialistas}
-</respostas_especialistas>
-
-<super_contexto_especialistas>
-{super_contexto_especialistas or "(sem super-contexto)"}
-</super_contexto_especialistas>
-"""
-
-    _conversation_debug_log(f"--- PROMPT FINAL ATENDENTE ---\n{prompt_final}", flush=True)
-    mensagens_para_llm = [SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt_final))] + _to_chat_messages(mensagens_recentes)
-    llm = await get_llm(empresa_id)
-    resposta = await _ainvoke_with_openai_guard(llm, mensagens_para_llm, empresa_id)
-
-    state["resposta_final"] = str(getattr(resposta, "content", "") or "").strip()
     status_conv = "HANDOFF" if state.get("handoff_requested") else "ABERTA"
     state["status_conversa"] = status_conv
 
@@ -1753,9 +1642,8 @@ não aparecem aqui de propósito — não os invente nem os exponha ao cliente.
 
 async def node_agente_condutor(state: AgentState):
     """
-    Camada de Condutor: consome `empresa.condutor_prompt` do banco (texto principal do system prompt).
-    Saída estruturada é tratada pelo pipeline apenas como instrução interna / search_terms para o Maestro.
-    Não envia mensagem ao cliente.
+    Sincroniza `etapa_funil` e metadados de CRM a partir do banco (sem LLM).
+    O roteamento para especialistas é determinístico no nó Maestro.
     """
     empresa_id = str(state.get("empresa_id") or "").strip()
     lead_id = str(state.get("lead_id") or "").strip()
@@ -1767,23 +1655,13 @@ async def node_agente_condutor(state: AgentState):
     except (ValueError, TypeError):
         return state
 
-    historico = str(state.get("historico_bd") or "").strip() or "(sem histórico)"
-    historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
-    ultima_mensagem = _ultima_mensagem_cliente(state)
-
     async with AsyncSessionLocal() as session:
         result_empresa = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
         empresa = result_empresa.scalars().first()
         if not empresa:
             return state
 
-        condutor_ativo = bool(getattr(empresa, "condutor_ativo", False))
-        condutor_prompt = str(getattr(empresa, "condutor_prompt", "") or "").strip()
-
-        # ── 1) Contexto CRM do lead: etapa atual + tags por tipo ─────────
         lead_obj: CRMLead | None = None
-        tags_etapa_nomes: list[str] = []
-        tags_comportamento_nomes: list[str] = []
         etapa_atual_por_tag: str | None = None
 
         if lead_id:
@@ -1824,159 +1702,39 @@ async def node_agente_condutor(state: AgentState):
                             if not nome_tag:
                                 continue
                             if tipo_tag == "etapa_funil":
-                                tags_etapa_nomes.append(nome_tag)
                                 if etapa_atual_por_tag is None:
                                     etapa_atual_por_tag = nome_tag
-                            else:
-                                tags_comportamento_nomes.append(nome_tag)
 
-        # ── 2) Etapa CRM derivada da coluna lead.etapa_id (verdade primária) ─
         etapa_lead_nome: str | None = None
-        etapa_lead_ordem: int | None = None
         if lead_obj is not None and getattr(lead_obj, "etapa_id", None):
             result_etapa = await session.execute(
-                select(CRMEtapa.nome, CRMEtapa.ordem).where(CRMEtapa.id == lead_obj.etapa_id)
+                select(CRMEtapa.nome).where(CRMEtapa.id == lead_obj.etapa_id)
             )
             row = result_etapa.first()
             if row:
                 etapa_lead_nome = str(row[0] or "").strip() or None
-                try:
-                    etapa_lead_ordem = int(row[1])
-                except (TypeError, ValueError):
-                    etapa_lead_ordem = None
 
-        # ── 3) Lista de etapas do funil da empresa (referência da máquina) ──
-        result_funil_etapas = await session.execute(
-            select(CRMEtapa.nome, CRMEtapa.ordem, CRMEtapa.tipo)
-            .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
-            .where(CRMFunil.empresa_id == empresa_uuid)
-            .order_by(CRMEtapa.ordem.asc())
-        )
-        etapas_funil: list[dict[str, Any]] = []
-        for nome_etapa, ordem_etapa, tipo_etapa in result_funil_etapas.all():
-            nome_etapa_str = str(nome_etapa or "").strip()
-            if not nome_etapa_str:
-                continue
-            try:
-                ordem_int = int(ordem_etapa)
-            except (TypeError, ValueError):
-                ordem_int = 0
-            etapas_funil.append(
-                {
-                    "nome": nome_etapa_str,
-                    "ordem": ordem_int,
-                    "tipo": str(tipo_etapa or "").strip() or None,
-                }
-            )
-
-        # Etapa "oficial" do lead (fallback em cascata).
         etapa_oficial_nome = etapa_lead_nome or etapa_atual_por_tag
 
-        # ── 4) Condutor desligado ou sem prompt: só sincroniza etapa do CRM ───
-        if not condutor_ativo or not condutor_prompt:
-            state["termos_busca_condutor"] = []
-            state["search_terms_condutor"] = []
-            if etapa_oficial_nome:
-                etapa_anterior = str(state.get("etapa_funil") or "").strip() or None
-                if etapa_anterior and etapa_anterior != etapa_oficial_nome:
-                    concluidas = list(state.get("etapas_concluidas") or [])
-                    if etapa_anterior not in concluidas:
-                        concluidas.append(etapa_anterior)
-                        state["etapas_concluidas"] = concluidas
-                state["etapa_funil"] = etapa_oficial_nome
-            return state
+        state["termos_busca_condutor"] = []
+        state["search_terms_condutor"] = []
+        state["objetivo_atual"] = None
+        state["proxima_acao"] = None
 
-        # ── 5) System prompt: texto configurável do banco (fiel) + protocolo mínimo fixo
-        PROTOCOLO_SAIDA_CONDUTOR = """--- Protocolo técnico de saída (complementar; não substitui o prompt configurável acima) ---
-Responda em formato estruturado com os campos:
-• etapa_funil — string ou null: etapa atual do funil, alinhada aos dados de CRM enviados na mensagem do usuário.
-• objetivo_atual — string ou null: uso interno de roteamento (não é mensagem ao cliente).
-• proxima_acao — string ou null: uso interno de roteamento (não é mensagem ao cliente).
-• termos_busca — lista de 3 a 6 strings curtas: são os search_terms exclusivos que o Roteador (Maestro) usará como reforço na busca vetorial de especialistas; não inclua texto conversacional destinado ao cliente final.
-
-A mensagem ao cliente é responsabilidade dos Especialistas e do nó Atendente, não sua."""
-
-        prompt_sistema = f"{condutor_prompt}\n\n{PROTOCOLO_SAIDA_CONDUTOR}"
-
-        # ── 6) Contexto operacional do CRM injetado como user message ────────
-        contexto_crm = {
-            "etapa_atual_do_lead": etapa_oficial_nome or "(indefinida)",
-            "etapa_atual_ordem": etapa_lead_ordem,
-            "tags_etapa": tags_etapa_nomes,
-            "tags_comportamento": tags_comportamento_nomes,
-            "etapas_oficiais_do_funil": etapas_funil,
-            "etapas_ja_concluidas_no_turno": list(state.get("etapas_concluidas") or []),
-        }
-
-        contexto_usuario = (
-            "CONTEXTO_CRM (referência da máquina de estados):\n"
-            f"{json.dumps(contexto_crm, ensure_ascii=False, indent=2)}\n\n"
-            "HISTORICO_CONVERSA:\n"
-            f"completo:\n{historico}\n\n"
-            f"curto:\n{historico_curto}\n\n"
-            "ULTIMA_MENSAGEM_CLIENTE:\n"
-            f"{ultima_mensagem}\n"
-        )
-
-        try:
-            modelo_condutor = str(getattr(empresa, "modelo_roteador", "") or "").strip() or "gpt-4o-mini"
-            llm = await get_llm(empresa_id, modelo_ia=modelo_condutor)
-            llm_struct = llm.with_structured_output(AnaliseCondutor)
-            analise = await _ainvoke_with_openai_guard(
-                llm_struct,
-                [
-                    ("system", _prepend_rota_interna_system_prompt(state, prompt_sistema)),
-                    ("user", contexto_usuario),
-                ],
-                empresa_id,
-            )
-            etapa_nova = str(getattr(analise, "etapa_funil", "") or "").strip() or etapa_oficial_nome or None
-            objetivo_novo = str(getattr(analise, "objetivo_atual", "") or "").strip() or None
-            proxima_acao_nova = str(getattr(analise, "proxima_acao", "") or "").strip() or None
-
-            termos_busca_raw = getattr(analise, "termos_busca", None) or []
-            if not isinstance(termos_busca_raw, list):
-                termos_busca_raw = []
-            termos_busca_limpos = [
-                str(item or "").strip()
-                for item in termos_busca_raw
-                if str(item or "").strip()
-            ][:6]
-
+        if etapa_oficial_nome:
             etapa_anterior = str(state.get("etapa_funil") or "").strip() or None
-            if etapa_nova and etapa_anterior and etapa_nova != etapa_anterior:
+            if etapa_anterior and etapa_anterior != etapa_oficial_nome:
                 concluidas = list(state.get("etapas_concluidas") or [])
                 if etapa_anterior not in concluidas:
                     concluidas.append(etapa_anterior)
                     state["etapas_concluidas"] = concluidas
-
-            if etapa_nova:
-                state["etapa_funil"] = etapa_nova
-            if objetivo_novo is not None:
-                state["objetivo_atual"] = objetivo_novo
-            if proxima_acao_nova is not None:
-                state["proxima_acao"] = proxima_acao_nova
-            state["termos_busca_condutor"] = termos_busca_limpos
-            state["search_terms_condutor"] = termos_busca_limpos
-
-            print(
-                f"[NODE CONDUTOR] etapa='{state.get('etapa_funil')}' "
-                f"objetivo='{state.get('objetivo_atual')}' "
-                f"proxima_acao='{state.get('proxima_acao')}' "
-                f"search_terms={termos_busca_limpos}"
-            )
-        except Exception as exc:
-            logger.warning("[NODE CONDUTOR] Falha ao interpretar contexto de funil: %s", exc)
-            if etapa_oficial_nome:
-                state["etapa_funil"] = etapa_oficial_nome
-            state["termos_busca_condutor"] = []
-            state["search_terms_condutor"] = []
+            state["etapa_funil"] = etapa_oficial_nome
 
     return state
 
 
 async def node_roteador_maestro(state: AgentState):
-    print("[NODE ROTEADOR] Roteamento semântico via embeddings...")
+    print("[NODE ROTEADOR] Roteamento determinístico por funil (Top-1, sem vetor/LLM)...")
     import uuid
 
     # Se já existem contribuições no ciclo, o roteador atua apenas como controlador da fila.
@@ -2064,7 +1822,6 @@ async def node_roteador_maestro(state: AgentState):
     msg_lower = ultima_mensagem.lower()
     is_handoff = any(marker in msg_lower for marker in handoff_markers)
 
-    # Detecção de Confirmação de Transferência (Evitar Efeito Manada)
     ultima_ia = _ultima_mensagem_assistente(state).lower()
     is_short_confirm = msg_lower in ["sim", "quero", "pode", "por favor", "pode transferir", "sim por favor"]
 
@@ -2073,303 +1830,127 @@ async def node_roteador_maestro(state: AgentState):
 
     state["handoff_requested"] = is_handoff
 
-    # Se o usuário apenas confirmou a transferência, corta o roteamento dos especialistas
     if is_handoff and is_short_confirm:
         state["especialistas_identificados"] = []
         state["especialistas_selecionados"] = []
         state["fila_agentes"] = []
         state["especialista_corrente"] = None
         state["respostas_especialistas"] = []
+        state["resposta_final"] = (
+            "Perfeito! Vou te transferir agora para o time responsável. "
+            "Um atendente humano continua com você em instantes."
+        )
         return state
 
-    historico_curto_estado = str(state.get("historico_curto") or "").strip()
-    historico_curto_dinamico = _historico_curto_roteador(state, limite=6)
-    if historico_curto_estado and historico_curto_dinamico:
-        historico_curto_roteador = f"{historico_curto_estado}\n{historico_curto_dinamico}".strip()
-    else:
-        historico_curto_roteador = historico_curto_estado or historico_curto_dinamico
-    historico_turnos_maestro = _turnos_consolidados_roteador(state, limite_turnos=3)
-    ultima_ia_contexto = _ultima_mensagem_assistente(state)
-
-    def _parse_ids_json(raw: str) -> list[str]:
-        texto = str(raw or "").strip()
-        if not texto:
-            return []
-
-        tentativas = [texto, texto.replace("'", '"')]
-        trecho_lista = re.search(r"\[[\s\S]*\]", texto)
-        if trecho_lista:
-            trecho = trecho_lista.group(0).strip()
-            tentativas.extend([trecho, trecho.replace("'", '"')])
-
-        for candidato in tentativas:
-            try:
-                data = json.loads(candidato)
-                if isinstance(data, list):
-                    return [str(item).strip() for item in data if str(item).strip()]
-            except Exception:
-                continue
-        return []
-
     async with AsyncSessionLocal() as session:
-        router_service = SemanticRouterService(session)
+        result_emp = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+        empresa_row = result_emp.scalars().first()
+        cred = getattr(empresa_row, "credenciais_canais", None) or {}
+        regras, default_esp_id, match_order = parse_funil_routing_credenciais(cred if isinstance(cred, dict) else {})
 
-        # search_terms do Condutor → único reforço semântico configurável para o pool vetorial.
-        search_terms_raw = state.get("search_terms_condutor") or state.get("termos_busca_condutor") or []
-        if not isinstance(search_terms_raw, list):
-            search_terms_raw = []
-        search_terms = [
-            str(item or "").strip()
-            for item in search_terms_raw
-            if str(item or "").strip()
-        ]
-        if search_terms:
-            query_text_para_router = (
-                f"{ultima_mensagem}\n[SEARCH_TERMS_CONDUTOR] " + ", ".join(search_terms)
-            )
-        else:
-            query_text_para_router = ultima_mensagem
-
-        roteamento = await router_service.get_top_specialists_contextual(
-            query_text=query_text_para_router,
-            empresa_id=str(empresa_uuid) if empresa_uuid else None,
-            recent_history_text=historico_curto_roteador,
-            top_k=5,
-        )
-        termos_expandidos = str(roteamento.get("termos_expandidos") or "").strip()
-        candidatos = roteamento.get("candidatos") or []
-        if not isinstance(candidatos, list):
-            candidatos = []
-
-        # ── Filtro universal: o porteiro nunca compete com especialistas reais
-        # depois que a triagem inicial já aconteceu. Como o SemanticRouter
-        # injeta especialistas com `fixo_no_roteador=True`, o porteiro pode
-        # aparecer aqui — removemos pelo papel (não por nome de tag).
-        candidatos = [
-            item for item in candidatos
-            if isinstance(item, dict) and not _eh_especialista_porteiro(item.get("nome"))
-        ]
-
-        nomes_candidatos = [str(item.get("nome") or "").strip() for item in candidatos if isinstance(item, dict)]
-        resposta_menu_numerica = bool(re.fullmatch(r"\d{1,2}", msg_lower))
-        menu_detectado_na_ultima_ia = bool(_extrair_opcoes_menu(ultima_ia_contexto))
-        continuidade_menu_ativa = resposta_menu_numerica and menu_detectado_na_ultima_ia
-
-        def _score_ajustado_candidato(item: dict) -> float:
-            score_base = float(item.get("similarity") or 0.0)
-            peso = int(item.get("peso_prioridade", 1) or 1)
-            # O peso atua como um bônus agressivo no score (cada ponto dá 15% de bônus)
-            score_ponderado = score_base + (peso * 0.15)
-            nome_norm = _normalizar_chave_especialista(str(item.get("nome") or ""))
-            if continuidade_menu_ativa and "triagem_microline" in nome_norm:
-                return min(1.0, score_ponderado + 0.12)
-            if continuidade_menu_ativa and "triagem" in nome_norm:
-                return min(1.0, score_ponderado + 0.08)
-            return score_ponderado
-
-        candidatos_payload = [
-            {
-                "id": str(item.get("id") or "").strip(),
-                "nome": str(item.get("nome") or "").strip(),
-                "peso_prioridade": int(item.get("peso_prioridade", 1) or 1),
-                "modelo_ia": str(item.get("modelo_ia") or "").strip(),
-                "missao": str(item.get("descricao_missao") or "").strip(),
-                "similaridade": float(item.get("similarity") or 0.0),
-                "score_ajustado": _score_ajustado_candidato(item),
-            }
-            for item in candidatos
-            if isinstance(item, dict) and str(item.get("id") or "").strip()
-        ]
-
-        ids_selecionados_maestro: list[str] = []
-        if candidatos_payload:
-            modelo_maestro = next(
-                (
-                    str(item.get("modelo_ia") or "").strip()
-                    for item in candidatos_payload
-                    if str(item.get("modelo_ia") or "").strip()
-                ),
-                "gpt-5.4",
-            )
-            llm_maestro = await get_llm(
-                state.get("empresa_id"),
-                modelo_ia=modelo_maestro,
-            )
-            etapa_funil_ctx = str(state.get("etapa_funil") or "").strip() or "(não definida)"
-            objetivo_ctx = str(state.get("objetivo_atual") or "").strip() or "(não definido)"
-            proxima_acao_ctx = str(state.get("proxima_acao") or "").strip() or "(não definida)"
-            search_terms_ctx = ", ".join(search_terms) if search_terms else "(não definidos pelo Condutor)"
-            prompt_decisao = (
-                "Você é o Maestro (Roteador) do AgenteOS. "
-                "O roteamento de negócio da empresa é definido pelo prompt do Condutor no banco de dados; "
-                "este nó apenas escolhe especialistas no catálogo com base em embeddings e contexto.\n"
-                f"A query semântica enviada ao índice vetorial já incorpora os search_terms do Condutor quando existem; "
-                f"intenção expandida pelo router: '{termos_expandidos}'.\n\n"
-                "Use obrigatoriamente o bloco CONTEXTO_CONDUTOR abaixo. Os campos objetivo_atual e proxima_acao são "
-                "instrução interna de roteamento (não texto ao cliente). O campo search_terms_condutor lista os termos "
-                "que reforçaram a busca vetorial neste turno.\n\n"
-                "Sua missão: selecionar, dentre os candidatos, quais devem ser acionados neste turno para responder ao usuário.\n"
-                "REGRAS CRÍTICAS:\n"
-                "- Dê preferência a especialistas alinhados a search_terms_condutor + etapa_funil quando indicados.\n"
-                "- Respeite peso_prioridade (especialistas com peso maior entram quando o contexto combinar).\n"
-                "- Se a última mensagem da IA continha menu e o usuário respondeu com número (ex: '3'), inclua os "
-                "especialistas que tratam daquela opção, não só triagem.\n"
-                "- Considere a ÚLTIMA MENSAGEM DA IA para resolver respostas curtas.\n"
-                "- Retorne APENAS um array JSON com os IDs dos selecionados. Ex: ['id1', 'id2']."
-            )
-            entrada_decisao = (
-                "CONTEXTO_CONDUTOR (saída estruturada interna; não é mensagem ao usuário):\n"
-                f"- etapa_funil: {etapa_funil_ctx}\n"
-                f"- objetivo_atual (interno): {objetivo_ctx}\n"
-                f"- proxima_acao (interno): {proxima_acao_ctx}\n"
-                f"- search_terms_condutor (vetorial): {search_terms_ctx}\n\n"
-                "HISTORICO_CURTO_ULTIMAS_5_MENSAGENS:\n"
-                f"{historico_curto_roteador or '(sem histórico)'}\n\n"
-                "ULTIMOS_3_TURNOS_CONSOLIDADOS:\n"
-                f"{historico_turnos_maestro or '(sem histórico)'}\n\n"
-                "ULTIMA_MENSAGEM_DA_IA:\n"
-                f"{ultima_ia_contexto or '(sem mensagem anterior da IA)'}\n\n"
-                f"TERMOS_EXPANDIDOS: {termos_expandidos or ultima_mensagem}\n\n"
-                f"CANDIDATOS_TOP5 (Nome + Missão):\n{json.dumps(candidatos_payload, ensure_ascii=False)}"
-            )
-
+        etapa_uuid_lead = None
+        tags_lead_list: list[Any] = []
+        lead_pk = str(state.get("lead_id") or "").strip()
+        if lead_pk:
             try:
-                resposta_maestro = await _ainvoke_with_openai_guard(
-                    llm_maestro,
-                    [("system", _prepend_rota_interna_system_prompt(state, prompt_decisao)), ("user", entrada_decisao)],
-                    state.get("empresa_id"),
-                )
-                ids_selecionados_maestro = _parse_ids_json(getattr(resposta_maestro, "content", ""))
-            except Exception as exc:
-                logger.warning("[MAESTRO] Falha na decisão contextual por LLM: %s", exc)
-                ids_selecionados_maestro = []
-
-        candidatos_por_id = {
-            str(item.get("id") or "").strip(): item
-            for item in candidatos
-            if isinstance(item, dict) and str(item.get("id") or "").strip()
-        }
-        ids_validos = [esp_id for esp_id in ids_selecionados_maestro if esp_id in candidatos_por_id]
-        candidatos_rankeados = sorted(
-            [item for item in candidatos if isinstance(item, dict) and str(item.get("id") or "").strip()],
-            key=_score_ajustado_candidato,
-            reverse=True,
-        )
-
-        margem_tolerancia = 0.08
-        ids_por_margem: list[str] = []
-        if candidatos_rankeados:
-            melhor_score = _score_ajustado_candidato(candidatos_rankeados[0])
-            if melhor_score > 0:
-                limite = melhor_score * (1 - margem_tolerancia)
-                ids_por_margem = [
-                    str(item.get("id") or "").strip()
-                    for item in candidatos_rankeados
-                    if _score_ajustado_candidato(item) >= limite
-                ]
-
-        ids_base = ids_validos or [str(item.get("id") or "").strip() for item in candidatos_rankeados[:1]]
-        ids_combinados: list[str] = []
-        for esp_id in [*ids_base, *ids_por_margem]:
-            if esp_id and esp_id in candidatos_por_id and esp_id not in ids_combinados:
-                ids_combinados.append(esp_id)
-
-        # Removemos os bloqueios restritivos de menu para permitir que a fila
-        # atue livremente baseada nos pesos e no LLM.
-        especialistas_match = [candidatos_por_id[esp_id] for esp_id in ids_combinados if esp_id in candidatos_por_id]
-        
-        # Força a ordenação final da fila pelo MAIOR PESO para que sejam despachados primeiro
-        especialistas_match.sort(
-            key=lambda x: (
-                int(x.get("peso_prioridade", 1) or 1),
-                _score_ajustado_candidato(x)
-            ),
-            reverse=True
-        )
-
-        # Fallback determinístico: resposta numérica para menu da mensagem anterior da IA.
-        ultima_msg_usuario = str(ultima_mensagem or "").strip().lower()
-        opcoes_menu = _extrair_opcoes_menu(ultima_ia_contexto)
-        if not especialistas_match and opcoes_menu and re.fullmatch(r"\d{1,2}", ultima_msg_usuario):
-            rotulo_opcao = str(opcoes_menu.get(ultima_msg_usuario, "")).strip()
-            if rotulo_opcao:
-                alvo_norm = _normalizar_chave_especialista(rotulo_opcao)
-                termos_alvo = [tok for tok in re.split(r"\W+", alvo_norm) if tok]
-
-                def _score_candidato(item: dict) -> int:
-                    nome = _normalizar_chave_especialista(str(item.get("nome") or ""))
-                    missao = _normalizar_chave_especialista(str(item.get("descricao_missao") or ""))
-                    base = f"{nome} {missao}".strip()
-                    score = 0
-                    if alvo_norm and alvo_norm in base:
-                        score += 10
-                    for termo in termos_alvo:
-                        if termo and termo in base:
-                            score += 2
-                    return score
-
-                candidatos_ordenados = sorted(
-                    [item for item in candidatos if isinstance(item, dict)],
-                    key=_score_candidato,
-                    reverse=True,
-                )
-                if candidatos_ordenados and _score_candidato(candidatos_ordenados[0]) > 0:
-                    especialistas_match = [candidatos_ordenados[0]]
-                    logger.info(
-                        "[MAESTRO] Fallback de menu aplicado. resposta='%s' opcao='%s' especialista='%s'",
-                        ultima_msg_usuario,
-                        rotulo_opcao,
-                        str(candidatos_ordenados[0].get("nome") or ""),
+                lead_uuid = uuid.UUID(lead_pk)
+            except (ValueError, TypeError):
+                lead_uuid = None
+            if lead_uuid:
+                result_lead = await session.execute(
+                    select(CRMLead).where(
+                        CRMLead.id == lead_uuid,
+                        CRMLead.empresa_id == empresa_uuid,
                     )
-
-        # Fallback de memória conversacional: evita seleção vazia após pergunta prévia da IA.
-        resposta_curta = bool(re.fullmatch(r"\d{1,2}|sim|não|nao|ok|blz|beleza", ultima_msg_usuario))
-        if not especialistas_match and candidatos and ultima_ia_contexto and resposta_curta:
-            primeiro_candidato = candidatos_rankeados[0] if candidatos_rankeados else None
-            if primeiro_candidato:
-                especialistas_match = [primeiro_candidato]
-                logger.info(
-                    "[MAESTRO] Fallback contextual aplicado. resposta='%s' ultimo_bot_presente=True especialista='%s'",
-                    ultima_msg_usuario,
-                    str(primeiro_candidato.get("nome") or ""),
                 )
-        nomes_selecionados = [str(item.get("nome") or "").strip() for item in especialistas_match if isinstance(item, dict)]
-        print(
-            f"[MAESTRO - DECISÃO CONTEXTUAL] Candidatos: {nomes_candidatos} | "
-            f"Selecionados por Memória: {nomes_selecionados}"
+                lead_obj = result_lead.scalars().first()
+                if lead_obj:
+                    etapa_uuid_lead = getattr(lead_obj, "etapa_id", None)
+                    raw_tags = lead_obj.tags
+                    tags_lead_list = raw_tags if isinstance(raw_tags, list) else []
+
+        result_esp = await session.execute(
+            select(Especialista).where(
+                Especialista.empresa_id == empresa_uuid,
+                Especialista.ativo.is_(True),
+            )
+        )
+        especialistas_db = list(result_esp.scalars().all())
+        ids_ativos_list: list[str] = []
+        for e in especialistas_db:
+            nid = normalizar_uuid_str(getattr(e, "id", None))
+            if nid:
+                ids_ativos_list.append(nid)
+        ids_ativos: frozenset[str] = frozenset(ids_ativos_list)
+        fallback_pool: list[tuple[str, int]] = []
+        for e in especialistas_db:
+            nome = str(getattr(e, "nome", "") or "")
+            if _normalizar_chave_especialista(nome) == "especialista_handoff_interno":
+                continue
+            if _eh_especialista_porteiro(nome):
+                continue
+            eid = normalizar_uuid_str(getattr(e, "id", None))
+            if eid:
+                fallback_pool.append((eid, int(getattr(e, "peso_prioridade", 1) or 1)))
+
+        escolhido = resolver_especialista_top1_por_funil(
+            etapa_uuid_lead,
+            tags_lead_list,
+            regras,
+            default_esp_id,
+            match_order,
+            ids_ativos,
+            fallback_pool,
         )
 
-    ids_especialistas = [esp.get("id") for esp in especialistas_match]
-    nomes_especialistas = [esp.get("nome") for esp in especialistas_match]
-    especialistas_identificados: list[str] = []
-    vistos: set[str] = set()
-    for esp in especialistas_match:
-        if not isinstance(esp, dict):
-            continue
-        valor = str(esp.get("id") or "").strip()
-        if not valor:
-            continue
-        normalizado = _normalizar_chave_especialista(valor)
-        if normalizado in vistos:
-            continue
-        vistos.add(normalizado)
-        especialistas_identificados.append(valor)
-    print(
-        f"[NODE ROTEADOR] Matches: {len(ids_especialistas)} "
-        f"| IDs={ids_especialistas} | Nomes={nomes_especialistas} "
-        f"| Identificados={especialistas_identificados}"
-    )
+        especialistas_match: list[dict[str, Any]] = []
+        if escolhido:
+            esp_row = next(
+                (row for row in especialistas_db if normalizar_uuid_str(getattr(row, "id", None)) == escolhido),
+                None,
+            )
+            if esp_row:
+                especialistas_match = [
+                    {
+                        "id": str(esp_row.id),
+                        "nome": str(esp_row.nome or ""),
+                        "modelo_ia": str(
+                            getattr(esp_row, "modelo_llm", "") or getattr(esp_row, "modelo_ia", "") or ""
+                        ).strip(),
+                        "peso_prioridade": int(getattr(esp_row, "peso_prioridade", 1) or 1),
+                        "descricao_missao": str(getattr(esp_row, "descricao_missao", "") or "").strip(),
+                        "prompt_sistema": str(esp_row.prompt_sistema or ""),
+                        "usar_rag": bool(getattr(esp_row, "usar_rag", False)),
+                        "usar_agenda": bool(getattr(esp_row, "usar_agenda", False)),
+                    }
+                ]
+                logger.info("[MAESTRO] Roteamento determinístico Top-1: especialista_id=%s nome=%s", escolhido, esp_row.nome)
+            else:
+                logger.warning(
+                    "[MAESTRO] UUID resolvido (%s) não encontrado entre especialistas ativos; ignorando.",
+                    escolhido,
+                )
+        else:
+            logger.warning(
+                "[MAESTRO] Nenhum especialista resolvido (configure credenciais_canais.funnel_routing). empresa_id=%s",
+                empresa_uuid,
+            )
 
-    # Mantém especialistas selecionados para a próxima etapa do fluxo.
-    state["especialistas_selecionados"] = especialistas_match
-    respostas_existentes = state.get("respostas_especialistas") or []
-    if not isinstance(respostas_existentes, list):
-        respostas_existentes = []
-    state["respostas_especialistas"] = respostas_existentes
-    state["super_contexto_especialistas"] = ""
-    state["especialistas_identificados"] = especialistas_identificados
-    state["fila_agentes"] = list(especialistas_identificados)
-    state["especialista_corrente"] = None
+        especialistas_identificados: list[str] = []
+        if especialistas_match and especialistas_match[0].get("id"):
+            especialistas_identificados = [str(especialistas_match[0]["id"])]
+
+        respostas_existentes = state.get("respostas_especialistas") or []
+        if not isinstance(respostas_existentes, list):
+            respostas_existentes = []
+
+        state["especialistas_selecionados"] = especialistas_match
+        state["respostas_especialistas"] = respostas_existentes
+        state["super_contexto_especialistas"] = ""
+        state["especialistas_identificados"] = especialistas_identificados
+        state["fila_agentes"] = list(especialistas_identificados)
+        state["especialista_corrente"] = None
+
     return state
 
 async def node_especialista_funcionamento(state: AgentState):
@@ -2843,7 +2424,9 @@ async def node_especialista_dinamico(state: AgentState):
         if not intencoes:
             return state
 
-        print(f"[NODE ESPECIALISTA DINAMICO] Especialistas acionados: {intencoes} para {state['nome_contato']}.")
+        intencoes = intencoes[:1]
+
+        print(f"[NODE ESPECIALISTA DINAMICO] Top-1 acionado: {intencoes} (contato: {state.get('nome_contato')}).")
         ultima_mensagem = _ultima_mensagem_cliente(state)
         historico_curto = str(state.get("historico_curto") or "").strip() or "(sem histórico curto)"
 
@@ -2865,7 +2448,6 @@ async def node_especialista_dinamico(state: AgentState):
         if not isinstance(respostas_existentes, list):
             respostas_existentes = []
         state["respostas_especialistas"] = list(respostas_existentes)
-        blocos_super_contexto: list[str] = []
         lead_id = state.get("lead_id")
         conexao_id = state.get("conexao_id")
 
@@ -2895,16 +2477,6 @@ async def node_especialista_dinamico(state: AgentState):
             except (ValueError, TypeError):
                 especialista_id_uuid = None
 
-            prompt_base = (
-                "Você é um extrator de dados.\n"
-                "Use as ferramentas disponíveis para buscar a informação solicitada.\n"
-                "Retorne APENAS dados brutos encontrados, em JSON simples ou tópicos diretos.\n"
-                "NÃO redija mensagens para o cliente final.\n"
-                "Você recebe o histórico curto APENAS para leitura e contexto. "
-                "NÃO altere memória e não assuma persona de atendimento final.\n"
-                f"HISTORICO_CURTO_READ_ONLY:\n{historico_curto}\n"
-            )
-
             # ETAPA 1: montar tools sem I/O de banco no construtor das ferramentas.
             try:
                 if empresa_uuid:
@@ -2930,13 +2502,21 @@ async def node_especialista_dinamico(state: AgentState):
 
                 if especialista_db:
                     nome_especialista_resultado = str(especialista_db.nome)
-                    prompt_base += f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{especialista_db.prompt_sistema}\n"
-                elif prompt_especialista_meta:
-                    prompt_base += f"\nCONTEXTO_TECNICO_ESPECIALISTA:\n{prompt_especialista_meta}\n"
 
-                prompt_especialista_final = str(
+                mission = str(
                     (especialista_db.prompt_sistema if especialista_db else prompt_especialista_meta) or ""
+                ).strip()
+                prompt_base = (
+                    "Você responde diretamente ao cliente neste canal.\n"
+                    "Use as ferramentas disponíveis de forma silenciosa: não descreva raciocínio, cadeias de pensamento "
+                    "nem passos internos (nada de 'vou consultar', 'deixe-me verificar', etc.).\n"
+                    "Não inclua JSON de diagnóstico, dumps técnicos nem tags tipo <thinking> na mensagem final.\n"
+                    f"HISTORICO_CURTO (contexto):\n{historico_curto}\n\n"
+                    "--- Missão e políticas do especialista ---\n"
+                    f"{mission or '(configure o prompt do especialista no painel)'}\n"
                 )
+
+                prompt_especialista_final = mission
                 if "[GOOGLE_SEARCH_ENABLED=true]" in prompt_especialista_final:
                     nome_search_tool = str(getattr(google_search, "name", "google_search")).strip()
                     if nome_search_tool not in nomes_tools_registradas:
@@ -3130,6 +2710,32 @@ async def node_especialista_dinamico(state: AgentState):
                                     return await _coroutine_native(empresa_id=_empresa_id)
 
                                 coroutine_native = _tool_consultar_tags_empresa_contextual
+                            elif chave_nativa == "tool_listar_etapas_funil":
+                                async def _tool_listar_etapas_funil_contextual(
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _empresa_id:
+                                        return "Falha ao listar etapas: empresa não identificada."
+                                    return await _coroutine_native(empresa_id=_empresa_id)
+
+                                coroutine_native = _tool_listar_etapas_funil_contextual
+                            elif chave_nativa == "tool_atualizar_etapa_lead":
+                                async def _tool_atualizar_etapa_lead_contextual(
+                                    etapa_id: str,
+                                    _lead_id: str | None = str(lead_id) if lead_id else None,
+                                    _empresa_id: str | None = str(state.get("empresa_id") or "").strip() or None,
+                                    _coroutine_native=coroutine_native,
+                                ) -> str:
+                                    if not _lead_id or not _empresa_id:
+                                        return "Erro: contexto de lead/empresa ausente para mover etapa."
+                                    return await _coroutine_native(
+                                        lead_id=_lead_id,
+                                        empresa_id=_empresa_id,
+                                        etapa_id=str(etapa_id or "").strip(),
+                                    )
+
+                                coroutine_native = _tool_atualizar_etapa_lead_contextual
                             elif chave_nativa == "transferir_para_humano":
                                 async def _tool_transferir_para_humano_contextual(
                                     *args,
@@ -3251,7 +2857,33 @@ async def node_especialista_dinamico(state: AgentState):
                 )
                 erros_extracao.append(f"Falha na ETAPA 1 (ferramentas): {e}")
 
+            texto_etapas_funil = ""
+            nome_etapa_lead_prompt = ""
+            if empresa_uuid and lead_id:
+                try:
+                    lid = uuid.UUID(str(lead_id).strip())
+                    from app.services.crm_etapas_service import listar_etapas_empresa_formatadas, obter_nome_etapa_lead
+
+                    async with AsyncSessionLocal() as s_funil:
+                        lr = await s_funil.execute(
+                            select(CRMLead.etapa_id).where(CRMLead.id == lid, CRMLead.empresa_id == empresa_uuid)
+                        )
+                        etapa_id_lead = lr.scalar_one_or_none()
+                        nome_etapa_lead_prompt = await obter_nome_etapa_lead(s_funil, empresa_uuid, etapa_id_lead)
+                        texto_etapas_funil, _ = await listar_etapas_empresa_formatadas(s_funil, empresa_uuid)
+                except Exception as exc_funil:
+                    logger.debug("[FUNIL PROMPT] Falha ao montar contexto de etapas: %s", exc_funil)
+
             system_message_adicional = f"\n{contexto_empresa}"
+            if texto_etapas_funil:
+                system_message_adicional += (
+                    "\n\n[CRM — FUNIL DESTA EMPRESA]\n"
+                    f"O lead está atualmente na etapa: {nome_etapa_lead_prompt}.\n"
+                    "As etapas disponíveis no funil desta empresa (UUID oficial de cada coluna) são:\n"
+                    f"{texto_etapas_funil}\n"
+                    "Para avançar o lead, use a ferramenta de atualização de etapa com um etapa_id copiado desta lista. "
+                    "Se precisar reconsultar, use a ferramenta de listar etapas."
+                )
             contexto_funil_partes = []
             etapa_funil = str(state.get("etapa_funil") or "").strip()
             objetivo_atual = str(state.get("objetivo_atual") or "").strip()
@@ -3362,6 +2994,7 @@ async def node_especialista_dinamico(state: AgentState):
                                     state["acao_imediata"] = "RESPONDER_E_PARAR"
                                     state["fila_agentes"] = []
                                     state["agentes_na_fila"] = []
+                                    state["resposta_final"] = str(msg_transferencia or "").strip()
                                     return state
                                 if "erro" in conteudo_tool.lower() or "falha" in conteudo_tool.lower():
                                     erros_extracao.append(conteudo_tool)
@@ -3394,6 +3027,9 @@ async def node_especialista_dinamico(state: AgentState):
             state["respostas_especialistas"].append(
                 f"[ESPECIALISTA: {nome_especialista_resultado}] {json.dumps(extracao, ensure_ascii=False)}"
             )
+            texto_ao_cliente = str(resposta_parcial or "").strip()
+            if texto_ao_cliente and not texto_ao_cliente.lower().startswith("falha na etapa"):
+                state["resposta_final"] = texto_ao_cliente
 
             nome_especialista_norm = _normalizar_chave_especialista(nome_especialista_resultado)
             fontes_norm = {_normalizar_chave_especialista(fonte) for fonte in fontes_unicas}
@@ -3429,27 +3065,7 @@ async def node_especialista_dinamico(state: AgentState):
                 ]
                 state["acoes_sistema_pendentes"] = pendentes
 
-            prompt_para_super_contexto = (
-                str(getattr(especialista_db, "prompt_sistema", "") or "").strip()
-                if especialista_db
-                else prompt_especialista_meta
-            )
-            blocos_super_contexto.append(
-                "\n".join(
-                    [
-                        f"[ESPECIALISTA: {nome_especialista_resultado}]",
-                        f"PROMPT_SISTEMA:\n{prompt_para_super_contexto or '(sem prompt técnico)'}",
-                    ]
-                )
-            )
-
-        super_contexto_existente = str(state.get("super_contexto_especialistas") or "").strip()
-        super_contexto_novo = "\n\n".join(blocos_super_contexto).strip()
-        state["super_contexto_especialistas"] = (
-            f"{super_contexto_existente}\n\n{super_contexto_novo}".strip()
-            if super_contexto_existente and super_contexto_novo
-            else (super_contexto_novo or super_contexto_existente)
-        )
+        state["super_contexto_especialistas"] = ""
         state["especialista_corrente"] = None
         return state
     except Exception as e:
@@ -3475,7 +3091,7 @@ workflow = StateGraph(AgentState)
 
 workflow.add_node("node_crm", node_crm)
 workflow.add_node("node_capturar_nome", node_capturar_nome)
-workflow.add_node("node_atendente", node_atendente)
+workflow.add_node("node_encerrar_resposta", node_encerrar_resposta)
 workflow.add_node("node_agente_condutor", node_agente_condutor)
 workflow.add_node("node_roteador_maestro", node_roteador_maestro)
 workflow.add_node("node_acao_sistema", node_acao_sistema)
@@ -3497,14 +3113,15 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("node_capturar_nome", END)
 
-def router_atendente(state: AgentState):
+def router_encerrar_resposta(state: AgentState):
     if state.get("acoes_sistema_pendentes"):
         return "node_acao_sistema"
     return END
 
+
 workflow.add_conditional_edges(
-    "node_atendente",
-    router_atendente,
+    "node_encerrar_resposta",
+    router_encerrar_resposta,
     {
         END: END,
         "node_acao_sistema": "node_acao_sistema",
@@ -3520,7 +3137,7 @@ def router_maestro(state: AgentState):
     respostas = state.get("respostas_especialistas", [])
     if any("SISTEMA_BOT_PAUSADO" in str(r) or "AGUARDANDO_HUMANO" in str(r) for r in respostas):
         state["fila_agentes"] = []
-        return "node_atendente"
+        return "node_encerrar_resposta"
 
     especialistas_identificados = state.get("especialistas_identificados") or []
     if not isinstance(especialistas_identificados, list):
@@ -3567,13 +3184,16 @@ def router_maestro(state: AgentState):
         )
         # Garante que a mensagem final de transferência seja gerada antes de pausar o bot.
         if somente_transferencia and not state.get("resposta_final"):
-            return "node_atendente"
+            state["resposta_final"] = (
+                "Perfeito! Vou te transferir agora para o time responsável. "
+                "Um atendente humano continua com você em instantes."
+            )
         state["especialista_corrente"] = None
         return "node_acao_sistema"
     if not fila_agentes:
         state["fila_agentes"] = []
         state["especialista_corrente"] = None
-        return "node_atendente"
+        return "node_encerrar_resposta"
 
     agente_atual = str(fila_agentes.pop(0) or "").strip()
     state["fila_agentes"] = fila_agentes
@@ -3583,7 +3203,7 @@ def router_maestro(state: AgentState):
     print("--------------------------")
     if not agente_atual:
         state["especialista_corrente"] = None
-        return "node_atendente"
+        return "node_encerrar_resposta"
 
     atual_norm = _normalizar_chave_especialista(agente_atual)
     metadado_atual = None
@@ -3614,19 +3234,38 @@ workflow.add_conditional_edges(
     "node_roteador_maestro",
     router_maestro,
     {
-        "node_atendente": "node_atendente",
+        "node_encerrar_resposta": "node_encerrar_resposta",
         "node_acao_sistema": "node_acao_sistema",
         "node_especialista_dinamico": "node_especialista_dinamico",
     },
 )
 
-workflow.add_conditional_edges("node_especialista_dinamico", router_maestro)
+
+def router_pos_especialista(state: AgentState):
+    respostas = state.get("respostas_especialistas", [])
+    if any("SISTEMA_BOT_PAUSADO" in str(r) or "AGUARDANDO_HUMANO" in str(r) for r in respostas):
+        state["fila_agentes"] = []
+        return "node_encerrar_resposta"
+    if state.get("resposta_final"):
+        state["fila_agentes"] = []
+        return "node_encerrar_resposta"
+    return "node_roteador_maestro"
+
+
+workflow.add_conditional_edges(
+    "node_especialista_dinamico",
+    router_pos_especialista,
+    {
+        "node_encerrar_resposta": "node_encerrar_resposta",
+        "node_roteador_maestro": "node_roteador_maestro",
+    },
+)
 
 def router_pos_acao_sistema(state: AgentState):
     if state.get("bot_foi_pausado"):
         return "node_handoff"
     if state.get("resposta_final"):
-        return "node_atendente"
+        return "node_encerrar_resposta"
     return "node_roteador_maestro"
 
 
@@ -3635,7 +3274,7 @@ workflow.add_conditional_edges(
     router_pos_acao_sistema,
     {
         END: END,
-        "node_atendente": "node_atendente",
+        "node_encerrar_resposta": "node_encerrar_resposta",
         "node_handoff": "node_handoff",
         "node_roteador_maestro": "node_roteador_maestro",
     }

@@ -51,6 +51,38 @@ FERRAMENTAS_SISTEMA: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "nome_exibicao": "Listar Etapas do Funil (CRM)",
+        "nome_ferramenta": "tool_listar_etapas_funil",
+        "descricao_ia": (
+            "Lista todas as etapas do CRM desta empresa (nome + UUID). "
+            "Use antes de mover o lead; os UUIDs são os únicos identificadores válidos de etapa."
+        ),
+        "schema_parametros": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "nome_exibicao": "Atualizar Etapa do Lead (CRM)",
+        "nome_ferramenta": "tool_atualizar_etapa_lead",
+        "descricao_ia": (
+            "Move o lead para uma etapa do funil. O parâmetro etapa_id deve ser um UUID obtido de tool_listar_etapas_funil."
+        ),
+        "schema_parametros": {
+            "type": "object",
+            "properties": {
+                "etapa_id": {
+                    "type": "string",
+                    "description": "UUID da etapa de destino (copiado da listagem oficial do funil desta empresa).",
+                }
+            },
+            "required": ["etapa_id"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 

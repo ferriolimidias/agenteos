@@ -410,6 +410,7 @@ async def processar_bloco_mensagens(
         "resumo_cliente": resumo_cliente,
         "historico_curto": historico_curto,
         "nome_contato": getattr(mensagens[0], "nome_contato", None),
+        "lead_id": lead_id_hist,
         "intencao": [],
         "especialistas_selecionados": [],
         "super_contexto_especialistas": "",

@@ -1,12 +1,14 @@
 import uuid
+import json
+import asyncio
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.tools import tool
 
 from db.database import AsyncSessionLocal
-from db.models import CRMLead, TagCRM
+from db.models import CRMLead, TagCRM, CRMFunil, CRMEtapa
 from app.services.tag_crm_service import processar_disparo_conversao_ads_para_tags, sync_tag_etapa_lead
 
 
@@ -325,3 +327,83 @@ async def tool_consultar_tags_empresa(empresa_id: str) -> str:
             return f"Etiquetas disponíveis: {etiquetas}"
     except Exception as e:
         return f"Falha ao consultar tags: {str(e)}"
+
+
+async def atualizar_etapa_lead_core(lead_id: str, empresa_id: str, etapa_id: str) -> str:
+    """
+    Move o lead para uma etapa do CRM validando multi-tenant (etapa pertence ao funil da empresa).
+    """
+    try:
+        lead_uuid = uuid.UUID(str(lead_id).strip())
+        empresa_uuid = uuid.UUID(str(empresa_id).strip())
+        etapa_uuid = uuid.UUID(str(etapa_id).strip())
+    except (ValueError, TypeError):
+        return "Erro: lead_id, empresa_id ou etapa_id inválido (esperado UUID)."
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result_lead = await session.execute(
+                select(CRMLead).where(
+                    CRMLead.id == lead_uuid,
+                    CRMLead.empresa_id == empresa_uuid,
+                )
+            )
+            lead = result_lead.scalars().first()
+            if not lead:
+                return "Erro: lead não encontrado para esta empresa."
+
+            result_ok = await session.execute(
+                select(CRMEtapa.id)
+                .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                .where(CRMFunil.empresa_id == empresa_uuid, CRMEtapa.id == etapa_uuid)
+            )
+            if result_ok.scalar_one_or_none() is None:
+                return (
+                    "Erro: etapa_id não existe nesta empresa ou não pertence a nenhum funil dela. "
+                    "Use tool_listar_etapas_funil e copie um UUID listado."
+                )
+
+            await session.execute(
+                update(CRMLead).where(CRMLead.id == lead_uuid, CRMLead.empresa_id == empresa_uuid).values(
+                    etapa_id=etapa_uuid
+                )
+            )
+            await session.commit()
+
+        try:
+            from app.core.agent_graph import disparar_webhook_saida
+
+            asyncio.create_task(disparar_webhook_saida(str(lead_id)))
+        except Exception:
+            pass
+
+        return f"Sucesso: lead {lead_id} movido para a etapa {etapa_id}."
+    except Exception as e:
+        return f"Erro ao atualizar etapa do lead: {str(e)}"
+
+
+@tool
+async def tool_listar_etapas_funil(empresa_id: str) -> str:
+    """
+    Lista todas as etapas de funil disponíveis para a empresa (nome + UUID + funil + ordem + tipo).
+    Use antes de mover o lead de etapa.
+    """
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id).strip())
+    except (ValueError, TypeError):
+        return "Erro: empresa_id inválido."
+
+    try:
+        from app.services.crm_etapas_service import listar_etapas_empresa_formatadas
+
+        async with AsyncSessionLocal() as session:
+            texto, serial = await listar_etapas_empresa_formatadas(session, empresa_uuid)
+        return json.dumps({"etapas": serial, "texto": texto}, ensure_ascii=False)
+    except Exception as e:
+        return f"Falha ao listar etapas: {str(e)}"
+
+
+@tool
+async def tool_atualizar_etapa_lead(lead_id: str, empresa_id: str, etapa_id: str) -> str:
+    """Move o lead para a etapa (UUID) informada. A etapa deve pertencer ao funil desta empresa — liste com tool_listar_etapas_funil."""
+    return await atualizar_etapa_lead_core(lead_id=lead_id, empresa_id=empresa_id, etapa_id=etapa_id)

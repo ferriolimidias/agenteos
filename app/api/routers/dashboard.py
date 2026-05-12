@@ -32,22 +32,23 @@ async def obter_estatisticas(empresa_id: str, _: object = Depends(require_tenant
 
             # Leads por etapa e aguardando humano
             result_etapas = await session.execute(
-                select(CRMEtapa.nome, func.count(CRMLead.id))
+                select(CRMEtapa.nome, CRMEtapa.tipo, func.count(CRMLead.id))
                 .select_from(CRMLead)
                 .join(CRMEtapa, CRMLead.etapa_id == CRMEtapa.id)
                 .where(CRMLead.empresa_id == empresa_uuid)
-                .group_by(CRMEtapa.nome)
+                .group_by(CRMEtapa.nome, CRMEtapa.tipo)
             )
-            
+
             leads_por_etapa = []
             aguardando_humano = 0
-            
+
             for row in result_etapas.all():
                 nome_etapa = row[0]
-                contagem = row[1]
+                tipo_etapa = str(row[1] or "").strip().lower()
+                contagem = row[2]
                 leads_por_etapa.append({"name": nome_etapa, "value": contagem})
-                if nome_etapa == "Aguardando Humano":
-                    aguardando_humano = contagem
+                if tipo_etapa == "handoff":
+                    aguardando_humano += contagem
 
             # Total mensagens (interações)
             # Find all leads for this company first, then count messages

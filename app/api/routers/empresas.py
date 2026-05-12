@@ -269,7 +269,7 @@ async def _garantir_etapa_inicial_crm(db: AsyncSession, empresa_uuid: uuid.UUID)
     if etapas:
         return etapas[0].id
 
-    etapa_inicial = CRMEtapa(funil_id=funil.id, nome="Novo Lead", tipo="entrada", ordem=1)
+    etapa_inicial = CRMEtapa(funil_id=funil.id, nome="Entrada", tipo="entrada", ordem=1)
     db.add(etapa_inicial)
     await db.flush()
     return etapa_inicial.id
@@ -1424,7 +1424,7 @@ async def deletar_conhecimento_rag_por_source_name(
 async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
     """
     Retorna a estrutura do Funil da empresa com as Etapas e os Leads aninhados.
-    Se não existir um funil, cria um padrão ("Pipeline Padrão" com colunas: "Novo Lead", "Em Atendimento", "Fechado").
+    Se não existir um funil, cria um padrão ("Pipeline Padrão" com etapas genéricas tipadas: entrada, atendimento, fechamento).
     """
     try:
         # Busca o primeiro funil da empresa, carregando as etapas e os leads das etapas
@@ -1444,9 +1444,9 @@ async def obter_crm(empresa_id: str, db: AsyncSession = Depends(get_db)):
             await db.flush() # Para pegar o ID do funil
 
             etapas_padrao = [
-                CRMEtapa(funil_id=novo_funil.id, nome="Novo Lead", tipo="entrada", ordem=1),
-                CRMEtapa(funil_id=novo_funil.id, nome="Em Atendimento", tipo="atendimento", ordem=2),
-                CRMEtapa(funil_id=novo_funil.id, nome="Fechado", tipo="fechamento", ordem=3)
+                CRMEtapa(funil_id=novo_funil.id, nome="Entrada", tipo="entrada", ordem=1),
+                CRMEtapa(funil_id=novo_funil.id, nome="Atendimento", tipo="atendimento", ordem=2),
+                CRMEtapa(funil_id=novo_funil.id, nome="Encerramento", tipo="fechamento", ordem=3),
             ]
             db.add_all(etapas_padrao)
             await db.commit()
