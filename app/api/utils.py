@@ -430,6 +430,9 @@ async def processar_bloco_mensagens(
         "proxima_acao": None,
         "termos_busca_condutor": [],
         "search_terms_condutor": [],
+        "resposta_final_prefixo": None,
+        "funnel_chain_redespachar_especialista": False,
+        "funnel_chain_depth": 0,
     }
 
     if lead_id_hist and total_msgs_historico > 0:
