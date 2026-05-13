@@ -80,6 +80,7 @@ from app.core.funnel_router import (
 from app.api.utils import is_ai_blocked
 from app.core.default_agents import ESPECIALISTAS_NATIVOS
 from app.core.llm_factory import normalize_model_name, handle_openai_runtime_exception, mark_openai_status_ok
+from app.core.prompt_placeholders import substituir_placeholders_nome_lead_em_texto as _substituir_placeholders_nome_lead_em_texto
 from app.core.tools import (
     tool_atualizar_nome_lead,
     tool_atualizar_tags_lead,
@@ -307,6 +308,46 @@ def _prepend_resumo_cliente_system_prompt(state: AgentState, prompt: str) -> str
         return f"{diretrizes_sistema}\nRESUMO DO CLIENTE (Memória de longo prazo): {resumo}\n\n{prompt}"
 
     return f"{diretrizes_sistema}\n\n{prompt}"
+
+
+async def _nome_contato_lead_do_banco(state: AgentState) -> str:
+    """
+    Fonte de verdade: CRMLead.nome_contato para empresa/lead correntes.
+    Fallback: state['nome_contato'].
+    """
+    emp = str(state.get("empresa_id") or "").strip()
+    lid = str(state.get("lead_id") or "").strip()
+    if emp and lid:
+        try:
+            empresa_uuid = uuid.UUID(emp)
+            lead_uuid = uuid.UUID(lid)
+        except (ValueError, TypeError):
+            return str(state.get("nome_contato") or "").strip()
+        try:
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(
+                    select(CRMLead.nome_contato).where(
+                        and_(
+                            CRMLead.id == lead_uuid,
+                            CRMLead.empresa_id == empresa_uuid,
+                        )
+                    )
+                )
+                row = res.scalar_one_or_none()
+                if row is not None:
+                    nome = str(row or "").strip()
+                    if nome:
+                        return nome
+        except Exception:
+            logger.exception("[PROMPT] Falha ao ler nome_contato do lead no CRM")
+    return str(state.get("nome_contato") or "").strip()
+
+
+async def _system_prompt_com_nome_lead_injetado(state: AgentState, prompt: str) -> str:
+    """Prompt de sistema já com `{nome_lead}` / `[Nome]` resolvidos + bloco global de resumo."""
+    nome = await _nome_contato_lead_do_banco(state)
+    corpo = _substituir_placeholders_nome_lead_em_texto(prompt, nome)
+    return _prepend_resumo_cliente_system_prompt(state, corpo)
 
 
 def _prepend_rota_interna_system_prompt(state: AgentState, prompt: str) -> str:
@@ -872,7 +913,7 @@ NÃO redija mensagem para o cliente final."""
         fallback_texto=ultima_mensagem,
     )
     mensagens = [
-        SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, prompt)),
+        SystemMessage(content=await _system_prompt_com_nome_lead_injetado(state, prompt)),
         mensagem_usuario_atual,
     ]
     dados_crus_tags: list[str] = []
@@ -910,7 +951,7 @@ NÃO redija mensagem para o cliente final."""
         [
             (
                 "system",
-                _prepend_resumo_cliente_system_prompt(
+                await _system_prompt_com_nome_lead_injetado(
                     state,
                     "Converta o material bruto em um objeto ExtracaoEspecialista. "
                     "Preserve os dados tecnicos, mantenha apenas fatos, sem linguagem ao cliente.",
@@ -1001,7 +1042,10 @@ Mensagem atual do cliente: {ultima_mensagem}
 Objetivo: classificar e aplicar tags oficiais no CRM.
 Retorne apenas o resultado técnico da ação."""
 
-                msgs = [("system", _prepend_resumo_cliente_system_prompt(state, prompt_tags)), ("user", ultima_mensagem)]
+                msgs = [
+                    ("system", await _system_prompt_com_nome_lead_injetado(state, prompt_tags)),
+                    ("user", ultima_mensagem),
+                ]
                 resultado_tool = ""
                 for _ in range(4):
                     resposta = await llm_with_tools.ainvoke(msgs)
@@ -1048,7 +1092,10 @@ Retorne apenas o resultado técnico da ação."""
                     "Não responda ao cliente; apenas execute a ação interna.\n"
                     f"HISTORICO_GLOBAL_READ_ONLY:\n{historico_global}\n"
                 )
-                mensagens = [("system", _prepend_resumo_cliente_system_prompt(state, prompt_transferencia)), ("user", ultima_mensagem)]
+                mensagens = [
+                    ("system", await _system_prompt_com_nome_lead_injetado(state, prompt_transferencia)),
+                    ("user", ultima_mensagem),
+                ]
                 retorno_transferencia = ""
                 for _ in range(4):
                     resposta = await llm_with_tools.ainvoke(mensagens)
@@ -1128,7 +1175,7 @@ async def node_handoff(state: AgentState):
         resposta = await _ainvoke_with_openai_guard(
             llm,
             [
-                ("system", _prepend_resumo_cliente_system_prompt(state, prompt_handoff)),
+                ("system", await _system_prompt_com_nome_lead_injetado(state, prompt_handoff)),
                 (
                     "user",
                     "Gere UMA frase curta de transbordo para humano, em português, sem detalhes técnicos.\n"
@@ -1605,7 +1652,7 @@ async def node_capturar_nome(state: AgentState):
     llm = await get_llm(state.get("empresa_id"))
     resposta = await _ainvoke_with_openai_guard(
         llm,
-        [("system", _prepend_resumo_cliente_system_prompt(state, prompt)), ("user", ultima_mensagem)],
+        [("system", await _system_prompt_com_nome_lead_injetado(state, prompt)), ("user", ultima_mensagem)],
         state.get("empresa_id"),
     )
     state["resposta_final"] = resposta.content
@@ -2319,7 +2366,7 @@ async def node_especialista_funcionamento(state: AgentState):
         llm = await get_llm(empresa_id)
         resposta = await _ainvoke_with_openai_guard(
             llm,
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)],
+            [("system", await _system_prompt_com_nome_lead_injetado(state, prompt_sistema)), ("user", ultima_mensagem)],
             empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
@@ -2400,7 +2447,7 @@ async def node_especialista_localizacao(state: AgentState):
         llm = await get_llm(empresa_id)
         resposta = await _ainvoke_with_openai_guard(
             llm,
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_sistema)), ("user", ultima_mensagem)],
+            [("system", await _system_prompt_com_nome_lead_injetado(state, prompt_sistema)), ("user", ultima_mensagem)],
             empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
@@ -2434,8 +2481,6 @@ async def node_especialista_saudacao(state: AgentState):
 
     saudacao_base_empresa = ""
     prompt_painel = ""
-    nome_sistema = ""
-    lead_id_state = str(state.get("lead_id") or "").strip()
     if empresa_id:
         try:
             empresa_uuid = uuid.UUID(str(empresa_id))
@@ -2453,26 +2498,12 @@ async def node_especialista_saudacao(state: AgentState):
                 esp_db = result_esp.scalars().first()
                 if esp_db and esp_db.prompt_sistema:
                     prompt_painel = esp_db.prompt_sistema
-
-                # Recupera o nome JÁ NORMALIZADO/CAPTURADO pelo sistema. Damos
-                # prioridade à BD (fonte de verdade do CRM) e caímos no state
-                # apenas se o lead ainda não tiver sido criado.
-                if lead_id_state:
-                    try:
-                        lead_uuid = uuid.UUID(lead_id_state)
-                        res_lead = await session.execute(
-                            select(CRMLead).where(CRMLead.id == lead_uuid)
-                        )
-                        lead_atual = res_lead.scalars().first()
-                        if lead_atual:
-                            nome_sistema = str(lead_atual.nome_contato or "").strip()
-                    except (ValueError, TypeError):
-                        pass
         except Exception as e:
             logger.error("[NODE ESPECIALISTA SAUDACAO] Falha ao carregar empresa %s: %s", empresa_id, e)
 
-    if not nome_sistema:
-        nome_sistema = str(state.get("nome_contato") or "").strip()
+    nome_sistema = await _nome_contato_lead_do_banco(state)
+    saudacao_base_empresa = _substituir_placeholders_nome_lead_em_texto(saudacao_base_empresa, nome_sistema)
+    prompt_painel = _substituir_placeholders_nome_lead_em_texto(prompt_painel, nome_sistema)
 
     tipo_nome = classificar_nome_contato(nome_sistema)
     print(
@@ -2552,7 +2583,7 @@ async def node_especialista_saudacao(state: AgentState):
         llm = await get_llm(empresa_id)
         resposta = await _ainvoke_with_openai_guard(
             llm,
-            [("system", _prepend_resumo_cliente_system_prompt(state, prompt_saudacao)), ("user", ultima_mensagem)],
+            [("system", await _system_prompt_com_nome_lead_injetado(state, prompt_saudacao)), ("user", ultima_mensagem)],
             empresa_id,
         )
         resposta_texto = str(getattr(resposta, "content", "") or "").strip()
@@ -3174,7 +3205,9 @@ async def node_especialista_dinamico(state: AgentState):
                 from types import SimpleNamespace
 
                 especialista = SimpleNamespace(prompt_sistema=prompt_completo)
-                system_msg = SystemMessage(content=_prepend_resumo_cliente_system_prompt(state, especialista.prompt_sistema))
+                system_msg = SystemMessage(
+                    content=await _system_prompt_com_nome_lead_injetado(state, especialista.prompt_sistema)
+                )
                 mensagem_usuario_atual = await _obter_ultima_mensagem_inbound_multimodal(
                     empresa_id=empresa_id,
                     identificador_origem=str(state.get("identificador_origem") or ""),
@@ -3614,7 +3647,9 @@ async def _buscar_historico_lead_para_followup(canal: str, identificador_origem:
             )
             lead = res_lead.scalars().first()
             if not lead:
-                return "", None
+                return "", None, ""
+
+            nome_lead = str(getattr(lead, "nome_contato", "") or "").strip()
 
             res_hist = await sess.execute(
                 _select(_MH)
@@ -3624,16 +3659,16 @@ async def _buscar_historico_lead_para_followup(canal: str, identificador_origem:
             )
             msgs = list(reversed(res_hist.scalars().all()))
             if not msgs:
-                return "", str(lead.id)
+                return "", str(lead.id), nome_lead
 
             linhas = []
             for m in msgs:
                 papel = "Assistente" if m.from_me else "Cliente"
                 linhas.append(f"{papel}: {m.texto}")
-            return "\n".join(linhas), str(lead.id)
+            return "\n".join(linhas), str(lead.id), nome_lead
     except Exception as e:
         print(f"[FOLLOW-UP] Aviso: falha ao buscar histórico do Postgres: {e}")
-        return "", None
+        return "", None, ""
 
 
 async def _get_followup_prompt_base(empresa_id: str) -> tuple[str, str]:
@@ -3679,9 +3714,12 @@ async def gerar_followup_contextual(canal: str, identificador_origem: str, empre
     print("[FOLLOW-UP CONTEXTUAL] Iniciando Nível 1...", flush=True)
 
     # Busca apenas as últimas 2 mensagens
-    historico, _ = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=2)
+    historico, _lid, nome_lead = await _buscar_historico_lead_para_followup(
+        canal, identificador_origem, empresa_id, limite=2
+    )
 
     nome_empresa, prompt_base = await _get_followup_prompt_base(empresa_id)
+    prompt_base = _substituir_placeholders_nome_lead_em_texto(prompt_base, nome_lead)
     print(f"[FOLLOW-UP CONTEXTUAL] Empresa: '{nome_empresa}' | Histórico disponível: {bool(historico)}", flush=True)
 
     fim_conversa = historico if historico else "(sem histórico registrado)"
@@ -3708,10 +3746,13 @@ async def gerar_followup_encerramento(canal: str, identificador_origem: str, emp
     """
     print("[FOLLOW-UP ENCERRAMENTO] Iniciando Nível 2...", flush=True)
 
-    historico, lead_id = await _buscar_historico_lead_para_followup(canal, identificador_origem, empresa_id, limite=3)
+    historico, lead_id, nome_lead = await _buscar_historico_lead_para_followup(
+        canal, identificador_origem, empresa_id, limite=3
+    )
     import uuid as _uuid
 
     nome_empresa, prompt_base = await _get_followup_prompt_base(empresa_id)
+    prompt_base = _substituir_placeholders_nome_lead_em_texto(prompt_base, nome_lead)
     print(f"[FOLLOW-UP ENCERRAMENTO] Gerando prompt para empresa '{nome_empresa}'...", flush=True)
 
     fim_conversa = historico if historico else "(sem histórico registrado)"

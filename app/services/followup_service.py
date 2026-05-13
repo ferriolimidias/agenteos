@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import is_ai_blocked
 from app.core.llm_factory import get_llm_for_tenant
+from app.core.prompt_placeholders import substituir_placeholders_nome_lead_em_texto
 from app.services.channel_factory import despachar_mensagem
 from db.database import AsyncSessionLocal
 from db.models import (
@@ -40,6 +41,8 @@ async def _gerar_texto_followup(
     prompt_base = str(getattr(especialista, "prompt_sistema", "") or "").strip()
     if not prompt_base:
         prompt_base = "Você é um especialista em follow-up. Seja breve, educado e contextual."
+    nome_lead = str(lead.nome_contato or "").strip()
+    prompt_base = substituir_placeholders_nome_lead_em_texto(prompt_base, nome_lead)
 
     result_historico = await session.execute(
         select(MensagemHistorico)
@@ -65,8 +68,8 @@ async def _gerar_texto_followup(
             ),
             (
                 "user",
-                f"Objetivo do follow-up (definido pelo cliente): {str(config.objetivo_prompt or '').strip()}\n"
-                f"Nome do lead: {str(lead.nome_contato or '').strip() or 'Cliente'}\n"
+                f"Objetivo do follow-up (definido pelo cliente): {substituir_placeholders_nome_lead_em_texto(str(config.objetivo_prompt or '').strip(), nome_lead)}\n"
+                f"Nome do lead: {nome_lead or 'Cliente'}\n"
                 f"Histórico recente:\n{historico_txt}",
             ),
         ]
