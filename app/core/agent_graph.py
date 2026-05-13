@@ -96,6 +96,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Sinal de redespacho pós-mover etapa: usa `acoes_sistema_pendentes` (schema já persistido no LangGraph 1.x).
+_FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA = "__funnel_redespachar_especialista__"
+
 
 async def _ainvoke_with_openai_guard(llm: Any, payload: Any, empresa_id: str | None):
     try:
@@ -1650,7 +1653,11 @@ async def node_encerrar_resposta(state: AgentState):
     status_conv = "HANDOFF" if state.get("handoff_requested") else "ABERTA"
     state["status_conversa"] = status_conv
 
-    pendentes = list(state.get("acoes_sistema_pendentes") or [])
+    pendentes = [
+        str(p).strip()
+        for p in (state.get("acoes_sistema_pendentes") or [])
+        if str(p).strip() and str(p).strip() != _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA
+    ]
     executadas = list(state.get("acoes_sistema_executadas") or [])
     if status_conv == "HANDOFF" and "transferir_atendimento" not in pendentes and "transferir_atendimento" not in executadas:
         pendentes.append("transferir_atendimento")
@@ -1903,6 +1910,12 @@ def _fontes_incluem_mover_etapa_crm(fontes: list[str]) -> bool:
         if "avancar_etapa_crm" in s or s == "avancar_etapa_crm":
             return True
     return False
+
+
+def _evidencia_textual_tool_mover_etapa(dados_partes: list[str]) -> bool:
+    """Fallback se nomes de tool no AIMessage não forem capturados em `fontes_usadas`."""
+    blob = "\n".join(str(x or "") for x in dados_partes).lower()
+    return "sucesso" in blob and "lead" in blob and ("etapa" in blob or "movido" in blob)
 
 
 async def node_roteador_maestro(state: AgentState):
@@ -2567,6 +2580,14 @@ async def node_especialista_saudacao(state: AgentState):
 
 async def node_especialista_dinamico(state: AgentState):
     try:
+        # Consome sinal de redespacho (router não deve depender de mutação de estado).
+        _pend_in = list(state.get("acoes_sistema_pendentes") or [])
+        if any(str(p).strip() == _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA for p in _pend_in):
+            state["acoes_sistema_pendentes"] = [
+                p for p in _pend_in if str(p).strip() != _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA
+            ]
+            state["funnel_chain_redespachar_especialista"] = False
+
         especialista_corrente = state.get("especialista_corrente")
         if isinstance(especialista_corrente, dict) and especialista_corrente:
             especialistas_selecionados = [especialista_corrente]
@@ -3280,7 +3301,10 @@ async def node_especialista_dinamico(state: AgentState):
                     empresa_uuid
                     and lead_id
                     and depth < 4
-                    and _fontes_incluem_mover_etapa_crm(list(fontes_unicas))
+                    and (
+                        _fontes_incluem_mover_etapa_crm(list(fontes_unicas))
+                        or _evidencia_textual_tool_mover_etapa(dados_crus_partes)
+                    )
                 ):
                     etapa_depois: str | None = None
                     match_list: list[dict[str, Any]] = []
@@ -3332,6 +3356,12 @@ async def node_especialista_dinamico(state: AgentState):
                         state["especialista_corrente"] = match_list[0]
                         state["funnel_chain_redespachar_especialista"] = True
                         state["funnel_chain_depth"] = depth + 1
+                        _pend_hd = list(state.get("acoes_sistema_pendentes") or [])
+                        if _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA not in [
+                            str(x).strip() for x in _pend_hd
+                        ]:
+                            _pend_hd.append(_FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA)
+                        state["acoes_sistema_pendentes"] = _pend_hd
                         state["super_contexto_especialistas"] = ""
                         return state
 
@@ -3384,7 +3414,8 @@ workflow.add_conditional_edges(
 workflow.add_edge("node_capturar_nome", END)
 
 def router_encerrar_resposta(state: AgentState):
-    if state.get("acoes_sistema_pendentes"):
+    pend = [p for p in (state.get("acoes_sistema_pendentes") or []) if str(p).strip() != _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA]
+    if pend:
         return "node_acao_sistema"
     return END
 
@@ -3443,10 +3474,13 @@ def router_maestro(state: AgentState):
         pendentes.append("aplicar_tags")
     state["acoes_sistema_pendentes"] = pendentes
 
-    if pendentes:
+    pendentes_ef = [
+        p for p in pendentes if str(p).strip() != _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA
+    ]
+    if pendentes_ef:
         somente_transferencia = all(
             str(acao or "").strip().lower() == "transferir_atendimento"
-            for acao in pendentes
+            for acao in pendentes_ef
         )
         # Garante que a mensagem final de transferência seja gerada antes de pausar o bot.
         if somente_transferencia and not state.get("resposta_final"):
@@ -3508,13 +3542,21 @@ workflow.add_conditional_edges(
 
 
 def router_pos_especialista(state: AgentState):
+    """
+    Pós-especialista: prioridade absoluta ao redespacho de funil (mesmo com `resposta_final` preenchida).
+    O sinal em `acoes_sistema_pendentes` persiste no schema do LangGraph 1.x (evita chaves ignoradas).
+    """
+    pend_raw = state.get("acoes_sistema_pendentes") or []
+    if any(str(p).strip() == _FUNIL_PENDENTE_REDESPACHAR_ESPECIALISTA for p in pend_raw):
+        return "node_especialista_dinamico"
+    if state.get("funnel_chain_redespachar_especialista"):
+        state["funnel_chain_redespachar_especialista"] = False
+        return "node_especialista_dinamico"
+
     respostas = state.get("respostas_especialistas", [])
     if any("SISTEMA_BOT_PAUSADO" in str(r) or "AGUARDANDO_HUMANO" in str(r) for r in respostas):
         state["fila_agentes"] = []
         return "node_encerrar_resposta"
-    if state.get("funnel_chain_redespachar_especialista"):
-        state["funnel_chain_redespachar_especialista"] = False
-        return "node_especialista_dinamico"
     if state.get("resposta_final"):
         state["fila_agentes"] = []
         return "node_encerrar_resposta"
