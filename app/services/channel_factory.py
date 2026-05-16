@@ -145,11 +145,27 @@ async def despachar_mensagem(
                             tipo="text",
                             media_url=None,
                         )
-                        await dispatch_outbound_message(
+                        resposta_evolution = await dispatch_outbound_message(
                             empresa_id=conexao.empresa_id,
                             conexao=conexao,
                             payload=outbound_payload,
                         )
+                        try:
+                            from app.services.outbound_origin_tracker import (
+                                extrair_message_id_resposta_evolution,
+                                marcar_outbound_backend,
+                            )
+
+                            await marcar_outbound_backend(
+                                str(empresa_id or conexao.empresa_id),
+                                identificador_origem,
+                                message_id=extrair_message_id_resposta_evolution(resposta_evolution),
+                                texto=parte,
+                            )
+                        except Exception as mark_exc:
+                            print(
+                                f"[Channel Factory] Falha ao marcar eco outbound do backend: {mark_exc}"
+                            )
                 except Exception as e:
                     print(f"[Channel Factory -> Evolution] Erro ao despachar via conexão {conexao_id}: {e}")
                     traceback.print_exc()

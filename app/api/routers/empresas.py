@@ -2916,11 +2916,25 @@ async def toggle_ia_lead(
 
     novo_estado = not bool(getattr(lead, "ia_ativa", True))
     lead.ia_ativa = novo_estado
-    if not novo_estado:
-        lead.status_atendimento = "manual"
 
     await db.commit()
     await db.refresh(lead)
+
+    from app.services.websocket_manager import manager
+
+    await manager.broadcast_to_empresa(
+        empresa_id,
+        {
+            "type": "STATUS_IA_CHANGED",
+            "tipo_evento": "status_ia_changed",
+            "lead_id": str(lead.id),
+            "payload": {
+                "lead_id": str(lead.id),
+                "ia_ativa": bool(lead.ia_ativa),
+            },
+        },
+    )
+
     return {
         "id": str(lead.id),
         "ia_ativa": bool(lead.ia_ativa),

@@ -388,7 +388,6 @@ async def enviar_mensagem(
             from_me=True
         )
         db.add(nova_msg)
-        lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
         lead.ia_ativa = False
         await db.commit()
         await db.refresh(nova_msg)
@@ -530,7 +529,6 @@ async def enviar_midia(
             )
             session.add(nova_msg)
 
-            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=1)
             lead.ia_ativa = False
             await session.commit()
             await session.refresh(nova_msg)
@@ -586,16 +584,25 @@ async def reativar_bot(empresa_id: str, telefone: str):
             if not lead:
                 raise HTTPException(status_code=404, detail="Lead não encontrado")
             
-            lead.bot_pausado_ate = None
-            
+            lead.ia_ativa = True
+
             from app.services.crm_etapas_service import obter_ou_criar_etapa_por_tipo
 
             etapa_atend = await obter_ou_criar_etapa_por_tipo(session, empresa_uuid, "atendimento")
             if etapa_atend:
                 lead.etapa_id = etapa_atend
-            
+
             await session.commit()
-            return {"status": "success", "message": "Bot reativado"}
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "type": "STATUS_IA_CHANGED",
+                    "tipo_evento": "status_ia_changed",
+                    "lead_id": str(lead.id),
+                    "payload": {"lead_id": str(lead.id), "ia_ativa": True},
+                },
+            )
+            return {"status": "success", "message": "Bot reativado", "ia_ativa": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -617,12 +624,21 @@ async def pausar_bot(empresa_id: str, telefone: str):
             if not lead:
                 raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-            lead.bot_pausado_ate = datetime.utcnow() + timedelta(hours=24)
+            lead.ia_ativa = False
             await session.commit()
+            await manager.broadcast_to_empresa(
+                empresa_id,
+                {
+                    "type": "STATUS_IA_CHANGED",
+                    "tipo_evento": "status_ia_changed",
+                    "lead_id": str(lead.id),
+                    "payload": {"lead_id": str(lead.id), "ia_ativa": False},
+                },
+            )
             return {
                 "status": "success",
                 "message": "Bot pausado",
-                "bot_pausado_ate": lead.bot_pausado_ate.isoformat() if lead.bot_pausado_ate else None,
+                "ia_ativa": False,
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

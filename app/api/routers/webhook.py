@@ -348,6 +348,22 @@ async def get_conexao_id_por_tipo(
     return str(conexoes[0].id) if conexoes else None
 
 
+async def _broadcast_status_ia_lead(empresa_id: str, lead_id: str, ia_ativa: bool) -> None:
+    """Sincroniza o toggle «IA Ativa» do painel via WebSocket."""
+    await manager.broadcast_to_empresa(
+        str(empresa_id),
+        {
+            "type": "STATUS_IA_CHANGED",
+            "tipo_evento": "status_ia_changed",
+            "lead_id": str(lead_id),
+            "payload": {
+                "lead_id": str(lead_id),
+                "ia_ativa": bool(ia_ativa),
+            },
+        },
+    )
+
+
 async def save_history_and_check_pause(
     empresa_id: str,
     telefone: str,
@@ -360,6 +376,7 @@ async def save_history_and_check_pause(
     gclid: str | None = None,
     fbclid: str | None = None,
     profile_pic_url: str | None = None,
+    evolution_message_id: str | None = None,
 ) -> Tuple[bool, uuid.UUID]:
     def _normalize_stage_name(value: str | None) -> str:
         texto = str(value or "").strip().lower()
@@ -369,6 +386,7 @@ async def save_history_and_check_pause(
     should_process = True
     lead_criado_ou_identidade_atualizada = False
     lead_payload_atualizacao: dict[str, Any] | None = None
+    notificar_ia_desligada = False
     async with AsyncSessionLocal() as session:
         empresa_uuid = uuid.UUID(empresa_id)
         try:
@@ -515,14 +533,28 @@ async def save_history_and_check_pause(
                 lead.status_atendimento = "aberto"
         
         if from_me:
-            # Humano respondeu, pausar bot por +1h
-            lead.bot_pausado_ate = now + timedelta(hours=1)
+            from app.services.outbound_origin_tracker import outbound_mensagem_veio_do_backend
+
+            eco_do_backend = await outbound_mensagem_veio_do_backend(
+                empresa_id,
+                telefone,
+                message_id=evolution_message_id,
+                texto=texto,
+            )
             should_process = False
+            if not eco_do_backend:
+                # Intervenção humana real (app físico WhatsApp): trava única em ia_ativa.
+                if bool(getattr(lead, "ia_ativa", True)):
+                    lead.ia_ativa = False
+                    notificar_ia_desligada = True
         else:
             if is_ai_blocked(lead, now=now):
                 should_process = False
                 
         await session.commit()
+
+        if notificar_ia_desligada:
+            await _broadcast_status_ia_lead(empresa_id, str(lead.id), False)
         mensagem_payload = {
             "id": str(nova_msg.id),
             "texto": str(nova_msg.texto or ""),
@@ -591,6 +623,7 @@ async def _processar_webhook_evolution_background(
         print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
 
         fromMe = bool(key.get("fromMe", False))
+        evolution_message_id = extrair_message_id_evolution(payload) or str(key.get("id") or "").strip() or None
         remote_jid = key.get("remoteJid", "")
         telefone = _normalizar_telefone_remote_jid(remote_jid)
         if not telefone:
@@ -665,6 +698,7 @@ async def _processar_webhook_evolution_background(
                 gclid=gclid,
                 fbclid=fbclid,
                 profile_pic_url=profile_pic_url,
+                evolution_message_id=evolution_message_id,
             )
 
             background_tasks.add_task(
@@ -763,6 +797,7 @@ async def _processar_webhook_evolution_background(
             gclid=gclid,
             fbclid=fbclid,
             profile_pic_url=profile_pic_url,
+            evolution_message_id=evolution_message_id,
         )
 
         # Dispara atualização de foto somente após persistência/commit do lead no webhook.
