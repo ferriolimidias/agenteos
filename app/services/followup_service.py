@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 import uuid
 from datetime import datetime, timedelta
 
@@ -14,12 +15,22 @@ from app.services.channel_factory import despachar_mensagem
 from db.database import AsyncSessionLocal
 from db.models import (
     CRMLead,
+    CRMEtapa,
     ConfigFollowUp,
     Empresa,
     Especialista,
     LeadFollowUpLog,
     MensagemHistorico,
     TagCRM,
+)
+
+# Nomes de etapa que encerram a cadência (comparação normalizada, sem acento).
+_ETAPAS_NOME_FINAL = frozenset(
+    {
+        "fechamento",
+        "ganho",
+        "venda_realizada",
+    }
 )
 
 
@@ -77,10 +88,102 @@ async def _gerar_texto_followup(
     return str(getattr(resposta, "content", "") or "").strip()
 
 
+def _normalizar_chave_crm(texto: str | None) -> str:
+    s = str(texto or "").strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("-", "_").replace(" ", "_")
+    while "__" in s:
+        s = s.replace("__", "_")
+    return s.strip("_")
+
+
+def _tag_nome_indica_venda_fechada(nome: str | None) -> bool:
+    chave = _normalizar_chave_crm(nome)
+    return chave == "venda_fechada" or chave.endswith("_venda_fechada")
+
+
+def _etapa_indica_final(nome: str | None, tipo: str | None) -> bool:
+    nome_k = _normalizar_chave_crm(nome)
+    tipo_k = _normalizar_chave_crm(tipo)
+    if nome_k in _ETAPAS_NOME_FINAL:
+        return True
+    if tipo_k and ("fechamento" in tipo_k or tipo_k in {"fechado", "fechamento", "fechada"}):
+        return True
+    if nome_k and any(
+        fragmento in nome_k for fragmento in ("fechado", "concluido", "ganho", "venda_realizada")
+    ):
+        return True
+    return False
+
+
+async def _lead_tem_tag_venda_fechada(
+    session: AsyncSession,
+    lead: CRMLead,
+    empresa_id: uuid.UUID,
+) -> bool:
+    tags_raw = lead.tags if isinstance(lead.tags, list) else []
+    tag_uuids: list[uuid.UUID] = []
+
+    for raw in tags_raw:
+        texto = str(raw or "").strip()
+        if not texto:
+            continue
+        if _tag_nome_indica_venda_fechada(texto):
+            return True
+        try:
+            tag_uuids.append(uuid.UUID(texto))
+        except (ValueError, TypeError):
+            continue
+
+    if not tag_uuids:
+        return False
+
+    result = await session.execute(
+        select(TagCRM.nome, TagCRM.acao_fechamento).where(
+            TagCRM.empresa_id == empresa_id,
+            TagCRM.id.in_(tag_uuids),
+        )
+    )
+    for nome, acao_fechamento in result.all():
+        if bool(acao_fechamento) or _tag_nome_indica_venda_fechada(str(nome or "")):
+            return True
+    return False
+
+
+async def _lead_em_etapa_final(session: AsyncSession, lead: CRMLead) -> bool:
+    if not lead.etapa_id:
+        return False
+    result = await session.execute(
+        select(CRMEtapa.nome, CRMEtapa.tipo).where(CRMEtapa.id == lead.etapa_id)
+    )
+    row = result.first()
+    if not row:
+        return False
+    nome, tipo = row
+    return _etapa_indica_final(str(nome or ""), str(tipo or "") if tipo is not None else None)
+
+
+async def _motivo_bloqueio_pos_venda_ou_etapa_final(
+    session: AsyncSession,
+    lead: CRMLead,
+    empresa_id: uuid.UUID,
+) -> str | None:
+    """
+    Trava pós-venda: link de pagamento + tag/etapa de fechamento → sem follow-up.
+    Avaliada antes do relógio de gatilho.
+    """
+    if await _lead_tem_tag_venda_fechada(session, lead, empresa_id):
+        return "venda_fechada_ou_etapa_final"
+    if await _lead_em_etapa_final(session, lead):
+        return "venda_fechada_ou_etapa_final"
+    return None
+
+
 async def _buscar_ultima_mensagem_historico(
     session: AsyncSession,
     lead_id: uuid.UUID,
-) -> Optional[MensagemHistorico]:
+) -> MensagemHistorico | None:
     result = await session.execute(
         select(MensagemHistorico)
         .where(MensagemHistorico.lead_id == lead_id)
@@ -120,6 +223,7 @@ def _motivo_inelegibilidade_followup(
 async def processar_followups_pendentes() -> dict[str, int]:
     """
     Varre follow-ups ativos por empresa e dispara para leads elegíveis:
+    - sem tag/etapa de venda fechada (ex.: `venda_fechada`, etapa Fechamento/Ganho)
     - última mensagem no histórico é outbound (`from_me=True`) e o gatilho já passou
     - sem log prévio para aquele passo da cadência
     - IA não bloqueada para o lead
@@ -228,6 +332,13 @@ async def processar_followups_pendentes() -> dict[str, int]:
                                 )
                             )
                             if result_log_existente.scalars().first():
+                                ignorados += 1
+                                continue
+
+                            motivo_pos_venda = await _motivo_bloqueio_pos_venda_ou_etapa_final(
+                                session, lead, empresa_id
+                            )
+                            if motivo_pos_venda:
                                 ignorados += 1
                                 continue
 
