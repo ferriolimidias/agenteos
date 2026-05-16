@@ -77,11 +77,51 @@ async def _gerar_texto_followup(
     return str(getattr(resposta, "content", "") or "").strip()
 
 
+async def _buscar_ultima_mensagem_historico(
+    session: AsyncSession,
+    lead_id: uuid.UUID,
+) -> Optional[MensagemHistorico]:
+    result = await session.execute(
+        select(MensagemHistorico)
+        .where(MensagemHistorico.lead_id == lead_id)
+        .order_by(MensagemHistorico.criado_em.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+def _motivo_inelegibilidade_followup(
+    ultima_msg: MensagemHistorico | None,
+    *,
+    gatilho_minutos: int,
+    agora: datetime,
+) -> str | None:
+    """
+    Regras de disparo (cadência inteligente):
+    1. A última mensagem do histórico deve ser outbound (`from_me=True`) — bot ou humano
+       no painel; o lead ficou no vácuo.
+    2. Se a última for do lead (`from_me=False`), a conversa está ativa → não dispara.
+    3. O relógio do gatilho conta a partir do `criado_em` dessa última outbound (não da
+       criação do lead nem de mensagens antigas do cliente).
+    """
+    if not ultima_msg or not getattr(ultima_msg, "criado_em", None):
+        return "sem_historico"
+
+    if not bool(getattr(ultima_msg, "from_me", False)):
+        return "lead_respondeu_ou_conversa_ativa"
+
+    limite = agora - timedelta(minutes=gatilho_minutos)
+    if ultima_msg.criado_em > limite:
+        return "aguardando_gatilho"
+
+    return None
+
+
 async def processar_followups_pendentes() -> dict[str, int]:
     """
     Varre follow-ups ativos por empresa e dispara para leads elegíveis:
-    - sem interação recente no intervalo da cadência
-    - sem log prévio para aquele passo
+    - última mensagem no histórico é outbound (`from_me=True`) e o gatilho já passou
+    - sem log prévio para aquele passo da cadência
     - IA não bloqueada para o lead
     """
     from app.api.main import redis_client
@@ -167,7 +207,6 @@ async def processar_followups_pendentes() -> dict[str, int]:
                         ignorados += 1
                         continue
 
-                    limite = now - timedelta(minutes=gatilho)
                     result_leads = await session.execute(
                         select(CRMLead).where(CRMLead.empresa_id == empresa_id)
                     )
@@ -192,17 +231,13 @@ async def processar_followups_pendentes() -> dict[str, int]:
                                 ignorados += 1
                                 continue
 
-                            result_ultima_msg = await session.execute(
-                                select(MensagemHistorico)
-                                .where(MensagemHistorico.lead_id == lead.id)
-                                .order_by(MensagemHistorico.criado_em.desc())
-                                .limit(1)
+                            ultima_msg = await _buscar_ultima_mensagem_historico(session, lead.id)
+                            motivo_skip = _motivo_inelegibilidade_followup(
+                                ultima_msg,
+                                gatilho_minutos=gatilho,
+                                agora=now,
                             )
-                            ultima_msg = result_ultima_msg.scalars().first()
-                            if not ultima_msg or not getattr(ultima_msg, "criado_em", None):
-                                ignorados += 1
-                                continue
-                            if ultima_msg.criado_em > limite:
+                            if motivo_skip:
                                 ignorados += 1
                                 continue
 
