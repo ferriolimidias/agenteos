@@ -13,6 +13,11 @@ from openai import AsyncOpenAI
 
 from app.schemas import StandardMessage
 from app.api.utils import handle_debouncer, is_ai_blocked
+from app.api.evolution_webhook_dedup import (
+    adquirir_trava_webhook_mensagem,
+    extrair_message_id_evolution,
+    fallback_message_id_evolution,
+)
 from app.services.websocket_manager import manager
 from db.database import AsyncSessionLocal
 from db.models import Empresa, CRMLead, CRMFunil, CRMEtapa, MensagemHistorico, Conexao, TipoConexao
@@ -307,7 +312,10 @@ async def _tarefa_transcricao_audio_e_opcional_ia(
             texto_mensagem=str(texto_final).strip(),
             is_human_agent=False,
         )
-        await handle_debouncer(msg, background_tasks)
+        if background_tasks is not None:
+            background_tasks.add_task(handle_debouncer, msg, background_tasks)
+        else:
+            asyncio.create_task(handle_debouncer(msg, None))
 
 
 async def get_conexao_id_por_tipo(
@@ -561,15 +569,19 @@ async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_task
     return {"status": "received"}
 
 
-@router.post("/{empresa_id}/evolution")
-async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
-    print(f"\n[WEBHOOK EVOLUTION] Recebido para empresa: {empresa_id}")
+async def _processar_webhook_evolution_background(
+    empresa_id: str,
+    payload: Dict[Any, Any],
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Processamento pesado (DB, mídia, debouncer) — executado após 200 OK ao Evolution."""
+    print(f"\n[WEBHOOK EVOLUTION][BG] Processando empresa={empresa_id}")
     try:
-        event = payload.get("event")
-        if event != "messages.upsert":
-            return {"status": "ignored", "reason": f"Event {event} ignored"}
-
         data = payload.get("data", {}) or {}
+        if isinstance(data, list):
+            data = data[0] if data and isinstance(data[0], dict) else {}
+        if not isinstance(data, dict):
+            data = {}
         key = data.get("key", {}) or {}
         message = data.get("message", {}) or {}
         payload_download = {"key": data.get("key"), "message": data.get("message")}
@@ -671,7 +683,7 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
             if not fromMe:
                 asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
 
-            return {"status": "received", "message": "Processed"}
+            return
 
         media_base64 = None
         if tipo_mensagem == "image":
@@ -768,12 +780,49 @@ async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background
                 is_human_agent=False
             )
             background_tasks.add_task(handle_debouncer, msg, background_tasks)
-        
-        return {"status": "received", "message": "Processed"}
 
     except Exception as e:
-        print(f"DEBUG: Formato de mensagem desconhecido: {e}")
-        return {"status": "received", "message": "Formato desconhecido tratado"}
+        print(f"[WEBHOOK EVOLUTION][BG] Erro no processamento: {e}")
+
+
+@router.post("/{empresa_id}/evolution")
+async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
+    """
+    Recebe webhook Evolution: trava idempotente por message_id (Redis NX) na primeira
+    linha útil, responde 200 imediatamente e processa em background (evita retries).
+    """
+    event = str(payload.get("event") or "").strip()
+    if event != "messages.upsert":
+        return {"status": "ignored", "reason": f"Event {event} ignored"}
+
+    from app.api.main import redis_client
+
+    message_id = extrair_message_id_evolution(payload)
+    if not message_id:
+        message_id = fallback_message_id_evolution(payload)
+        print(
+            f"[WEBHOOK EVOLUTION] key.id ausente — trava por hash fallback "
+            f"(empresa={empresa_id}, id={message_id[:20]}...)"
+        )
+
+    if redis_client is None:
+        print("[WEBHOOK EVOLUTION] AVISO: Redis indisponível — trava idempotente por message_id desativada.")
+    else:
+        adquiriu = await adquirir_trava_webhook_mensagem(redis_client, empresa_id, message_id)
+        if not adquiriu:
+            print(
+                f"[WEBHOOK EVOLUTION] Duplicata ignorada message_id={message_id} "
+                f"empresa={empresa_id}"
+            )
+            return {"status": "duplicate", "message_id": message_id}
+
+    background_tasks.add_task(
+        _processar_webhook_evolution_background,
+        empresa_id,
+        payload,
+        background_tasks,
+    )
+    return {"status": "received", "message_id": message_id}
 
 
 @router.post("/{empresa_id}/telegram")
