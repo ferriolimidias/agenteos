@@ -17,7 +17,10 @@
     "test:followups": "node --test src/pages/tenant/TenantFollowUps.test.js",
     "test:crm": "node --test src/pages/tenant/CrmCampaignCentral.test.js",
     "test:costs-conversions": "node --test src/pages/tenant/CostsConversions.test.js",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "validate:artifacts": "node scripts/validate-panel-artifacts.mjs --root dist",
+    "test:artifacts": "node --test scripts/validate-panel-artifacts.test.mjs",
+    "test:panel-smoke": "node scripts/smoke-panel.cjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -42,6 +45,8 @@
     "globals": "^16.5.0",
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.1",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "acorn": "^8.16.0",
+    "playwright": "1.55.0"
   }
 }
