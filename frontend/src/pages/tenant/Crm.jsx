@@ -1,0 +1,665 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
+import api from "../../services/api";
+import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2, GripVertical } from "lucide-react";
+import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import { normalizeLeadTags } from "../../utils/leadTags";
+import LeadTagsEditor from "../../components/LeadTagsEditor";
+import LeadDetailsModal from "../../components/LeadDetailsModal";
+import { CRM_ETAPAS_ATUALIZADAS } from "../../utils/events";
+import { ActionButton, EmptyState, LoadingState, PageHeader } from "../../components/ui";
+
+function formatDate(value) {
+  if (!value) return "Hoje";
+  return new Date(value).toLocaleDateString("pt-BR");
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value || 0);
+}
+
+/** MIME type do payload de arrastar lead entre colunas (evita colisão com texto selecionado). */
+const CRM_LEAD_DRAG_MIME = "application/x-agenteos-crm-lead+json";
+
+export default function Crm() {
+  const location = useLocation();
+  const [funil, setFunil] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedLead, setSelectedLead] = useState(null);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importPreviewColumns, setImportPreviewColumns] = useState([]);
+  const [importSelectedTags, setImportSelectedTags] = useState([]);
+  const [importSaving, setImportSaving] = useState(false);
+  const [importInfo, setImportInfo] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
+  /** Lead em processo de mudança de etapa (evita arrastar duplicado). */
+  const [movingLeadId, setMovingLeadId] = useState(null);
+  /** Coluna sobre a qual o utilizador está a arrastar (feedback visual). */
+  const [dragOverEtapaId, setDragOverEtapaId] = useState(null);
+
+  const user = getStoredUser();
+  const empresaId = getActiveEmpresaId();
+
+  /**
+   * Colunas do Kanban = apenas `etapas` do GET /empresas/:id/crm (tabela CRMEtapa).
+   * Não usar `colunas_tags` nem constantes fixas — espelho do banco, ordenado por `ordem`.
+   */
+  const etapasOrdenadas = useMemo(() => {
+    const lista = funil?.etapas;
+    if (!Array.isArray(lista) || lista.length === 0) return [];
+    return [...lista].sort(
+      (a, b) =>
+        Number(a?.ordem ?? 0) - Number(b?.ordem ?? 0) ||
+        String(a?.id || "").localeCompare(String(b?.id || ""), "pt-BR"),
+    );
+  }, [funil]);
+
+  const fetchCrmData = useCallback(async () => {
+    if (!empresaId) return;
+    try {
+      setLoading(true);
+      const res = await api.get(`/empresas/${empresaId}/crm`);
+      const raw = res.data;
+      const etapasApi = Array.isArray(raw?.etapas) ? raw.etapas : [];
+      setFunil({
+        funil_id: raw?.funil_id ?? null,
+        funil_nome: raw?.funil_nome ?? "",
+        etapas: etapasApi,
+        colunas_tags: Array.isArray(raw?.colunas_tags) ? raw.colunas_tags : [],
+      });
+    } catch (err) {
+      console.error("Erro ao buscar dados do CRM:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [empresaId]);
+
+  const fetchOfficialTags = useCallback(async () => {
+    if (!empresaId) return;
+    try {
+      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
+      setAvailableTags(res.data || []);
+    } catch (err) {
+      console.error("Erro ao carregar tags oficiais:", err);
+      setAvailableTags([]);
+    }
+  }, [empresaId]);
+
+  useEffect(() => {
+    if (empresaId) {
+      void fetchCrmData();
+      void fetchOfficialTags();
+    }
+  }, [empresaId, location.key, fetchCrmData, fetchOfficialTags]);
+
+  /** Recarrega etapas/nomes ao voltar ao separador (ex.: após renomear etapa nas configurações). */
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && empresaId) void fetchCrmData();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [empresaId, fetchCrmData]);
+
+  /** Super Admin alterou etapas: mesmo separador (CustomEvent) ou outro separador (storage). */
+  useEffect(() => {
+    if (!empresaId) return undefined;
+    const chave = `crm_etapas_revision_${empresaId}`;
+    const onCustom = (ev) => {
+      if (String(ev?.detail?.empresaId || "") !== String(empresaId)) return;
+      void fetchCrmData();
+    };
+    const onStorage = (ev) => {
+      if (ev.key !== chave) return;
+      void fetchCrmData();
+    };
+    window.addEventListener(CRM_ETAPAS_ATUALIZADAS, onCustom);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CRM_ETAPAS_ATUALIZADAS, onCustom);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [empresaId, fetchCrmData]);
+
+  const showToast = useCallback((message) => {
+    setToastMessage(message);
+    window.setTimeout(() => setToastMessage(""), 2800);
+  }, []);
+
+  const updateLeadInState = useCallback((leadId, updates) => {
+    setFunil((prev) => {
+      if (!prev?.etapas) return prev;
+      return {
+        ...prev,
+        etapas: prev.etapas.map((etapa) => ({
+          ...etapa,
+          leads: (etapa.leads || []).map((lead) =>
+            lead.id === leadId ? { ...lead, ...updates } : lead
+          ),
+        })),
+      };
+    });
+    setSelectedLead((prev) => (prev?.id === leadId ? { ...prev, ...updates } : prev));
+  }, []);
+
+  const moveLeadOptimisticToEtapa = useCallback((leadId, targetEtapaId) => {
+    setFunil((prev) => {
+      if (!prev?.etapas?.length) return prev;
+      let payload = null;
+      for (const e of prev.etapas) {
+        const hit = (e.leads || []).find((l) => l?.id === leadId);
+        if (hit) {
+          payload = hit;
+          break;
+        }
+      }
+      if (!payload) return prev;
+      return {
+        ...prev,
+        etapas: prev.etapas.map((e) => {
+          const leadsSem = (e.leads || []).filter((l) => l?.id !== leadId);
+          if (e.id === targetEtapaId) return { ...e, leads: [...leadsSem, payload] };
+          return { ...e, leads: leadsSem };
+        }),
+      };
+    });
+  }, []);
+
+  const persistLeadEtapa = useCallback(
+    (leadId, targetEtapaId) =>
+      api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { etapa_id: targetEtapaId }),
+    [empresaId]
+  );
+
+  const handleLeadDragStart = useCallback(
+    (e, leadId) => {
+      if (movingLeadId || !leadId) {
+        e.preventDefault();
+        return;
+      }
+      try {
+        e.dataTransfer.setData(CRM_LEAD_DRAG_MIME, JSON.stringify({ leadId: String(leadId) }));
+        e.dataTransfer.effectAllowed = "move";
+      } catch {
+        e.preventDefault();
+      }
+    },
+    [movingLeadId]
+  );
+
+  const handleEtapaDragOver = useCallback((e, etapaId) => {
+    const types = Array.from(e.dataTransfer?.types || []);
+    if (!types.includes(CRM_LEAD_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverEtapaId(etapaId);
+  }, []);
+
+  const handleEtapaDragLeave = useCallback((e) => {
+    const next = e.relatedTarget;
+    if (next && e.currentTarget.contains(next)) return;
+    setDragOverEtapaId(null);
+  }, []);
+
+  const handleEtapaDrop = useCallback(
+    async (e, targetEtapaId) => {
+      e.preventDefault();
+      setDragOverEtapaId(null);
+      let leadId = "";
+      try {
+        const raw = e.dataTransfer.getData(CRM_LEAD_DRAG_MIME);
+        const parsed = raw ? JSON.parse(raw) : {};
+        leadId = String(parsed.leadId || "").trim();
+      } catch {
+        return;
+      }
+      if (!leadId || !targetEtapaId) return;
+
+      const origem = (funil?.etapas || []).find((col) => (col.leads || []).some((l) => l?.id === leadId));
+      const origemId = origem?.id;
+      if (origemId === targetEtapaId) return;
+
+      setMovingLeadId(leadId);
+      moveLeadOptimisticToEtapa(leadId, targetEtapaId);
+      try {
+        const { data } = await persistLeadEtapa(leadId, targetEtapaId);
+        if (data?.tags) {
+          updateLeadInState(leadId, { tags: data.tags });
+        }
+        showToast("Lead movido para a nova etapa.");
+      } catch (err) {
+        console.error("Erro ao mover lead de etapa:", err);
+        await fetchCrmData();
+        alert(err.response?.data?.detail || "Não foi possível mover o lead. Os dados foram recarregados.");
+      } finally {
+        setMovingLeadId(null);
+      }
+    },
+    [funil, moveLeadOptimisticToEtapa, persistLeadEtapa, fetchCrmData, updateLeadInState, showToast]
+  );
+
+  const handleLeadTagsChange = async (leadId, nextTags) => {
+    try {
+      // Salva na API
+      await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, { tags: nextTags });
+      
+      // Atualiza o estado local apenas com a mudança (o updateLeadInState já faz o merge seguro)
+      updateLeadInState(leadId, { tags: nextTags });
+      showToast("Tags atualizadas com sucesso!");
+    } catch (error) {
+      console.error("Erro ao salvar tags no banco:", error);
+      alert("Erro ao salvar tags.");
+    }
+  };
+
+  const handleLeadSave = async (leadId, updates) => {
+    try {
+      // Salva as edições do modal na API
+      await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
+      
+      // Atualização cirúrgica e segura do estado visual (SEM usar res.data)
+      updateLeadInState(leadId, updates);
+
+      // Fecha o modal se aplicável
+      if (selectedLead && selectedLead.id === leadId) {
+        setSelectedLead(null);
+      }
+      showToast("Lead atualizado com sucesso!");
+    } catch (err) {
+      console.error("Erro ao salvar lead:", err);
+      alert("Erro ao salvar as alterações do lead.");
+    }
+  };
+
+  const handleDeleteLead = async (leadId) => {
+    if (!leadId) return;
+    const confirmou = window.confirm("Tem certeza que deseja excluir este lead?");
+    if (!confirmou) return;
+
+    try {
+      await api.delete(`/empresas/${empresaId}/crm/leads/${leadId}`);
+      setFunil((prev) => {
+        if (!prev?.etapas) return prev;
+        return {
+          ...prev,
+          etapas: prev.etapas.map((etapa) => ({
+            ...etapa,
+            leads: (etapa.leads || []).filter((lead) => lead.id !== leadId),
+          })),
+        };
+      });
+      setSelectedLead((prev) => (prev?.id === leadId ? null : prev));
+    } catch (err) {
+      console.error("Erro ao excluir lead:", err);
+      alert(err.response?.data?.detail || "Não foi possível excluir o lead.");
+    }
+  };
+
+  const resetImportModal = () => {
+    setShowImportModal(false);
+    setImportFile(null);
+    setImportPreviewColumns([]);
+    setImportSelectedTags([]);
+    setImportInfo("");
+  };
+
+  const handleImportFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    setImportFile(file || null);
+    setImportInfo("");
+    if (!file) {
+      setImportPreviewColumns([]);
+      return;
+    }
+
+    if (String(file.name || "").toLowerCase().endsWith(".xlsx")) {
+      setImportPreviewColumns([]);
+      setImportInfo("Arquivo Excel selecionado. O preview de colunas será detectado no backend durante a importação.");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || "";
+      const separator = firstLine.includes(";") ? ";" : ",";
+      const columns = firstLine.split(separator).map((item) => item.trim()).filter(Boolean);
+      setImportPreviewColumns(columns);
+    } catch (err) {
+      console.error("Erro ao ler preview do arquivo:", err);
+      setImportPreviewColumns([]);
+      setImportInfo("Não foi possível ler o preview do arquivo no navegador.");
+    }
+  };
+
+  const handleSubmitImport = async (e) => {
+    e.preventDefault();
+    if (!importFile) return;
+    try {
+      setImportSaving(true);
+      const formData = new FormData();
+      formData.append("file", importFile);
+      formData.append("tags_iniciais", JSON.stringify(importSelectedTags));
+      const res = await api.post(`/empresas/${empresaId}/leads/importar`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      resetImportModal();
+      await fetchCrmData();
+      setImportInfo(
+        `Importação concluída: ${res.data?.inseridos || 0} inseridos, ${res.data?.atualizados || 0} atualizados.`
+      );
+    } catch (err) {
+      console.error("Erro ao importar leads:", err);
+      alert(err.response?.data?.detail || "Não foi possível importar os leads.");
+    } finally {
+      setImportSaving(false);
+    }
+  };
+
+  if (!user) return <EmptyState title="Sessão expirada" description="Faça login novamente para acessar o CRM." />;
+
+  return (
+    <div className="flex h-full flex-col space-y-6">
+      {toastMessage ? (
+        <div className="fixed right-4 top-4 z-[70] rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 shadow-lg">
+          {toastMessage}
+        </div>
+      ) : null}
+
+      <PageHeader
+        title="Leads / CRM"
+        description={
+          funil
+            ? `Funil: ${funil.funil_nome}. Colunas baseadas nas etapas reais do CRM.`
+            : "Gerencie os leads capturados pela IA e mova oportunidades entre etapas."
+        }
+        icon={Users}
+        eyebrow="Pipeline"
+        actions={
+          <>
+          <ActionButton
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            variant="secondary"
+            icon={Upload}
+          >
+            Importar leads
+          </ActionButton>
+          <ActionButton
+            type="button"
+            onClick={() => alert("Criação manual de Lead em breve! A IA já faz isso automaticamente.")}
+            icon={Plus}
+          >
+            Novo lead
+          </ActionButton>
+          </>
+        }
+      />
+
+      {loading ? (
+        <LoadingState label="Carregando funil..." />
+      ) : !funil || !Array.isArray(funil.etapas) || etapasOrdenadas.length === 0 ? (
+        <EmptyState title="Funil sem etapas" description="Nenhum dado de CRM encontrado ou o funil ainda não tem etapas. Configure o funil para esta empresa." />
+      ) : (
+        <div className="custom-scrollbar flex-1 overflow-x-auto pb-4">
+          <div className="flex h-full min-w-max space-x-6">
+            {etapasOrdenadas.map((etapa) => {
+              const etapaId = etapa?.id;
+              if (!etapaId) return null;
+              const totalVendasEtapa = (etapa.leads || []).reduce(
+                (subtotal, lead) => subtotal + Number(lead.valor_conversao || 0),
+                0
+              );
+              const totalLeadsConvertidosEtapa = (etapa.leads || []).filter(
+                (lead) => Number(lead.valor_conversao || 0) > 0
+              ).length;
+              const resumoFaturamentoEtapa =
+                totalLeadsConvertidosEtapa > 0
+                  ? `${totalLeadsConvertidosEtapa} vendas • ${formatCurrency(totalVendasEtapa)}`
+                  : formatCurrency(totalVendasEtapa);
+
+              return (
+                <div
+                  key={etapaId}
+                  role="region"
+                  aria-label={`Etapa ${etapa.nome}`}
+                  onDragOver={(ev) => handleEtapaDragOver(ev, etapaId)}
+                  onDragLeave={handleEtapaDragLeave}
+                  onDrop={(ev) => handleEtapaDrop(ev, etapaId)}
+                  className={`flex w-80 flex-col overflow-hidden rounded-2xl border bg-gray-50/80 shadow-sm transition-colors ${
+                    dragOverEtapaId === etapaId
+                      ? "border-blue-400 ring-2 ring-blue-200"
+                      : "border-gray-200/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold text-gray-800" title={etapa.nome}>
+                        {etapa.nome}
+                      </h3>
+                      <p
+                        className={`mt-1 text-xs font-medium ${
+                          totalLeadsConvertidosEtapa > 0 ? "text-emerald-700" : "text-gray-400"
+                        }`}
+                      >
+                        {resumoFaturamentoEtapa}
+                      </p>
+                    </div>
+                    <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-bold text-gray-600 shadow-sm">
+                      {etapa.leads?.length || 0}
+                    </span>
+                  </div>
+
+                  <div className="custom-scrollbar min-h-[150px] flex-1 space-y-3 overflow-y-auto p-3">
+                    {!etapa.leads || etapa.leads.length === 0 ? (
+                      <div className="flex h-full items-center justify-center rounded-xl border-2 border-dashed border-gray-200 p-4 text-center text-sm font-medium text-gray-400/70">
+                        Nenhum lead nesta etapa
+                      </div>
+                    ) : (
+                      etapa.leads.map((lead) => (
+                        <div
+                          key={lead.id}
+                          role="button"
+                          tabIndex={0}
+                          draggable={!movingLeadId}
+                          onDragStart={(ev) => handleLeadDragStart(ev, lead.id)}
+                          onDragEnd={() => setDragOverEtapaId(null)}
+                          onClick={() => setSelectedLead(lead)}
+                          onKeyDown={(ev) => {
+                            if (ev.key === "Enter" || ev.key === " ") {
+                              ev.preventDefault();
+                              setSelectedLead(lead);
+                            }
+                          }}
+                          className={`group rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md ${
+                            movingLeadId === lead.id ? "pointer-events-none opacity-60" : ""
+                          } ${!movingLeadId ? "cursor-grab active:cursor-grabbing" : "cursor-wait"}`}
+                        >
+                          <div className="mb-2 flex justify-between gap-3">
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <span
+                                className="shrink-0 text-gray-300 opacity-0 transition-opacity group-hover:opacity-100"
+                                title="Arrastar para outra etapa"
+                                aria-hidden
+                              >
+                                <GripVertical size={16} />
+                              </span>
+                              <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MessageSquare size={14} />
+                              </button>
+                              <button
+                                className="rounded-lg bg-red-50 p-1.5 text-red-600 opacity-0 transition-opacity hover:bg-red-100 group-hover:opacity-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteLead(lead.id);
+                                }}
+                                title="Excluir lead"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {lead.telefone ? (
+                            <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
+                              <Phone size={14} className="text-green-600" />
+                              <span className="font-medium text-gray-700">{lead.telefone}</span>
+                            </div>
+                          ) : null}
+
+                          {lead.historico_resumo ? (
+                            <p className="mb-3 line-clamp-2 rounded-lg border border-gray-100 bg-gray-50 p-2 text-xs text-gray-500">
+                              {lead.historico_resumo}
+                            </p>
+                          ) : null}
+
+                          <LeadTagsEditor
+                            tags={normalizeLeadTags(lead?.tags)}
+                            compact
+                            placeholder="Selecione tags oficiais"
+                            onChange={(nextTags) => handleLeadTagsChange(lead.id, nextTags)}
+                            tagDefinitions={availableTags}
+                          />
+
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                              Valor Venda
+                            </span>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                Number(lead.valor_conversao || 0) > 0
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-gray-100 text-gray-600"
+                              }`}
+                            >
+                              {formatCurrency(lead.valor_conversao || 0)}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between border-t border-gray-50 pt-3">
+                            <div className="flex items-center gap-1 text-[11px] font-medium text-gray-400 opacity-80">
+                              <Clock size={12} />
+                              {formatDate(lead.criado_em)}
+                            </div>
+                            <span className="text-[11px] font-medium text-blue-600">Detalhes</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <LeadDetailsModal
+        open={Boolean(selectedLead)}
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+        onSaveLead={handleLeadSave}
+        onSaveTags={handleLeadTagsChange}
+        availableTags={availableTags}
+      />
+
+      {showImportModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Importar Leads</h2>
+                <p className="text-sm text-gray-500">Envie um CSV ou Excel com colunas de Nome e Telefone.</p>
+              </div>
+              <button type="button" onClick={resetImportModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitImport} className="flex flex-1 flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Arquivo</label>
+                    <input
+                      type="file"
+                      accept=".csv,.xlsx"
+                      onChange={handleImportFileChange}
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800"
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Preview das colunas</p>
+                    {importPreviewColumns.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {importPreviewColumns.map((column) => (
+                          <span key={column} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                            {column}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">
+                        {importInfo || "Selecione um arquivo para visualizar ou detectar as colunas."}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags iniciais da lista</p>
+                    <div className="flex flex-wrap gap-2">
+                      {availableTags.map((tag) => {
+                        const selected = importSelectedTags.includes(tag.nome);
+                        return (
+                          <button
+                            key={tag.id}
+                            type="button"
+                            onClick={() =>
+                              setImportSelectedTags((prev) =>
+                                selected ? prev.filter((item) => item !== tag.nome) : [...prev, tag.nome]
+                              )
+                            }
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                              selected
+                                ? "border-blue-300 bg-blue-600 text-white"
+                                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
+                            }`}
+                          >
+                            {tag.nome}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+                <button type="button" onClick={resetImportModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!importFile || importSaving}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {importSaving ? "Importando..." : "Importar leads"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

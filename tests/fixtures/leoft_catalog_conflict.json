@@ -1,0 +1,10 @@
+{
+  "version": "fixture-p2c-a1-1",
+  "entries": [
+    {
+      "catalog_id": "fixture-conflict-entry",
+      "canonical_name": "Catálogo conflitante",
+      "approval_status": "pending_review"
+    }
+  ]
+}

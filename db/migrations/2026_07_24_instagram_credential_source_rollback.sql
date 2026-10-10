@@ -1,0 +1,2 @@
+-- Reversão manual somente após confirmar que nenhuma conexão Instagram usa system_user_test.
+-- ALTER TABLE conexoes DROP COLUMN IF EXISTS credential_source;

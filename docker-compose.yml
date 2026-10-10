@@ -1,0 +1,161 @@
+services:
+  db:
+    image: ankane/pgvector:latest
+    pull_policy: always
+    container_name: agent_os_db
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - agenteos_network
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_os}
+      TZ: America/Sao_Paulo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts/init.sql:/docker-entrypoint-initdb.d/01-init-evolution-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent_os}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:alpine
+    pull_policy: always
+    container_name: agent_os_redis
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - agenteos_network
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: .
+    container_name: agent_os_backend
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      agenteos_network:
+        aliases:
+          - backend
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - traffic_media:/var/lib/agenteos/media
+    env_file:
+      - .env
+      - .secrets/meta-system-user.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-agent_os}
+      REDIS_URL: redis://redis:6379/0
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_TOKEN: ${EVOLUTION_API_TOKEN}
+      TZ: America/Sao_Paulo
+      STARTUP_DATABASE_MODE: "skip"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      pull: true
+    container_name: agent_os_frontend
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - agenteos_network
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      TZ: America/Sao_Paulo
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:80"
+
+  evolution:
+    image: evoapicloud/evolution-api:latest
+    pull_policy: always
+    command: ["node", "./dist/src/main.js"]
+    container_name: agent_os_evolution
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - agenteos_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SERVER_URL: http://evolution:8080
+      WEBHOOK_GLOBAL_URL: http://backend:8000/api/webhook
+      LANGUAGE: pt-BR
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1025062854"
+      CONFIG_SESSION_PHONE_CLIENT: "Ferrioli Mídias"
+      CONFIG_SESSION_PHONE_NAME: Safari
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_TOKEN}
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/evolution_db?schema=public
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/10
+      S3_ENABLED: "false"
+      TZ: America/Sao_Paulo
+
+volumes:
+  postgres_data:
+  redis_data:
+  traffic_media:
+
+networks:
+  agenteos_network:
+    driver: bridge

@@ -1,0 +1,22 @@
+# AgentOS Profile
+
+- path: `/root/agenteos`
+- production in real use
+- preserve WhatsApp
+- preserve Meta webhooks
+- preserve connections, tokens, and Embedded Signup
+- preserve PostgreSQL, Redis, and Evolution
+- never use `docker compose down`
+- do not recreate PostgreSQL, Redis, or Evolution
+- always run WhatsApp regression
+- Instagram changes must not affect WhatsApp
+- migration must be applied before dependent backend code
+- previous images must remain available for rollback
+- reports must stay in `/root/agenteos/reports`
+- worktree may contain old changes and must be treated as potentially dirty
+- do not mix Hermes, LeoFT, or other project tasks
+- before any AgentOS deploy, identify affected protected modules
+- before any AgentOS deploy, run `./scripts/validate_protected_baselines.sh`
+- before any AgentOS deploy, validate the candidate backend image/runtime with `./scripts/validate_protected_baselines.sh --candidate-image <image> --require-candidate`
+- block AgentOS deploy if any protected baseline contract fails
+- record the Protected Production Baseline result in the final report

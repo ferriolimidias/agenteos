@@ -1,0 +1,373 @@
+{
+  "version": 1,
+  "description": "Protected production baselines for AgentOS modules that are already homologated.",
+  "modules": [
+    {
+      "name": "whatsapp_meta_official",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/config", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/status", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/session", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/complete", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/assets", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/meta/select-number", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/{conexao_id}/validate", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/{conexao_id}/sync", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/conexoes/{conexao_id}/disconnect", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/whatsapp/status", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/whatsapp/conectar", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/whatsapp/qrcode", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/whatsapp/desconectar", "methods": ["POST"]}
+      ],
+      "required_files": [
+        "app/api/routers/conexoes.py",
+        "app/services/whatsapp_operational_status.py",
+        "frontend/src/pages/tenant/Conexoes.jsx"
+      ],
+      "required_text": [
+        {"path": "app/api/routers/conexoes.py", "contains": "Conexao.empresa_id == empresa_uuid", "contract": "connection_lookup_scoped_by_company"},
+        {"path": "app/api/routers/conexoes.py", "contains": "resolve_whatsapp_operational_status", "contract": "official_meta_status_resolution_present"},
+        {"path": "frontend/src/pages/tenant/Conexoes.jsx", "contains": "/whatsapp/status", "contract": "frontend_whatsapp_status_contract"}
+      ]
+    },
+    {
+      "name": "instagram_connections",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/instagram/connections", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/connection", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/connection/{connection_id}/reconfigure", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/connection/{connection_id}/revalidate", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/connection/{connection_id}", "methods": ["DELETE"]}
+      ],
+      "required_files": [
+        "app/api/routers/instagram_simple.py",
+        "app/services/instagram_simple.py",
+        "frontend/src/pages/tenant/Instagram.jsx"
+      ],
+      "required_text": [
+        {"path": "app/api/routers/instagram_simple.py", "contains": "instagram_id: str | None", "contract": "backend_accepts_simple_instagram_id_field"},
+        {"path": "app/api/routers/instagram_simple.py", "contains": "identification = await identify_connection(", "contract": "backend_create_uses_precommit_graph_validation"},
+        {"path": "app/api/routers/instagram_simple.py", "contains": "identified=identification", "contract": "backend_persist_uses_prevalidated_identity"},
+        {"path": "app/services/instagram_simple.py", "contains": "INSTAGRAM_USER_IDENTIFIER_LABEL = \"Instagram ID\"", "contract": "backend_identifier_type_is_simple_instagram_id"},
+        {"path": "app/services/instagram_simple.py", "contains": "GRAPH_BASE_URL = f\"https://graph.instagram.com/{GRAPH_VERSION}\"", "contract": "backend_graph_host_is_instagram_graph"},
+        {"path": "app/services/instagram_simple.py", "contains": "identify_connection(professional_account_id=requested_id", "contract": "backend_reconfigure_validates_before_mutation"},
+        {"path": "app/services/instagram_simple.py", "contains": "\"operational\": operational", "contract": "backend_serializes_operational_state"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "Instagram ID", "contract": "frontend_identifier_type_matches_backend"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "Informe o Instagram ID utilizado com o seu Instagram User Access Token.", "contract": "frontend_save_flow_without_manual_test_instruction"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "normalizeConnections", "contract": "frontend_list_normalization_present"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "normalizeApiError(error, \"N\u00e3o foi poss\u00edvel carregar as conex\u00f5es.\")", "contract": "frontend_error_not_empty_state"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "instagram/connection/${editingConnectionId}/reconfigure", "contract": "frontend_reconfigure_route_contract"}
+      ],
+      "forbidden_regex": [
+        {
+          "path": "frontend/src/pages/tenant/Instagram.jsx",
+          "regex": "catch\\s*\\([^)]*\\)\\s*\\{[\\s\\S]{0,260}setConnections\\s*\\(\\s*\\[\\s*\\]\\s*\\)",
+          "contract": "frontend_http_error_must_not_become_empty_state"
+        },
+        {
+          "path": "frontend/src/pages/tenant/Instagram.jsx",
+          "regex": "Testar conexão|teste o novo token antes de salvar|Teste a conexão antes de salvar|validation_receipt: identification\\.validation_receipt|!identification\\?\\.validation_receipt",
+          "contract": "frontend_legacy_manual_test_flow_absent"
+        },
+        {
+          "path": "app/api/routers/instagram_simple.py",
+          "regex": "/connection/test|validation_receipt|create_validation_receipt|verify_validation_receipt",
+          "contract": "backend_save_is_single_operation_without_legacy_manual_test_receipt"
+        },
+        {
+          "path": "app/services/instagram_simple.py",
+          "regex": "resolved_id\\s*!=\\s*professional_id|outra conta Instagram|O token pertence a outra conta profissional|create_validation_receipt|verify_validation_receipt|Teste de conex\u00e3o obrigat\u00f3rio",
+          "contract": "backend_cross_namespace_id_equality_must_not_block_connection"
+        },
+        {
+          "path": "frontend/src/pages/tenant/Instagram.jsx",
+          "regex": "Facebook Page ID|Instagram Business Account ID|ID resolvido|Testar conexão",
+          "contract": "frontend_simple_n8n_fields_only"
+        }
+      ],
+      "tenant_contracts": [
+        "connection_list_is_scoped_by_empresa_id",
+        "connection_create_is_scoped_by_empresa_id",
+        "connection_update_is_scoped_by_empresa_id_and_connection_id",
+        "connection_delete_is_scoped_by_empresa_id_and_connection_id",
+        "company_without_connection_returns_empty_success",
+        "company_a_connection_never_appears_for_company_b"
+      ]
+    },
+    {
+      "name": "instagram_comment_automation",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/instagram/media", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/automations", "methods": ["GET", "POST"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/automations/{automation_id}", "methods": ["PUT", "DELETE"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/history", "methods": ["GET"]}
+      ],
+      "required_files": [
+        "db/migrations/2026_07_23_instagram_comment_direct_mvp.sql",
+        "db/migrations/2026_07_25_instagram_tenant_isolation.sql",
+        "frontend/src/pages/tenant/Instagram.jsx"
+      ],
+      "required_text": [
+        {"path": "db/models.py", "contains": "class InstagramCommentAutomation", "contract": "orm_model_present"},
+        {"path": "db/models.py", "contains": "connection_id = Column(UUID(as_uuid=True)", "contract": "automation_connection_binding_present"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "connection_id: selectedConnectionId", "contract": "frontend_automation_connection_binding"}
+      ],
+      "tenant_contracts": [
+        "automation_lookup_is_scoped_by_empresa_id",
+        "automation_lookup_is_scoped_by_connection_id",
+        "automation_mutation_is_scoped_by_empresa_id"
+      ]
+    },
+    {
+      "name": "instagram_public_reply",
+      "required_routes": [
+        {"path": "/api/webhooks/meta/instagram", "methods": ["GET", "POST"]}
+      ],
+      "required_files": [
+        "app/services/instagram_simple.py"
+      ],
+      "required_text": [
+        {"path": "app/services/instagram_simple.py", "contains": "public_reply", "contract": "public_reply_execution_present"},
+        {"path": "app/services/instagram_simple.py", "contains": "recent_public_replies", "contract": "public_reply_dedup_present"}
+      ]
+    },
+    {
+      "name": "instagram_private_reply",
+      "required_routes": [
+        {"path": "/api/webhooks/meta/instagram", "methods": ["POST"]}
+      ],
+      "required_files": [
+        "app/services/instagram_simple.py",
+        "db/migrations/2026_08_06_instagram_private_reply_button_template.sql"
+      ],
+      "required_text": [
+        {"path": "app/services/instagram_simple.py", "contains": "private_reply", "contract": "private_reply_execution_present"},
+        {"path": "app/services/instagram_simple.py", "contains": "error_subcode", "contract": "meta_error_subcode_persisted"},
+        {"path": "app/services/instagram_simple.py", "contains": "fbtrace_id", "contract": "meta_fbtrace_id_persisted"}
+      ]
+    },
+    {
+      "name": "instagram_button_template",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/instagram/automations", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/instagram/automations/{automation_id}", "methods": ["PUT"]},
+        {"path": "/api/webhooks/meta/instagram", "methods": ["POST"]}
+      ],
+      "required_files": [
+        "db/migrations/2026_08_06_instagram_private_reply_button_template.sql",
+        "frontend/src/pages/tenant/Instagram.jsx"
+      ],
+      "required_text": [
+        {"path": "db/migrations/2026_08_06_instagram_private_reply_button_template.sql", "contains": "private_reply_config JSONB", "contract": "private_reply_config_migration"},
+        {"path": "db/models.py", "contains": "private_reply_config = Column(JSONB", "contract": "private_reply_config_model"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "automationForm.privateButtons.length >= 3", "contract": "frontend_max_three_buttons"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "isAllowedButtonUrl", "contract": "frontend_web_url_validation"},
+        {"path": "frontend/src/pages/tenant/Instagram.jsx", "contains": "postback", "contract": "frontend_postback_support"}
+      ]
+    },
+    {
+      "name": "meta_webhooks",
+      "required_routes": [
+        {"path": "/api/webhook/{empresa_id}/meta", "methods": ["POST"]},
+        {"path": "/api/webhook/meta", "methods": ["GET", "POST"]},
+        {"path": "/api/webhooks/meta/instagram", "methods": ["GET", "POST"]}
+      ],
+      "required_files": [
+        "app/api/routers/webhook.py",
+        "app/api/routers/meta_webhook.py"
+      ],
+      "required_text": [
+        {"path": "app/api/routers/webhook.py", "contains": "@router.post(\"/{empresa_id}/meta\", dependencies=[Depends(require_legacy_meta_signature)])", "contract": "tenant_meta_webhook_route_present_with_provider_hmac"},
+        {"path": "app/api/routers/meta_webhook.py", "contains": "Meta Webhook", "contract": "generic_meta_webhook_router_present"}
+      ]
+    },
+    {
+      "name": "inbox",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/inbox", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/conversas", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/conversas/{conversation_id}/mensagens", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/send", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/mensagens", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/send_media", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/ai-state", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/pausar_bot", "methods": ["POST"]},
+        {"path": "/api/empresas/{empresa_id}/inbox/{telefone}/reativar_bot", "methods": ["POST"]}
+      ],
+      "required_files": [
+        "app/api/routers/inbox.py",
+        "frontend/src/pages/tenant/Inbox.jsx"
+      ],
+      "required_text": [
+        {"path": "app/api/routers/inbox.py", "contains": "empresa_id", "contract": "tenant_parameter_present"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "/inbox", "contract": "frontend_inbox_contract"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "chat-conversation-header", "contract": "inbox_header_contract"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "MessageList", "contract": "inbox_history_contract"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "<textarea", "contract": "inbox_composer_contract"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "Concluir atendimento", "contract": "inbox_header_status_control_required"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "Tags", "contract": "inbox_header_tags_control_required"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "handleToggleBot", "contract": "inbox_header_ai_control_required"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "title=\"Transferir\"", "contract": "inbox_header_transfer_control_required"},
+        {"path": "frontend/src/pages/tenant/Inbox.jsx", "contains": "title=\"Excluir lead\"", "contract": "inbox_header_delete_control_required"}
+      ]
+    },
+    {
+      "name": "conversion_monitor_frontend",
+      "required_files": ["frontend/src/pages/super-admin/EmpresaDetalhes.jsx"],
+      "required_text": [
+        {"path": "frontend/src/pages/super-admin/EmpresaDetalhes.jsx", "contains": "conversion_monitor_prompt", "contract": "conversion_monitor_field_present"},
+        {"path": "frontend/src/pages/super-admin/EmpresaDetalhes.jsx", "contains": "Monitor de conversão", "contract": "conversion_monitor_label_present"}
+      ]
+    },
+    {
+      "name": "traffic_meta_config",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/config", "methods": ["GET", "PUT"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/credentials/status", "methods": ["GET"]}
+      ],
+      "required_files": [
+        "app/api/routers/traffic_meta.py",
+        "app/services/meta/marketing_credentials.py",
+        "db/migrations/2026_08_11_traffic_meta_mvp_foundation.sql",
+        "frontend/src/pages/tenant/TrafficMeta.jsx"
+      ],
+      "required_text": [
+        {"path": "db/models.py", "contains": "class TrafficMetaConfig", "contract": "traffic_config_model_present"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "TrafficMetaConfig.empresa_id == empresa_id", "contract": "traffic_config_lookup_scoped_by_company"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "whatsapp_connection_id", "contract": "official_whatsapp_reference_present"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "ad_account_validation_id", "contract": "ad_account_save_requires_validation"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "await client.validate_ad_account(normalized_ad_account_id)", "contract": "ad_account_binding_validated_readonly"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "ID da conta de anúncios Meta", "contract": "frontend_visual_ad_account_id_field"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "Validar conta", "contract": "frontend_ad_account_validation_action"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "/traffic/meta/config", "contract": "frontend_config_contract"}
+      ]
+    },
+    {
+      "name": "marketing_api_read",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/me", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/permissions", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/adaccounts", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/adaccounts/{ad_account_id}", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/pages", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/campaigns", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/adsets", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/ads", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/creatives/{creative_id}", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/campaigns/{campaign_id}/inspect", "methods": ["GET"]},
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/insights", "methods": ["GET"]}
+      ],
+      "required_files": [
+        "app/services/meta/marketing_api.py",
+        "app/api/routers/traffic_meta.py"
+      ],
+      "required_text": [
+        {"path": "app/services/meta/settings.py", "contains": "DEFAULT_MARKETING_GRAPH_API_VERSION = \"v26.0\"", "contract": "marketing_graph_v26_central"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "META_MARKETING_API_READ_ONLY", "contract": "marketing_client_blocks_post"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "adcreatives", "contract": "creative_read_contract_present"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "ctwa_structure_inspector", "contract": "ctwa_inspector_present"}
+      ]
+    },
+    {
+      "name": "meta_credential_capability_resolver",
+      "required_files": [
+        "app/services/meta/marketing_credentials.py",
+        "app/services/meta/conversion_credentials.py"
+      ],
+      "required_text": [
+        {"path": "app/services/meta/marketing_credentials.py", "contains": "class MetaMarketingCapability", "contract": "capability_enum_present"},
+        {"path": "app/services/meta/marketing_credentials.py", "contains": "EMBEDDED_SIGNUP_TENANT", "contract": "embedded_signup_priority_supported"},
+        {"path": "app/services/meta/marketing_credentials.py", "contains": "META_MARKETING_ADMIN_ACCESS_TOKEN", "contract": "admin_token_env_only"},
+        {"path": "app/services/meta/marketing_credentials.py", "contains": "tenant_allowlist_required", "contract": "admin_fallback_not_tenant_allowlist_bound"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_ensure_ad_account_binding_admin", "contract": "manual_ad_account_binding_admin_only"}
+      ],
+      "forbidden_regex": [
+        {
+          "path": "app/services/meta/marketing_credentials.py",
+          "regex": "create_campaign_(test|embedded)_token",
+          "contract": "no_feature_specific_token_functions"
+        }
+      ]
+    },
+    {
+      "name": "traffic_multitenant",
+      "required_files": [
+        "app/api/routers/traffic_meta.py",
+        "db/models.py"
+      ],
+      "required_text": [
+        {"path": "app/api/routers/traffic_meta.py", "contains": "require_tenant_access", "contract": "tenant_access_required"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "Conexao.empresa_id == empresa_id", "contract": "whatsapp_binding_scoped_by_company"},
+        {"path": "db/models.py", "contains": "fk_traffic_meta_config_empresa_whatsapp_connection", "contract": "db_cross_tenant_whatsapp_fk"},
+        {"path": "db/models.py", "contains": "uq_traffic_meta_configs_ad_account_id", "contract": "db_cross_tenant_ad_account_unique"},
+        {"path": "tests/services/test_traffic_meta_foundation.py", "contains": "test_admin_fallback_is_global_for_new_tenants_and_assets", "contract": "admin_fallback_global_negative_allowlist_regression_test"}
+      ]
+    },
+    {
+      "name": "traffic_campaign_adset_write",
+      "required_routes": [
+        {"path": "/api/empresas/{empresa_id}/traffic/meta/campaign-adsets", "methods": ["POST"]}
+      ],
+      "required_files": [
+        "app/services/meta/traffic_campaign_builder.py",
+        "app/services/meta/marketing_api.py",
+        "app/api/routers/traffic_meta.py",
+        "db/migrations/2026_08_11_traffic_meta_campaign_adset_write.sql",
+        "frontend/src/pages/tenant/TrafficMeta.jsx"
+      ],
+      "required_text": [
+        {"path": "app/services/meta/settings.py", "contains": "META_MARKETING_WRITE_ENABLED", "contract": "write_global_feature_flag_present"},
+        {"path": "app/services/meta/settings.py", "contains": "META_MARKETING_CAMPAIGN_CREATE_ENABLED", "contract": "campaign_create_feature_flag_present"},
+        {"path": "app/services/meta/settings.py", "contains": "META_MARKETING_ADSET_CREATE_ENABLED", "contract": "adset_create_feature_flag_present"},
+        {"path": "app/services/meta/settings.py", "contains": "META_MARKETING_CREATIVE_CREATE_ENABLED", "contract": "creative_create_feature_flag_present"},
+        {"path": "app/services/meta/settings.py", "contains": "META_MARKETING_AD_CREATE_ENABLED", "contract": "ad_create_feature_flag_present"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "async def create_campaign", "contract": "campaign_post_explicit_method_only"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "async def create_adset", "contract": "adset_post_explicit_method_only"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "async def create_creative", "contract": "creative_post_explicit_method_only"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "async def create_ad", "contract": "ad_post_explicit_method_only"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "def graph_post_data", "contract": "graph_post_complex_fields_encoded"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "META_MARKETING_API_READ_ONLY", "contract": "generic_post_still_blocked"},
+        {"path": "app/services/meta/marketing_api.py", "contains": "META_MARKETING_API_WRITE_BLOCKED", "contract": "patch_delete_blocked"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "CAMPAIGN_OBJECTIVE = \"OUTCOME_LEADS\"", "contract": "campaign_objective_real_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "CAMPAIGN_BUYING_TYPE = \"AUCTION\"", "contract": "campaign_buying_type_real_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "ADSET_OPTIMIZATION_GOAL = \"CONVERSATIONS\"", "contract": "adset_optimization_real_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "ADSET_BILLING_EVENT = \"IMPRESSIONS\"", "contract": "adset_billing_real_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "ADSET_DESTINATION_TYPE = \"WHATSAPP\"", "contract": "adset_destination_real_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "FORCED_PAUSED_STATUS = \"PAUSED\"", "contract": "paused_status_forced"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "whatsapp_phone_number", "contract": "promoted_object_phone_contract"},
+        {"path": "app/services/meta/traffic_campaign_builder.py", "contains": "targeting_automation", "contract": "advantage_targeting_contract"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "MetaMarketingCapability.ADS_MANAGEMENT", "contract": "write_uses_ads_management_capability"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "ad_account_id_for_write = _current_configured_ad_account_id(config)", "contract": "backend_uses_canonical_current_ad_account_for_new_write"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "await client.create_campaign(ad_account_id_for_write, campaign_payload)", "contract": "campaign_uses_bound_ad_account"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "await client.create_adset(ad_account_id_for_write, adset_payload)", "contract": "adset_uses_bound_ad_account"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_ensure_meta_paused_read", "contract": "post_write_get_must_confirm_paused"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_append_write_audit", "contract": "sanitized_write_audit_present"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "graph_error_type", "contract": "graph_error_type_audited"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "graph_error_blame_field_specs", "contract": "graph_blame_fields_audited"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "campaign_http_form", "contract": "campaign_http_form_audited"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "adset_http_form", "contract": "adset_http_form_audited"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "\"success\": True", "contract": "backend_success_explicit"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "raise HTTPException(status_code=502", "contract": "backend_total_failure_not_success"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_resolve_campaign_whatsapp_for_write", "contract": "campaign_whatsapp_connection_resolved_for_write"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "Selecione qual WhatsApp Oficial será usado nesta campanha", "contract": "multiple_whatsapps_require_explicit_selection"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_validate_page_access", "contract": "page_access_validated_by_discovery"},
+        {"path": "app/api/routers/traffic_meta.py", "contains": "_validate_whatsapp_asset_for_ads", "contract": "whatsapp_asset_prevalidated_before_write"},
+        {"path": "db/models.py", "contains": "class TrafficMetaCampaignCreation", "contract": "campaign_adset_creation_model"},
+        {"path": "db/models.py", "contains": "whatsapp_connection_id = Column(UUID", "contract": "campaign_whatsapp_connection_persisted"},
+        {"path": "db/models.py", "contains": "ad_account_id = Column(String", "contract": "campaign_ad_account_persisted"},
+        {"path": "db/models.py", "contains": "uq_traffic_meta_campaign_creations_idempotency", "contract": "creation_idempotency_unique"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "Nova campanha", "contract": "frontend_new_campaign_form"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "Página Meta", "contract": "frontend_page_selection_by_name"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "WhatsApp da campanha", "contract": "frontend_campaign_whatsapp_selector"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "Selecione o WhatsApp", "contract": "frontend_multiple_whatsapps_require_selection"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "response.data?.success", "contract": "frontend_success_requires_backend_confirmation"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "setCreatedStructure(null)", "contract": "frontend_failure_clears_green_card"},
+        {"path": "frontend/src/pages/tenant/TrafficMeta.jsx", "contains": "A campanha não foi criada", "contract": "frontend_sanitized_meta_failure_message"},
+        {"path": "tests/services/test_traffic_meta_foundation.py", "contains": "test_campaign_and_adset_create_are_flag_gated_and_force_paused", "contract": "write_flags_paused_test"},
+        {"path": "tests/services/test_traffic_meta_foundation.py", "contains": "test_campaign_and_adset_posts_encode_graph_complex_fields", "contract": "graph_post_encoding_test"},
+        {"path": "tests/services/test_traffic_meta_foundation.py", "contains": "test_adset_payload_contract_uses_ctwa_real_contract", "contract": "adset_payload_contract_test"}
+      ]
+    }
+  ]
+}

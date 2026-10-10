@@ -1,0 +1,13 @@
+DROP TRIGGER IF EXISTS trg_leoft_approval_events_append_only ON leoft_approval_events;
+DROP TRIGGER IF EXISTS trg_leoft_catalog_entries_search_document ON leoft_catalog_entries;
+DROP FUNCTION IF EXISTS leoft_approval_events_append_only();
+DROP FUNCTION IF EXISTS leoft_catalog_entries_search_document_update();
+DROP TABLE IF EXISTS leoft_approval_events;
+DROP TABLE IF EXISTS leoft_media_candidate_rejections;
+DROP TABLE IF EXISTS leoft_media_approvals;
+DROP TABLE IF EXISTS leoft_catalog_import_runs;
+DROP TABLE IF EXISTS leoft_catalog_signatures;
+DROP TABLE IF EXISTS leoft_catalog_media;
+DROP TABLE IF EXISTS leoft_catalog_aliases;
+DROP TABLE IF EXISTS leoft_catalog_versions;
+DROP TABLE IF EXISTS leoft_catalog_entries;

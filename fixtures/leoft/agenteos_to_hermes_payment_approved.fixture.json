@@ -1,0 +1,45 @@
+{
+  "fixture_name": "agenteos_to_hermes_payment_approved",
+  "fixture_version": "1.0",
+  "created_at": "2026-07-08T00:00:00Z",
+  "dry_run": true,
+  "real_call": false,
+  "future_endpoint": "POST /api/internal/hermes/events/leoft/payment-approved",
+  "idempotency_key": "leoft.payment_approved:mp_fake_ag3_contract",
+  "headers": {
+    "Content-Type": "application/json",
+    "X-AgenteOS-Event": "leoft.payment_approved",
+    "X-AgenteOS-Idempotency-Key": "leoft.payment_approved:mp_fake_ag3_contract",
+    "X-AgenteOS-Signature": "fcda1bb1caf510e5040484896651ff8720a28cf343501bd05bcbb32bebd14646",
+    "X-AgenteOS-Timestamp": "2026-07-08T00:00:00Z"
+  },
+  "signature": {
+    "algorithm": "HMAC-SHA256",
+    "header": "X-AgenteOS-Signature",
+    "signed_payload_sha256": "08e41d76472bdb9127ae42f9140adf34589ed80ce2aad606ee20a6023387b4ef",
+    "value": "fcda1bb1caf510e5040484896651ff8720a28cf343501bd05bcbb32bebd14646",
+    "mode": "dry_run_signed_local_mock"
+  },
+  "payload": {
+    "event": "leoft.payment_approved",
+    "empresa_id": "fake_empresa_leoft",
+    "lead_id": "fake_lead_ag3_contract",
+    "anamnese_id": "fake_anamnese_ag3_contract",
+    "checkout_reference": "leoft_chk_ag3_contract",
+    "payment_provider": "mercado_pago",
+    "payment_id": "mp_fake_ag3_contract",
+    "amount": 97,
+    "currency": "BRL",
+    "app_access": {
+      "app_url": "https://app.leoft.com.br",
+      "access_link_created": true
+    }
+  },
+  "safety": {
+    "uses_fake_data": true,
+    "contains_real_phone": false,
+    "contains_real_token": false,
+    "contains_real_credential": false,
+    "external_calls": "blocked"
+  }
+}

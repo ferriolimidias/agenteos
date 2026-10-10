@@ -1,0 +1,1069 @@
+import asyncio
+import hashlib
+import hmac
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from typing import Any, Dict, Tuple
+import uuid
+import base64
+import json
+import re
+import unicodedata
+import tempfile
+from datetime import datetime, timedelta
+
+from openai import AsyncOpenAI
+
+from app.schemas import StandardMessage
+from app.api.utils import handle_debouncer, is_ai_blocked
+from app.core.secret_sanitizer import sanitize_for_log
+from app.api.evolution_webhook_dedup import (
+    adquirir_trava_webhook_mensagem,
+    extrair_message_id_evolution,
+    fallback_message_id_evolution,
+)
+from app.services.websocket_manager import manager
+from db.database import AsyncSessionLocal
+from db.models import Empresa, CRMLead, CRMFunil, CRMEtapa, MensagemHistorico, Conexao, TipoConexao
+from sqlalchemy import func, select
+
+router = APIRouter(prefix="/webhook", tags=["Webhook"])
+
+EVOLUTION_WEBHOOK_STATUS_VALIDOS = {"ativo", "connected", "open"}
+
+
+async def require_legacy_meta_signature(request: Request) -> None:
+    """Keep the legacy Meta callback public only to correctly signed provider calls."""
+    from app.services.meta.settings import meta_settings
+
+    secret = str(meta_settings().app_secret or "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="Meta webhook signing secret is not configured.")
+    signature = str(request.headers.get("x-hub-signature-256") or "").strip()
+    raw_body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid provider webhook signature.")
+
+
+async def _company_callback_secret(empresa_id: str, setting_key: str) -> str:
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Webhook tenant not found.") from exc
+    async with AsyncSessionLocal() as session:
+        empresa = await session.get(Empresa, empresa_uuid)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Webhook tenant not found.")
+    credentials = empresa.credenciais_canais if isinstance(empresa.credenciais_canais, dict) else {}
+    secret = str(credentials.get(setting_key) or "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="Provider webhook secret is not configured.")
+    return secret
+
+
+async def _validate_company_callback_token(empresa_id: str, request: Request, setting_key: str) -> None:
+    expected = await _company_callback_secret(empresa_id, setting_key)
+    supplied = str(request.headers.get("x-agentos-webhook-token") or "").strip()
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid provider webhook token.")
+
+
+async def require_telegram_webhook_token(empresa_id: str, request: Request) -> None:
+    await _validate_company_callback_token(empresa_id, request, "telegram_webhook_secret")
+
+
+async def require_chatwoot_webhook_token(empresa_id: str, request: Request) -> None:
+    await _validate_company_callback_token(empresa_id, request, "chatwoot_webhook_secret")
+
+
+async def require_evolution_webhook_token(empresa_id: str, request: Request) -> None:
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+        payload = await request.json()
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid Evolution webhook payload.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid Evolution webhook payload.")
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    instance = str(payload.get("instance") or payload.get("instanceName") or data.get("instance") or "").strip()
+    supplied = str(request.headers.get("x-agentos-webhook-token") or "").strip()
+    if not instance or not supplied:
+        raise HTTPException(status_code=401, detail="Evolution webhook authentication is required.")
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(Conexao).where(
+                Conexao.empresa_id == empresa_uuid,
+                Conexao.tipo == TipoConexao.EVOLUTION,
+            )
+        )).scalars().all()
+    for connection in rows:
+        credentials = connection.credenciais if isinstance(connection.credenciais, dict) else {}
+        configured_instance = str(credentials.get("evolution_instance") or connection.nome_instancia or "").strip()
+        token = str(credentials.get("evolution_apikey") or "").strip()
+        if configured_instance == instance and token and hmac.compare_digest(supplied, token):
+            return
+    raise HTTPException(status_code=401, detail="Invalid Evolution webhook token.")
+
+TEXTO_AUDIO_TRANSCRICAO_PENDENTE = "[Transcrição pendente]"
+
+
+def _mask_phone(telefone: str) -> str:
+    digits = "".join(ch for ch in (telefone or "") if ch.isdigit())
+    if len(digits) <= 8:
+        return digits
+    return f"{digits[:5]}{'*' * max(len(digits) - 9, 4)}{digits[-4:]}"
+
+
+def _normalizar_telefone_remote_jid(remote_jid: str | None) -> str:
+    bruto = str(remote_jid or "")
+    sem_sufixo = bruto.replace("@s.whatsapp.net", "").replace("@g.us", "")
+    return re.sub(r"\D", "", sem_sufixo)
+
+
+def _extrair_profile_pic_url(payload: dict | None, data: dict | None) -> str | None:
+    candidatos = []
+    for origem in (data or {}, payload or {}):
+        if not isinstance(origem, dict):
+            continue
+        candidatos.extend(
+            [
+                origem.get("profilePicUrl"),
+                origem.get("profilePictureUrl"),
+                origem.get("pictureUrl"),
+                origem.get("photoUrl"),
+            ]
+        )
+        for chave in ("contact", "sender", "key", "data", "message"):
+            nested = origem.get(chave)
+            if isinstance(nested, dict):
+                candidatos.extend(
+                    [
+                        nested.get("profilePicUrl"),
+                        nested.get("profilePictureUrl"),
+                        nested.get("pictureUrl"),
+                        nested.get("photoUrl"),
+                    ]
+                )
+
+    for candidato in candidatos:
+        if isinstance(candidato, str) and candidato.strip():
+            return candidato.strip()
+    return None
+
+
+async def _atualizar_foto_lead_background(empresa_id: str, telefone: str) -> None:
+    """
+    Atualiza foto do lead em background para não bloquear o webhook.
+    A foto é secundária e não deve impactar o fluxo do agente.
+    """
+    try:
+        from app.api.routers.inbox import obter_foto_lead
+
+        await obter_foto_lead(empresa_id, telefone)
+    except Exception as exc:
+        print(f"[WEBHOOK FOTO] Falha no refresh assíncrono da foto: {sanitize_for_log(str(exc))}")
+
+
+def _extrair_rastreio_ads_e_limpar_texto(texto: str | None) -> tuple[str, str | None, str | None]:
+    texto_original = str(texto or "")
+    gclid_match = re.search(r"\|gclid:([^|]+)\|", texto_original, flags=re.IGNORECASE)
+    fbclid_match = re.search(r"\|fbclid:([^|]+)\|", texto_original, flags=re.IGNORECASE)
+
+    gclid = str(gclid_match.group(1)).strip() if gclid_match else None
+    fbclid = str(fbclid_match.group(1)).strip() if fbclid_match else None
+
+    texto_limpo = re.sub(r"\|gclid:[^|]+\|", " ", texto_original, flags=re.IGNORECASE)
+    texto_limpo = re.sub(r"\|fbclid:[^|]+\|", " ", texto_limpo, flags=re.IGNORECASE)
+    texto_limpo = re.sub(r"\s{2,}", " ", texto_limpo).strip()
+
+    return texto_limpo, gclid, fbclid
+
+
+def extrair_conteudo_mensagem(data_json: dict) -> str:
+    message = (data_json or {}).get("message", {}) or {}
+
+    def _texto_interactive_response() -> str | None:
+        interactive = message.get("interactiveResponseMessage") or {}
+        if not isinstance(interactive, dict):
+            return None
+
+        native = interactive.get("nativeFlowResponseMessage") or {}
+        if isinstance(native, dict):
+            for chave in ("name", "id", "title", "description"):
+                valor = native.get(chave)
+                if valor:
+                    return str(valor)
+
+            params_raw = native.get("paramsJson") or native.get("params")
+            if params_raw:
+                try:
+                    params = json.loads(params_raw) if isinstance(params_raw, str) else params_raw
+                except Exception:
+                    params = {}
+                if isinstance(params, dict):
+                    for chave in ("id", "title", "description", "value", "text", "selectedDisplayText"):
+                        valor = params.get(chave)
+                        if valor:
+                            return str(valor)
+        return None
+
+    texto = (
+        message.get("conversation")
+        or (message.get("extendedTextMessage", {}) or {}).get("text")
+        or (message.get("templateButtonReplyMessage", {}) or {}).get("selectedDisplayText")
+        or (message.get("buttonsResponseMessage", {}) or {}).get("selectedDisplayText")
+        or (message.get("listResponseMessage", {}) or {}).get("title")
+        or _texto_interactive_response()
+        or (message.get("imageMessage", {}) or {}).get("caption")
+        or (message.get("videoMessage", {}) or {}).get("caption")
+    )
+    if texto:
+        return str(texto)
+
+    if message.get("audioMessage"):
+        return "[Áudio]"
+    if message.get("imageMessage"):
+        return "[Imagem]"
+    if message.get("videoMessage"):
+        return "[Vídeo]"
+    if message.get("documentMessage"):
+        return "[Arquivo]"
+    if message.get("stickerMessage"):
+        return "[Sticker]"
+    return "[Mensagem não suportada]"
+
+
+def _extrair_tipo_mensagem(data_json: dict) -> str:
+    message = (data_json or {}).get("message", {}) or {}
+    if message.get("imageMessage"):
+        return "image"
+    if message.get("audioMessage"):
+        return "audio"
+    if message.get("videoMessage"):
+        return "video"
+    if message.get("documentMessage"):
+        return "document"
+    return "text"
+
+
+def _mimetype_audio_evolution(message: dict) -> str:
+    audio = (message or {}).get("audioMessage") or {}
+    m = str(audio.get("mimetype") or "").strip()
+    return m if m else "audio/ogg"
+
+
+def _media_metadata_evolution(message: dict, tipo_mensagem: str) -> dict[str, str | None]:
+    key = {
+        "image": "imageMessage",
+        "video": "videoMessage",
+        "audio": "audioMessage",
+        "document": "documentMessage",
+    }.get(str(tipo_mensagem or "").strip().lower())
+    payload = ((message or {}).get(key or "") or {}) if key else {}
+    return {
+        "media_id": str(payload.get("id") or payload.get("mediaKey") or payload.get("directPath") or "").strip() or None,
+        "media_mime_type": str(payload.get("mimetype") or payload.get("mimeType") or "").strip() or None,
+        "caption": str(payload.get("caption") or "").strip() or None,
+    }
+
+
+def _build_playable_audio_media_url(base64_raw: str | None, mimetype: str) -> str | None:
+    """
+    Garante `media_url` reproduzível no browser (<audio src>).
+    Aceita base64 cru, data URI completa ou URL http(s).
+    """
+    if not base64_raw or not str(base64_raw).strip():
+        return None
+    raw = str(base64_raw).strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("data:audio") or raw.startswith("data:application"):
+        return raw
+    if raw.startswith("data:"):
+        return raw
+    mime = (mimetype or "audio/ogg").strip() or "audio/ogg"
+    b64 = raw.split(",", 1)[1] if "," in raw else raw
+    return f"data:{mime};base64,{b64}"
+
+
+async def _transcrever_audio(base64_string: str, openai_api_key: str | None = None) -> str:
+    """
+    Transcreve áudio base64 via Whisper estritamente em modo BYOK.
+
+    Política multi-tenant: se a empresa não tem chave OpenAI configurada,
+    NÃO podemos instanciar AsyncOpenAI sem `api_key` — isso faria o SDK ler
+    a env var `OPENAI_API_KEY` do servidor e cobraria a transcrição na
+    chave-mestra do operador do SaaS, vazando billing entre tenants.
+    """
+    chave_str = str(openai_api_key or "").strip()
+    if not chave_str:
+        print(
+            "[WEBHOOK EVOLUTION] Transcrição abortada: tenant sem chave OpenAI configurada "
+            "(bloqueio BYOK — recusando fallback para chave global do servidor)."
+        )
+        return "[Áudio não transcrito: Empresa sem chave da OpenAI configurada]"
+
+    try:
+        bruto = str(base64_string or "").strip()
+        if not bruto:
+            return "[Erro ao transcrever áudio]"
+
+        # Remove cabeçalho data URI se existir (ex: data:audio/ogg;base64,...)
+        base64_data = bruto.split(",", 1)[1] if "," in bruto else bruto
+        audio_bytes = base64.b64decode(base64_data)
+
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".ogg") as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            tmp_audio.flush()
+
+            # Sempre passamos api_key explícita. Nunca AsyncOpenAI() vazio.
+            client = AsyncOpenAI(api_key=chave_str)
+            with open(tmp_audio.name, "rb") as f:
+                transcricao = await client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="text",
+                )
+        texto_transcrito = str(transcricao or "").strip()
+        return texto_transcrito or "[Erro ao transcrever áudio]"
+    except Exception as exc:
+        print(f"[WEBHOOK EVOLUTION] Falha na transcrição Whisper: {sanitize_for_log(str(exc))}")
+        return "[Erro ao transcrever áudio]"
+
+
+async def _tarefa_transcricao_audio_e_opcional_ia(
+    *,
+    empresa_id: str,
+    telefone: str,
+    mensagem_id: uuid.UUID,
+    media_base64_para_whisper: str | None,
+    openai_api_key: str | None,
+    disparar_ia: bool,
+    conexao_id: str | None,
+    push_name: str | None,
+    background_tasks: BackgroundTasks | None,
+) -> None:
+    """
+    Atualiza apenas o campo `texto` da mensagem (tipo permanece `audio`).
+    Opcionalmente dispara o debouncer/IA com o texto transcrito.
+    """
+    try:
+        if media_base64_para_whisper and str(media_base64_para_whisper).strip():
+            texto_final = await _transcrever_audio(
+                media_base64_para_whisper, openai_api_key=openai_api_key
+            )
+        else:
+            texto_final = "[Erro ao transcrever: mídia de áudio indisponível]"
+        legado = "[Áudio Transcrito]:"
+        if legado in texto_final:
+            texto_final = texto_final.replace(legado, "", 1).strip()
+    except Exception as exc:
+        print(f"[WEBHOOK AUDIO] Falha na tarefa de transcrição: {sanitize_for_log(str(exc))}")
+        texto_final = "[Erro ao transcrever áudio]"
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(MensagemHistorico).where(MensagemHistorico.id == mensagem_id)
+        )
+        row = result.scalars().first()
+        if not row:
+            return
+        if str(row.tipo_mensagem or "").strip().lower() != "audio":
+            return
+        row.texto = texto_final or "[Erro ao transcrever áudio]"
+        await session.commit()
+        await session.refresh(row)
+        lead_id_str = str(row.lead_id)
+        payload = {
+            "id": str(row.id),
+            "texto": str(row.texto or ""),
+            "from_me": bool(row.from_me),
+            "tipo_mensagem": "audio",
+            "media_url": str(row.media_url) if row.media_url else None,
+            "criado_em": row.criado_em.isoformat() if row.criado_em else None,
+        }
+
+    await manager.broadcast_to_empresa(
+        str(empresa_id),
+        {
+            "type": "ATUALIZACAO_MENSAGEM",
+            "tipo_evento": "mensagem_atualizada",
+            "telefone": telefone,
+            "lead_id": lead_id_str,
+            "mensagem": payload,
+        },
+    )
+
+    if disparar_ia and (texto_final or "").strip():
+        msg = StandardMessage(
+            empresa_id=empresa_id,
+            canal="evolution",
+            identificador_origem=telefone,
+            conexao_id=conexao_id,
+            nome_contato=push_name,
+            texto_mensagem=str(texto_final).strip(),
+            is_human_agent=False,
+        )
+        if background_tasks is not None:
+            background_tasks.add_task(handle_debouncer, msg, background_tasks)
+        else:
+            asyncio.create_task(handle_debouncer(msg, None))
+
+
+async def get_conexao_id_por_tipo(
+    session,
+    empresa_uuid: uuid.UUID,
+    tipo: TipoConexao,
+    nome_instancia: str | None = None,
+) -> str | None:
+    status_validos = {status.lower() for status in EVOLUTION_WEBHOOK_STATUS_VALIDOS}
+    result = await session.execute(
+        select(Conexao).where(
+            Conexao.empresa_id == empresa_uuid,
+            Conexao.tipo == tipo,
+            func.lower(Conexao.status).in_(status_validos),
+        )
+    )
+    conexoes = result.scalars().all()
+
+    if not conexoes:
+        return None
+
+    if nome_instancia:
+        for conexao in conexoes:
+            credenciais = conexao.credenciais or {}
+            evolution_instance = credenciais.get("evolution_instance")
+            if evolution_instance == nome_instancia or conexao.nome_instancia == nome_instancia:
+                return str(conexao.id)
+        return None
+
+    return str(conexoes[0].id) if conexoes else None
+
+
+async def _broadcast_status_ia_lead(empresa_id: str, lead_id: str, ia_ativa: bool) -> None:
+    """Sincroniza o toggle «IA Ativa» do painel via WebSocket."""
+    await manager.broadcast_to_empresa(
+        str(empresa_id),
+        {
+            "type": "STATUS_IA_CHANGED",
+            "tipo_evento": "status_ia_changed",
+            "lead_id": str(lead_id),
+            "payload": {
+                "lead_id": str(lead_id),
+                "ia_ativa": bool(ia_ativa),
+            },
+        },
+    )
+
+
+async def save_history_and_check_pause(
+    empresa_id: str,
+    telefone: str,
+    texto: str,
+    from_me: bool,
+    conexao_id: str | None = None,
+    nome_contato: str | None = None,
+    tipo_mensagem: str = "text",
+    media_url: str | None = None,
+    gclid: str | None = None,
+    fbclid: str | None = None,
+    profile_pic_url: str | None = None,
+    evolution_message_id: str | None = None,
+) -> Tuple[bool, uuid.UUID]:
+    def _normalize_stage_name(value: str | None) -> str:
+        texto = str(value or "").strip().lower()
+        texto = unicodedata.normalize("NFKD", texto)
+        return "".join(ch for ch in texto if not unicodedata.combining(ch))
+
+    should_process = True
+    lead_criado_ou_identidade_atualizada = False
+    lead_payload_atualizacao: dict[str, Any] | None = None
+    notificar_ia_desligada = False
+    async with AsyncSessionLocal() as session:
+        empresa_uuid = uuid.UUID(empresa_id)
+        try:
+            conexao_uuid = uuid.UUID(conexao_id) if conexao_id else None
+        except (ValueError, TypeError):
+            conexao_uuid = None
+        # ── UPSERT seguro via app.services.lead_service ─────────────────────
+        # Centraliza criação/busca de lead com advisory lock para impedir
+        # duplicação por race condition (mensagens em paralelo do mesmo número).
+        from app.services.lead_service import (
+            get_or_create_lead,
+            precisa_atualizar_nome,
+            sanitize_telefone,
+        )
+
+        nome_contato_limpo = str(nome_contato or "").strip()
+        profile_pic_limpa = str(profile_pic_url or "").strip() or None
+        agora = datetime.utcnow()
+        telefone_sanitizado = sanitize_telefone(telefone)
+
+        lead, lead_criado = await get_or_create_lead(
+            session,
+            empresa_id=empresa_uuid,
+            telefone=telefone,
+            nome_inicial=nome_contato_limpo or telefone_sanitizado or "Usuário (Auto)",
+            extras={
+                "foto_url": profile_pic_limpa,
+                "foto_atualizada_em": agora if profile_pic_limpa else None,
+                "gclid": gclid,
+                "fbclid": fbclid,
+            },
+        )
+
+        if lead_criado:
+            await session.commit()
+            await session.refresh(lead)
+            lead_criado_ou_identidade_atualizada = True
+            lead_payload_atualizacao = {
+                "id": str(lead.id),
+                "nome": str(lead.nome_contato or ""),
+                "telefone": str(lead.telefone_contato or ""),
+                "foto_url": str(lead.foto_url) if lead.foto_url else None,
+            }
+        else:
+            lead_alterado = False
+            identidade_lead_atualizada = False
+            if nome_contato_limpo and precisa_atualizar_nome(lead.nome_contato, telefone_sanitizado):
+                lead.nome_contato = nome_contato_limpo
+                lead_alterado = True
+                identidade_lead_atualizada = True
+            if profile_pic_limpa and profile_pic_limpa != str(lead.foto_url or "").strip():
+                lead.foto_url = profile_pic_limpa
+                lead.foto_atualizada_em = agora
+                lead_alterado = True
+                identidade_lead_atualizada = True
+            if not from_me:
+                if gclid and lead.gclid != gclid:
+                    lead.gclid = gclid
+                    lead_alterado = True
+                if fbclid and lead.fbclid != fbclid:
+                    lead.fbclid = fbclid
+                    lead_alterado = True
+                result_etapas = await session.execute(
+                    select(CRMEtapa.id, CRMEtapa.nome, CRMEtapa.tipo)
+                    .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                    .where(CRMFunil.empresa_id == empresa_uuid)
+                    .order_by(CRMEtapa.ordem.asc())
+                )
+                etapa_atendimento_id = None
+                etapa_atual_nome = None
+                etapa_atual_tipo = None
+                for etapa_id, etapa_nome, etapa_tipo in result_etapas.all():
+                    tipo_norm = str(etapa_tipo or "").strip().lower()
+                    if etapa_id == lead.etapa_id:
+                        etapa_atual_nome = str(etapa_nome or "")
+                        etapa_atual_tipo = tipo_norm
+                    if etapa_atendimento_id is None and tipo_norm == "atendimento":
+                        etapa_atendimento_id = etapa_id
+                etapa_atual_fechada = False
+                if etapa_atual_tipo:
+                    etapa_atual_fechada = "fechamento" in etapa_atual_tipo or etapa_atual_tipo in (
+                        "fechado",
+                        "fechamento",
+                    )
+                if not etapa_atual_fechada and etapa_atual_nome:
+                    etapa_atual_norm = _normalize_stage_name(etapa_atual_nome)
+                    etapa_atual_fechada = ("fechado" in etapa_atual_norm) or ("concluido" in etapa_atual_norm)
+                if etapa_atendimento_id and lead.etapa_id != etapa_atendimento_id and not etapa_atual_fechada:
+                    lead.etapa_id = etapa_atendimento_id
+                    lead_alterado = True
+            if not lead.etapa_id:
+                result_etapa = await session.execute(
+                    select(CRMEtapa.id)
+                    .join(CRMFunil, CRMFunil.id == CRMEtapa.funil_id)
+                    .where(CRMFunil.empresa_id == empresa_uuid)
+                    .order_by(CRMEtapa.ordem.asc())
+                )
+                primeira_etapa_id = result_etapa.scalars().first()
+                if primeira_etapa_id:
+                    lead.etapa_id = primeira_etapa_id
+                    lead_alterado = True
+            if lead_alterado:
+                await session.commit()
+                if identidade_lead_atualizada:
+                    lead_criado_ou_identidade_atualizada = True
+                    lead_payload_atualizacao = {
+                        "id": str(lead.id),
+                        "nome": str(lead.nome_contato or ""),
+                        "telefone": str(lead.telefone_contato or ""),
+                        "foto_url": str(lead.foto_url) if lead.foto_url else None,
+                    }
+
+        if lead_criado_ou_identidade_atualizada and lead_payload_atualizacao:
+            await manager.broadcast_to_empresa(
+                str(empresa_id),
+                {
+                    "tipo_evento": "atualizacao_lead",
+                    "lead": lead_payload_atualizacao,
+                    "lead_id": str(lead.id),
+                    "telefone": str(lead.telefone_contato or telefone or ""),
+                },
+            )
+
+        operational = None
+        if conexao_uuid:
+            try:
+                from app.services.operational_identity import ensure_operational_conversation
+
+                operational = await ensure_operational_conversation(
+                    session,
+                    empresa_id=empresa_uuid,
+                    conexao_id=conexao_uuid,
+                    external_contact_id=telefone_sanitizado or telefone,
+                    lead=lead,
+                    direction="outbound" if from_me else "inbound",
+                    message_at=agora,
+                    display_name=nome_contato_limpo,
+                    metadata={"webhook": "evolution"},
+                )
+            except Exception as exc:
+                print(f"[WEBHOOK EVOLUTION] Aviso: persistencia operacional multicanal ignorada: {sanitize_for_log(str(exc))}")
+
+        # Salvar no histórico (sempre após garantir que o lead existe)
+        nova_msg = MensagemHistorico(
+            empresa_id=empresa_uuid,
+            lead_id=lead.id,
+            conexao_id=conexao_uuid,
+            channel_conversation_id=getattr(getattr(operational, "conversation", None), "id", None),
+            channel=getattr(getattr(operational, "channel", None), "value", None),
+            provider=getattr(getattr(operational, "provider", None), "value", None),
+            external_message_id=evolution_message_id,
+            external_conversation_id=getattr(getattr(operational, "conversation", None), "external_conversation_id", None),
+            direction="outbound" if from_me else "inbound",
+            message_status="sent" if from_me else "received",
+            provider_status="sent" if from_me else "received",
+            texto=texto,
+            tipo_mensagem=tipo_mensagem,
+            media_url=media_url,
+            origem_mensagem="humano" if from_me else "cliente",
+            from_me=from_me
+        )
+        session.add(nova_msg)
+        await session.flush()
+
+        now = datetime.utcnow()
+        status_atendimento = str(lead.status_atendimento or "").strip().lower()
+        eco_do_backend = False
+
+        # Trava de segurança: lead concluido nao deve receber resposta automatica
+        # na primeira mensagem apos reabertura.
+        if status_atendimento == "concluido":
+            should_process = False
+            if not from_me:
+                lead.status_atendimento = "aberto"
+        
+        if from_me:
+            from app.services.outbound_origin_tracker import outbound_mensagem_veio_do_backend
+
+            eco_do_backend = await outbound_mensagem_veio_do_backend(
+                empresa_id,
+                telefone,
+                message_id=evolution_message_id,
+                texto=texto,
+            )
+            should_process = False
+            if not eco_do_backend:
+                # Intervenção humana real (app físico WhatsApp): trava única em ia_ativa.
+                if bool(getattr(lead, "ia_ativa", True)):
+                    lead.ia_ativa = False
+                    notificar_ia_desligada = True
+        else:
+            if is_ai_blocked(lead, now=now):
+                should_process = False
+
+        try:
+            from app.services.followup_engine import registrar_followup_contact_created, registrar_followup_message_event
+
+            if operational is not None:
+                if not (from_me and eco_do_backend):
+                    await registrar_followup_message_event(
+                        session,
+                        empresa_id=empresa_uuid,
+                        lead=lead,
+                        contact=operational.contact,
+                        conversation=operational.conversation,
+                        conexao_id=operational.conexao_id,
+                        provider=operational.provider.value,
+                        channel=operational.channel.value,
+                        from_me=from_me,
+                        message=nova_msg,
+                        message_at=now,
+                    )
+                if not from_me and lead_criado:
+                    await registrar_followup_contact_created(
+                        session,
+                        empresa_id=empresa_uuid,
+                        lead=lead,
+                        contact=operational.contact,
+                        conversation=operational.conversation,
+                        conexao_id=operational.conexao_id,
+                        provider=operational.provider.value,
+                        channel=operational.channel.value,
+                        created_at=now,
+                    )
+        except Exception as followup_exc:
+            print(f"[WEBHOOK EVOLUTION] Aviso: follow-up ignorado: {sanitize_for_log(str(followup_exc))}")
+                
+        await session.commit()
+
+        if notificar_ia_desligada:
+            await _broadcast_status_ia_lead(empresa_id, str(lead.id), False)
+        mensagem_payload = {
+            "id": str(nova_msg.id),
+            "texto": str(nova_msg.texto or ""),
+            "from_me": bool(nova_msg.from_me),
+            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
+            "origem_mensagem": nova_msg.origem_mensagem,
+            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
+            "criado_em": nova_msg.criado_em.isoformat() if nova_msg.criado_em else None,
+        }
+        tipo_evento = "nova_mensagem_outbound" if from_me else "nova_mensagem_inbound"
+        await manager.broadcast_to_empresa(
+            str(empresa_id),
+            {
+                "type": "NOVA_MENSAGEM",
+                "tipo_evento": tipo_evento,
+                "telefone": telefone,
+                "lead_id": str(lead.id),
+                "mensagem": mensagem_payload,
+            },
+        )
+                
+    return should_process, nova_msg.id
+
+
+@router.post("/{empresa_id}/meta", dependencies=[Depends(require_legacy_meta_signature)])
+async def webhook_meta(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
+    identificador = payload.get("from", "5511999999999")
+    texto_bruto = payload.get("text", {}).get("body", "Mensagem de teste (Meta)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
+    
+    should_process, persisted_message_id = await save_history_and_check_pause(
+        empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
+    )
+    
+    if should_process:
+        msg = StandardMessage(
+            empresa_id=empresa_id, 
+            canal="meta",
+            identificador_origem=identificador,
+            texto_mensagem=texto,
+            is_human_agent=False,
+            metadata={"persisted_message_id": str(persisted_message_id)},
+        )
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
+    
+    return {"status": "received"}
+
+
+async def _processar_webhook_evolution_background(
+    empresa_id: str,
+    payload: Dict[Any, Any],
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Processamento pesado (DB, mídia, debouncer) — executado após 200 OK ao Evolution."""
+    print(f"\n[WEBHOOK EVOLUTION][BG] Processando empresa={empresa_id}")
+    try:
+        data = payload.get("data", {}) or {}
+        if isinstance(data, list):
+            data = data[0] if data and isinstance(data[0], dict) else {}
+        if not isinstance(data, dict):
+            data = {}
+        key = data.get("key", {}) or {}
+        message = data.get("message", {}) or {}
+        payload_download = {"key": data.get("key"), "message": data.get("message")}
+        push_name = str(data.get("pushName") or payload.get("pushName") or "").strip() or None
+        profile_pic_url = _extrair_profile_pic_url(payload, data)
+        instance_name = payload.get("instance") or payload.get("instanceName") or data.get("instance")
+        print(f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | Empresa: {empresa_id}")
+
+        fromMe = bool(key.get("fromMe", False))
+        evolution_message_id = extrair_message_id_evolution(payload) or str(key.get("id") or "").strip() or None
+        remote_jid = key.get("remoteJid", "")
+        telefone = _normalizar_telefone_remote_jid(remote_jid)
+        if not telefone:
+            print(f"DEBUG: Formato de mensagem desconhecido (remoteJid inválido: {remote_jid})")
+            telefone = "0000000000"
+
+        print(
+            f"[WEBHOOK] Mensagem recebida da Instância: {instance_name or 'desconhecida'} | "
+            f"Empresa: {empresa_id} | Telefone: {_mask_phone(telefone)}"
+        )
+        empresa_uuid = uuid.UUID(empresa_id)
+
+        async with AsyncSessionLocal() as session:
+            conexao_id = await get_conexao_id_por_tipo(
+                session,
+                empresa_uuid,
+                TipoConexao.EVOLUTION,
+                nome_instancia=instance_name,
+            )
+            if instance_name and not conexao_id:
+                print(f"[WEBHOOK EVOLUTION] Nenhuma conexão ativa encontrada para instance='{instance_name}' na empresa {empresa_id}")
+
+        texto = extrair_conteudo_mensagem(data)
+        texto_limpo, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto)
+        tipo_mensagem = _extrair_tipo_mensagem(data)
+        media_meta = _media_metadata_evolution(message, tipo_mensagem)
+        if texto == "[Mensagem não suportada]":
+            print("DEBUG: Formato de mensagem desconhecido")
+
+        if tipo_mensagem == "audio":
+            from app.services.evolution_service import get_base64_media
+
+            # Prioridade 1: usa base64 já recebido no payload (evita double fetch)
+            media_base64_audio = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            ) or None
+
+            # Fallback: baixa mídia somente se base64 não vier no webhook
+            if not media_base64_audio:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        media_base64_audio = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar áudio (fallback): {sanitize_for_log(str(e))}")
+
+            openai_key = None
+            try:
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+                    empresa = result.scalars().first()
+                    if empresa and empresa.credenciais_canais:
+                        openai_key = empresa.credenciais_canais.get("openai_api_key")
+                    if empresa and not openai_key:
+                        openai_key = str(getattr(empresa, "openai_api_key", "") or "").strip() or None
+            except Exception as e:
+                print(f"[WEBHOOK EVOLUTION] Erro ao buscar credencial OpenAI: {sanitize_for_log(str(e))}")
+
+            mime_audio = _mimetype_audio_evolution(message)
+            media_url_playable = _build_playable_audio_media_url(media_base64_audio, mime_audio)
+
+            should_process, msg_uuid = await save_history_and_check_pause(
+                empresa_id,
+                telefone,
+                TEXTO_AUDIO_TRANSCRICAO_PENDENTE,
+                fromMe,
+                conexao_id,
+                nome_contato=push_name,
+                tipo_mensagem="audio",
+                media_url=media_url_playable,
+                gclid=gclid,
+                fbclid=fbclid,
+                profile_pic_url=profile_pic_url,
+                evolution_message_id=evolution_message_id,
+            )
+
+            background_tasks.add_task(
+                _tarefa_transcricao_audio_e_opcional_ia,
+                empresa_id=empresa_id,
+                telefone=telefone,
+                mensagem_id=msg_uuid,
+                media_base64_para_whisper=media_base64_audio,
+                openai_api_key=openai_key,
+                disparar_ia=bool(should_process),
+                conexao_id=conexao_id,
+                push_name=push_name,
+                background_tasks=background_tasks,
+            )
+
+            if not fromMe:
+                asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
+
+            return
+
+        media_base64 = None
+        if tipo_mensagem == "image":
+            # Prioridade 1: base64 já enviado diretamente no payload do webhook.
+            media_payload = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            )
+            if media_payload:
+                if media_payload.startswith("data:image"):
+                    media_base64 = media_payload
+                else:
+                    media_base64 = f"data:image/jpeg;base64,{media_payload}"
+
+            # Fallback: tenta baixar mídia apenas se não veio base64 no payload.
+            if not media_base64:
+                try:
+                    from app.services.evolution_service import get_base64_media
+
+                    async with AsyncSessionLocal() as session:
+                        media_base64 = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar imagem (fallback): {sanitize_for_log(str(e))}")
+
+        elif tipo_mensagem == "video":
+            media_payload = (
+                str((data or {}).get("base64") or "").strip()
+                or str(((data or {}).get("message", {}) or {}).get("base64") or "").strip()
+            )
+            if media_payload:
+                if media_payload.lower().startswith("data:video"):
+                    media_base64 = media_payload
+                elif media_payload.startswith("data:"):
+                    media_base64 = media_payload
+                else:
+                    media_base64 = f"data:video/mp4;base64,{media_payload}"
+
+            if not media_base64:
+                try:
+                    from app.services.evolution_service import get_base64_media
+
+                    async with AsyncSessionLocal() as session:
+                        raw_vid = await get_base64_media(
+                            empresa_uuid, payload_download, session, conexao_id=conexao_id
+                        )
+                    if raw_vid:
+                        rs = str(raw_vid).strip()
+                        if rs.lower().startswith("data:video") or rs.startswith("data:"):
+                            media_base64 = rs
+                        else:
+                            media_base64 = f"data:video/mp4;base64,{rs}"
+                except Exception as e:
+                    print(f"[WEBHOOK EVOLUTION] Erro ao baixar vídeo (fallback): {sanitize_for_log(str(e))}")
+
+        elif tipo_mensagem == "document":
+            try:
+                from app.services.evolution_service import get_base64_media
+
+                async with AsyncSessionLocal() as session:
+                    media_base64 = await get_base64_media(
+                        empresa_uuid, payload_download, session, conexao_id=conexao_id
+                    )
+            except Exception as e:
+                print(f"[WEBHOOK EVOLUTION] Erro ao baixar midia ({tipo_mensagem}): {sanitize_for_log(str(e))}")
+
+        should_process, persisted_message_id = await save_history_and_check_pause(
+            empresa_id,
+            telefone,
+            texto_limpo or "[Mensagem não suportada]",
+            fromMe,
+            conexao_id,
+            nome_contato=push_name,
+            tipo_mensagem=tipo_mensagem,
+            media_url=media_base64,
+            gclid=gclid,
+            fbclid=fbclid,
+            profile_pic_url=profile_pic_url,
+            evolution_message_id=evolution_message_id,
+        )
+
+        # Dispara atualização de foto somente após persistência/commit do lead no webhook.
+        if not fromMe:
+            asyncio.create_task(_atualizar_foto_lead_background(empresa_id, telefone))
+        
+        if should_process:
+            msg = StandardMessage(
+                empresa_id=empresa_id,
+                canal="evolution",
+                identificador_origem=telefone,
+                conexao_id=conexao_id,
+                nome_contato=push_name,
+                texto_mensagem=texto_limpo or "[Mensagem não suportada]",
+                is_human_agent=False,
+                tipo_mensagem=tipo_mensagem,
+                media_url=media_base64,
+                media_type=tipo_mensagem,
+                media_id=media_meta.get("media_id"),
+                media_mime_type=media_meta.get("media_mime_type"),
+                caption=media_meta.get("caption") or (texto_limpo if tipo_mensagem in {"image", "video"} else None),
+                has_image=tipo_mensagem == "image",
+                metadata={
+                    "persisted_message_id": str(persisted_message_id),
+                    "has_media": bool(media_base64),
+                    "media_type": tipo_mensagem,
+                    "media_id": media_meta.get("media_id"),
+                    "media_mime_type": media_meta.get("media_mime_type"),
+                    "caption": media_meta.get("caption") or (texto_limpo if tipo_mensagem in {"image", "video"} else None),
+                    "has_image": tipo_mensagem == "image",
+                    "image_analysis_available": False,
+                },
+            )
+            background_tasks.add_task(handle_debouncer, msg, background_tasks)
+
+    except Exception as e:
+        print(f"[WEBHOOK EVOLUTION][BG] Erro no processamento: {sanitize_for_log(str(e))}")
+
+
+@router.post("/{empresa_id}/evolution", dependencies=[Depends(require_evolution_webhook_token)])
+async def webhook_evolution(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
+    """
+    Recebe webhook Evolution: trava idempotente por message_id (Redis NX) na primeira
+    linha útil, responde 200 imediatamente e processa em background (evita retries).
+    """
+    event = str(payload.get("event") or "").strip()
+    if event != "messages.upsert":
+        return {"status": "ignored", "reason": f"Event {event} ignored"}
+
+    from app.api.main import redis_client
+
+    message_id = extrair_message_id_evolution(payload)
+    if not message_id:
+        message_id = fallback_message_id_evolution(payload)
+        print(
+            f"[WEBHOOK EVOLUTION] key.id ausente — trava por hash fallback "
+            f"(empresa={empresa_id}, id={message_id[:20]}...)"
+        )
+
+    if redis_client is None:
+        print("[WEBHOOK EVOLUTION] AVISO: Redis indisponível — trava idempotente por message_id desativada.")
+    else:
+        adquiriu = await adquirir_trava_webhook_mensagem(redis_client, empresa_id, message_id)
+        if not adquiriu:
+            print(
+                f"[WEBHOOK EVOLUTION] Duplicata ignorada message_id={message_id} "
+                f"empresa={empresa_id}"
+            )
+            return {"status": "duplicate", "message_id": message_id}
+
+    background_tasks.add_task(
+        _processar_webhook_evolution_background,
+        empresa_id,
+        payload,
+        background_tasks,
+    )
+    return {"status": "received", "message_id": message_id}
+
+
+@router.post("/{empresa_id}/telegram", dependencies=[Depends(require_telegram_webhook_token)])
+async def webhook_telegram(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
+    identificador = str(payload.get("message", {}).get("chat", {}).get("id", "123456789"))
+    texto_bruto = payload.get("message", {}).get("text", "Mensagem de teste (Telegram)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
+    
+    should_process, _ = await save_history_and_check_pause(
+        empresa_id, identificador, texto, False, gclid=gclid, fbclid=fbclid
+    )
+    
+    if should_process:
+        msg = StandardMessage(empresa_id=empresa_id, canal="telegram", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=False)
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
+    return {"status": "received"}
+
+
+@router.post("/{empresa_id}/chatwoot", dependencies=[Depends(require_chatwoot_webhook_token)])
+async def webhook_chatwoot(empresa_id: str, payload: Dict[Any, Any], background_tasks: BackgroundTasks):
+    sender_type = payload.get("sender", {}).get("type", "contact")
+    fromMe = (sender_type != "contact")
+    identificador = str(payload.get("conversation", {}).get("contact_inbox", {}).get("source_id", "cw-abc-123"))
+    texto_bruto = payload.get("content", "Mensagem de teste (Chatwoot)")
+    texto, gclid, fbclid = _extrair_rastreio_ads_e_limpar_texto(texto_bruto)
+    
+    should_process, _ = await save_history_and_check_pause(
+        empresa_id, identificador, texto, fromMe, gclid=gclid, fbclid=fbclid
+    )
+    
+    if should_process:
+        msg = StandardMessage(empresa_id=empresa_id, canal="chatwoot", identificador_origem=identificador, texto_mensagem=texto, is_human_agent=(sender_type == "user"))
+        background_tasks.add_task(handle_debouncer, msg, background_tasks)
+    return {"status": "received"}

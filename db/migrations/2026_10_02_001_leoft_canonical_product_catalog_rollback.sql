@@ -1,0 +1,11 @@
+BEGIN;
+ALTER TABLE leoft_sale_fulfillments DROP COLUMN IF EXISTS personalization_request_id;
+ALTER TABLE leoft_offer_fulfillments DROP COLUMN IF EXISTS canonical_offer_id;
+ALTER TABLE leoft_sale_fulfillments DROP CONSTRAINT IF EXISTS ck_leoft_sale_fulfillment_stage;
+ALTER TABLE leoft_sale_fulfillments ADD CONSTRAINT ck_leoft_sale_fulfillment_stage CHECK (current_stage IN ('received','sale_registered','contact_resolved','student_resolved','access_provisioned','program_assigned','crm_updated','post_sale_triggered','completed','manual_review'));
+ALTER TABLE leoft_sale_fulfillments DROP CONSTRAINT IF EXISTS ck_leoft_sale_fulfillment_post_sale;
+ALTER TABLE leoft_sale_fulfillments ADD CONSTRAINT ck_leoft_sale_fulfillment_post_sale CHECK (post_sale_status IN ('pending','queued','skipped','failed','sent','manual_review'));
+DROP TABLE IF EXISTS leoft_personalization_requests;
+DROP TABLE IF EXISTS leoft_offers;
+DROP TABLE IF EXISTS leoft_products;
+COMMIT;

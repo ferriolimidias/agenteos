@@ -1,0 +1,2 @@
+ALTER TABLE campanhas_disparo
+    ADD COLUMN IF NOT EXISTS ai_reply_enabled BOOLEAN NULL DEFAULT TRUE;

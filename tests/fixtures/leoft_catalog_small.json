@@ -1,0 +1,51 @@
+{
+  "version": "fixture-p2c-a1-1",
+  "metadata": {"purpose": "isolated PostgreSQL contract test"},
+  "entries": [
+    {
+      "catalog_id": "fixture-exercise-1",
+      "canonical_name": "Agachamento com barra",
+      "muscle_group": "quadriceps",
+      "equipment": "barbell",
+      "body_position": "standing",
+      "approval_status": "approved_by_ai",
+      "confidence": 0.99,
+      "source": "fixture",
+      "aliases": ["barbell squat", "agachamento barra"],
+      "media": [
+        {
+          "media_id": "fixture-media-1",
+          "media_type": "video",
+          "format": "mp4",
+          "mime_type": "video/mp4",
+          "storage_provider": "filesystem",
+          "storage_path": "fixture/leoft/exercise-1.mp4",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "signatures": [
+        {
+          "signature_key": "fixture-signature-squat",
+          "signature_version": "v1",
+          "signature_payload": {"movement": "squat", "fixture": true}
+        }
+      ]
+    },
+    {
+      "catalog_id": "fixture-exercise-2",
+      "canonical_name": "Agachamento frontal",
+      "muscle_group": "quadriceps",
+      "equipment": "barbell",
+      "body_position": "standing",
+      "approval_status": "pending_review",
+      "aliases": ["front squat"],
+      "signatures": [
+        {
+          "signature_key": "fixture-signature-front-squat",
+          "signature_version": "v1",
+          "signature_payload": {"movement": "front_squat", "fixture": true}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1191 @@
+import { useState, useEffect } from "react";
+import api from "../../services/api";
+import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText, ArrowRight, Activity } from "lucide-react";
+import RAGManager from "../../components/RAGManager";
+import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
+import { ActionButton, PageHeader, StatusBadge } from "../../components/ui";
+import { clearImpersonation } from "../../utils/auth";
+
+import { useNavigate } from "react-router-dom";
+
+export default function Empresas() {
+  const navigate = useNavigate();
+  const [empresas, setEmpresas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [showRagModal, setShowRagModal] = useState(false);
+  
+  // Modal de Credenciais
+  const [showCredenciaisModal, setShowCredenciaisModal] = useState(false);
+  const [empresaSelecionada, setEmpresaSelecionada] = useState(null);
+  const [activeIntegracaoTab, setActiveIntegracaoTab] = useState("conexoes");
+  const [credenciais, setCredenciais] = useState({
+    openai_api_key: ""
+  });
+  const [savingCredenciais, setSavingCredenciais] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Form State
+  const [formData, setFormData] = useState({
+    nome_empresa: "",
+    area_atuacao: "",
+    logo_url: "",
+    ia_personalidade: "",
+    ia_regras_negocio: "",
+    admin_nome: "",
+    admin_email: "",
+    admin_senha: ""
+  });
+
+  // Edit State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [empresaEdit, setEmpresaEdit] = useState(null);
+  const [editFormData, setEditFormData] = useState({
+    nome_empresa: "",
+    area_atuacao: "",
+    logo_url: ""
+  });
+
+  // Config IA State
+  const [showConfigIAModal, setShowConfigIAModal] = useState(false);
+  const [configIAData, setConfigIAData] = useState({
+    ia_personalidade: "",
+    ia_regras_negocio: "",
+    nome_agente: "",
+    mensagem_saudacao: "",
+    modelo_ia: "gpt-4o-mini",
+    followup_ativo: false,
+    limite_certeza: 0.65,
+    limite_duvida: 0.45,
+    max_agentes_desempate: 3,
+  });
+  const [loadingConfigIA] = useState(false);
+  const [savingConfigIA, setSavingConfigIA] = useState(false);
+  const [modelosDisponiveis, setModelosDisponiveis] = useState([]);
+  const [workerStatus, setWorkerStatus] = useState(null);
+  const [loadingWorkerStatus, setLoadingWorkerStatus] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [etapasFunil, setEtapasFunil] = useState([]);
+  const [loadingEtapasFunil, setLoadingEtapasFunil] = useState(false);
+  const [salvandoEtapaFunil, setSalvandoEtapaFunil] = useState(false);
+  const [novaEtapaNome, setNovaEtapaNome] = useState("");
+
+  const fetchEmpresas = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get("/empresas/");
+      setEmpresas(res.data);
+    } catch (err) {
+      console.error("Erro ao buscar empresas:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchModelosDisponiveis = async () => {
+    try {
+      const res = await api.get("/admin/modelos-ia");
+      setModelosDisponiveis(res.data);
+    } catch (err) {
+      console.error("Erro ao buscar modelos de IA:", err);
+    }
+  };
+
+  const fetchWorkerStatus = async ({ silent = false } = {}) => {
+    try {
+      if (!silent) {
+        setLoadingWorkerStatus(true);
+      }
+      const res = await api.get("/admin/workers/status");
+      setWorkerStatus(res.data || null);
+      setLastUpdate(Date.now());
+    } catch (err) {
+      console.error("Erro ao buscar status do worker:", err);
+      setWorkerStatus(null);
+    } finally {
+      if (!silent) {
+        setLoadingWorkerStatus(false);
+      }
+    }
+  };
+
+  const fetchEtapasFunil = async (empresaId) => {
+    if (!empresaId) return;
+    try {
+      setLoadingEtapasFunil(true);
+      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
+      const tags = Array.isArray(res.data) ? res.data : [];
+      const etapas = tags
+        .filter((tag) => tag?.tipo === "etapa_funil")
+        .sort((a, b) => {
+          const ordemA = Number.isFinite(Number(a?.ordem)) ? Number(a.ordem) : 9999;
+          const ordemB = Number.isFinite(Number(b?.ordem)) ? Number(b.ordem) : 9999;
+          if (ordemA !== ordemB) return ordemA - ordemB;
+          return String(a?.nome || "").localeCompare(String(b?.nome || ""));
+        });
+      setEtapasFunil(etapas);
+    } catch (err) {
+      console.error("Erro ao carregar etapas do funil:", err);
+      setEtapasFunil([]);
+    } finally {
+      setLoadingEtapasFunil(false);
+    }
+  };
+
+  const handleCriarEtapaFunil = async () => {
+    const nome = String(novaEtapaNome || "").trim();
+    if (!empresaSelecionada?.id || !nome) return;
+    try {
+      setSalvandoEtapaFunil(true);
+      const maiorOrdem = etapasFunil.reduce((acc, item) => {
+        const ordem = Number(item?.ordem);
+        return Number.isFinite(ordem) ? Math.max(acc, ordem) : acc;
+      }, 0);
+      await api.post(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais`, {
+        nome,
+        tipo: "etapa_funil",
+        ativa_no_funil: true,
+        ordem: maiorOrdem + 1,
+      });
+      setNovaEtapaNome("");
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao criar etapa do funil:", err);
+      alert("Erro ao criar etapa do funil.");
+    } finally {
+      setSalvandoEtapaFunil(false);
+    }
+  };
+
+  const handleEditarEtapaFunil = async (etapa) => {
+    if (!empresaSelecionada?.id || !etapa?.id) return;
+    const novoNome = window.prompt("Nome da etapa:", etapa.nome || "");
+    if (novoNome === null) return;
+    const nomeLimpo = String(novoNome || "").trim();
+    if (!nomeLimpo) return;
+    const novaOrdemRaw = window.prompt("Ordem da etapa:", String(etapa.ordem ?? ""));
+    if (novaOrdemRaw === null) return;
+    const novaOrdem = parseInt(novaOrdemRaw, 10);
+    try {
+      await api.put(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`, {
+        nome: nomeLimpo,
+        tipo: "etapa_funil",
+        ativa_no_funil: true,
+        ordem: Number.isFinite(novaOrdem) ? novaOrdem : etapa.ordem,
+      });
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao editar etapa do funil:", err);
+      alert("Erro ao editar etapa do funil.");
+    }
+  };
+
+  const handleExcluirEtapaFunil = async (etapa) => {
+    if (!empresaSelecionada?.id || !etapa?.id) return;
+    if (!window.confirm(`Excluir a etapa "${etapa.nome}"?`)) return;
+    try {
+      await api.delete(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`);
+      await fetchEtapasFunil(empresaSelecionada.id);
+    } catch (err) {
+      console.error("Erro ao excluir etapa do funil:", err);
+      alert("Erro ao excluir etapa do funil.");
+    }
+  };
+
+  useEffect(() => {
+    fetchEmpresas();
+    fetchModelosDisponiveis();
+    fetchWorkerStatus();
+
+    const intervalId = setInterval(() => {
+      fetchWorkerStatus({ silent: true });
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const tickId = setInterval(() => {
+      setNowTick(Date.now());
+    }, 15000);
+    return () => {
+      clearInterval(tickId);
+    };
+  }, []);
+
+  const getLastUpdateLabel = () => {
+    if (!lastUpdate) return "Atualização ainda não realizada";
+    const diffMs = Math.max(0, nowTick - lastUpdate);
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) {
+      return `Atualizado há ${diffSec} segundo${diffSec === 1 ? "" : "s"}`;
+    }
+    const diffMin = Math.floor(diffSec / 60);
+    return `Atualizado há ${diffMin} minuto${diffMin === 1 ? "" : "s"}`;
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData({ ...formData, logo_url: reader.result });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleEditChange = (e) => {
+    const { name, value } = e.target;
+    setEditFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleEditLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditFormData({ ...editFormData, logo_url: reader.result });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const openEditModal = (emp) => {
+    setEmpresaEdit(emp);
+    setEditFormData({
+      nome_empresa: emp.nome_empresa || "",
+      area_atuacao: emp.area_atuacao || "",
+      logo_url: emp.logo_url || ""
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await api.put(`/empresas/${empresaEdit.id}`, editFormData);
+      setShowEditModal(false);
+      fetchEmpresas();
+    } catch (err) {
+      alert("Erro ao atualizar cliente.");
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (empId) => {
+    if (window.confirm("Tem certeza? Isso apagará todos os dados deste cliente!")) {
+      try {
+        await api.delete(`/empresas/${empId}`);
+        fetchEmpresas();
+      } catch (err) {
+        alert("Erro ao excluir cliente.");
+        console.error(err);
+      }
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+
+    try {
+      await api.post("/empresas/setup", formData);
+      setShowModal(false);
+      setFormData({
+        nome_empresa: "",
+        area_atuacao: "",
+        logo_url: "",
+        ia_personalidade: "",
+        ia_regras_negocio: "",
+        admin_nome: "",
+        admin_email: "",
+        admin_senha: ""
+      });
+      fetchEmpresas(); // Recarrega a lista
+    } catch (err) {
+      console.error("Erro no setup:", err);
+      // Extrai detalhe exato do backend se houver (ex: Erro banco de dados: ...)
+      if (err.response && err.response.data && err.response.data.detail) {
+        setError(err.response.data.detail);
+      } else {
+        setError("Erro de conexão ao servidor. Tente novamente.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleConexaoDisparoUpdated = (nextConfig) => {
+    setEmpresaSelecionada((prev) => (
+      prev ? { ...prev, ...nextConfig } : prev
+    ));
+    setEmpresas((prev) => prev.map((empresa) => (
+      empresa.id === empresaSelecionada?.id
+        ? { ...empresa, ...nextConfig }
+        : empresa
+    )));
+  };
+
+  const handleSaveCredenciais = async (e) => {
+    e.preventDefault();
+    try {
+      setSavingCredenciais(true);
+      await api.put(`/empresas/${empresaSelecionada.id}/credenciais`, credenciais);
+      alert("Credenciais salvas com sucesso!");
+      setShowCredenciaisModal(false);
+      fetchEmpresas();
+    } catch (err) {
+      alert("Erro ao salvar credenciais");
+      console.error(err);
+    } finally {
+      setSavingCredenciais(false);
+    }
+  };
+
+  const handleSaveConfigIA = async (e) => {
+    e.preventDefault();
+    setSavingConfigIA(true);
+    try {
+      await api.put(`/empresas/${empresaSelecionada.id}/ia-config`, configIAData);
+      alert("Configuração do Agente salva com sucesso!");
+      setShowConfigIAModal(false);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao salvar a configuração do Agente.");
+    } finally {
+      setSavingConfigIA(false);
+    }
+  };
+
+  const handleImpersonate = async (emp) => {
+    try {
+      const res = await api.post(`/auth/impersonate/${emp.id}`);
+      const data = res.data;
+      const currentUser = localStorage.getItem("user");
+      const currentToken = localStorage.getItem("token");
+
+      // Mantém a identidade autenticada original e troca apenas o tenant ativo.
+      clearImpersonation();
+      if (currentUser) {
+        localStorage.setItem("original_user", currentUser);
+      }
+      if (currentToken && currentToken !== "null" && currentToken !== "undefined") {
+        localStorage.setItem("original_token", currentToken);
+      }
+      localStorage.setItem("impersonating", "true");
+      localStorage.setItem("impersonating_empresa", emp.nome_empresa);
+      localStorage.setItem("impersonated_empresa_id", emp.id);
+      if (data?.usuario?.id) {
+        localStorage.setItem("impersonated_user_id", data.usuario.id);
+      }
+
+      window.location.href = "/painel"; // Full reload to clear states and trigger layout update
+    } catch (err) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Erro ao tentar personificar cliente.");
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Clientes / Empresas"
+        description="Gerencie tenants, acessos, credenciais, base de conhecimento e configurações operacionais."
+        icon={Building}
+        eyebrow="Super Admin"
+        actions={
+          <ActionButton
+            type="button"
+          onClick={() => setShowModal(true)}
+            icon={Plus}
+          >
+            Novo cliente
+          </ActionButton>
+        }
+      />
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
+              <Activity size={16} className="text-indigo-600" />
+              Saúde do Sistema
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">Monitoramento do Worker de Follow-up</p>
+          </div>
+          <button
+            type="button"
+            onClick={fetchWorkerStatus}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Atualizar
+          </button>
+        </div>
+        <div className="mt-4">
+          {loadingWorkerStatus ? (
+            <p className="text-xs text-slate-500">Carregando status do worker...</p>
+          ) : (() => {
+              const ultima = workerStatus?.ultima_execucao ? new Date(workerStatus.ultima_execucao) : null;
+              const ativo = !!(ultima && (Date.now() - ultima.getTime()) < 3 * 60 * 1000);
+              return (
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <StatusBadge tone={ativo ? "active" : "danger"}>
+                    {ativo ? "Worker Ativo" : "Worker Inativo"}
+                  </StatusBadge>
+                  <span className="text-slate-600">
+                    Leads processados hoje: <strong>{Number(workerStatus?.leads_processados_hoje || 0)}</strong>
+                  </span>
+                  <span className="text-slate-500">
+                    Erros recentes: <strong>{Number(workerStatus?.erros_recentes || 0)}</strong>
+                  </span>
+                  <span className="text-slate-500">
+                    Lock: {workerStatus?.status_lock || "N/A"}
+                  </span>
+                </div>
+              );
+            })()}
+        </div>
+        <div className="mt-3 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+          {getLastUpdateLabel()}
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs whitespace-nowrap">
+            <thead className="border-b border-slate-200 bg-slate-50 font-semibold uppercase tracking-wider text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Cliente</th>
+                <th className="px-4 py-3">Área</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Tenant ID</th>
+                <th className="px-4 py-3 text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700">
+              {loading ? (
+                <tr>
+                  <td colSpan="5" className="px-4 py-8 text-center text-slate-500">Carregando empresas...</td>
+                </tr>
+              ) : empresas.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="px-4 py-8 text-center text-slate-500">Nenhum cliente cadastrado.</td>
+                </tr>
+              ) : (
+                empresas.map((emp) => (
+                  <tr key={emp.id} className="transition-colors hover:bg-slate-50">
+                    <td className="px-4 py-3 font-medium">
+                      <div className="flex items-center space-x-3">
+                      {emp.logo_url ? (
+                        <img
+                          src={emp.logo_url}
+                          alt={`Logo de ${emp.nome_empresa}`}
+                          className="w-7 h-7 rounded-md object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
+                          <Building size={14} />
+                        </div>
+                      )}
+                      <span className="text-sm">{emp.nome_empresa}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-500">
+                      <div className="flex items-center space-x-2">
+                        {emp.area_atuacao ? (
+                          <>
+                            <MapPin size={12} />
+                            <span>{emp.area_atuacao}</span>
+                          </>
+                        ) : (
+                          <span className="italic text-slate-400">Não informada</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge tone="active">Ativo</StatusBadge>
+                    </td>
+                    <td className="max-w-[180px] truncate px-4 py-3 font-mono text-[11px] text-slate-400">
+                      {emp.id}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => navigate(`/admin/empresas/${emp.id}`)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
+                          title="Gerenciar Empresa"
+                        >
+                          Gerenciar <ArrowRight size={13} />
+                        </button>
+                        <button 
+                          onClick={() => handleImpersonate(emp)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700"
+                          title="Acessar Painel (Impersonate)"
+                        >
+                          <UserCheck size={14} />
+                        </button>
+                        <button 
+                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=agente`)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-purple-50 hover:text-purple-700"
+                          title="Configuração do Agente"
+                        >
+                          <Brain size={14} />
+                        </button>
+                        <button 
+                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=conhecimento`)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-orange-50 hover:text-orange-700"
+                          title="Treinamento RAG"
+                        >
+                          <FileText size={14} />
+                        </button>
+                        <button 
+                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=canais`)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                          title="Configurar Integrações"
+                        >
+                          <Settings size={14} />
+                        </button>
+                        <button 
+                          onClick={() => openEditModal(emp)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
+                          title="Editar Cliente"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(emp.id)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-700"
+                          title="Excluir Cliente"
+                        >
+                          <Trash size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal Novo Cliente */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
+              <h2 className="text-xl font-bold text-white tracking-tight">Setup de Novo Cliente</h2>
+              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto custom-scrollbar">
+              {error && (
+                <div className="mb-6 p-3 bg-red-900/30 border border-red-800 text-red-300 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
+              
+              <form id="setup-form" onSubmit={handleSubmit} className="space-y-6">
+                
+                {/* Dados da Empresa */}
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Building size={16} /> Dados da Empresa
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome da Empresa *</label>
+                      <input 
+                        required name="nome_empresa" value={formData.nome_empresa} onChange={handleChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                        placeholder="Ex: Clínica Sorriso"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Área de Atuação</label>
+                      <input 
+                        name="area_atuacao" value={formData.area_atuacao} onChange={handleChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                        placeholder="Ex: Saúde / Odontologia"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
+                      <div className="flex items-center gap-4 mt-1">
+                        {formData.logo_url && (
+                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
+                            <img src={formData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
+                          </div>
+                        )}
+                        <input
+                          type="file"
+                          accept=".png, .jpg, .jpeg, .svg"
+                          onChange={handleLogoUpload}
+                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-800 my-2"></div>
+
+                {/* Configuração Inicial da IA */}
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Brain size={16} /> Instruções da IA
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Identidade e Tom de Voz</label>
+                      <textarea
+                        name="ia_personalidade"
+                        value={formData.ia_personalidade}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="Ex: Você é a Gabi, consultora da clínica. Fale de forma acolhedora, empática e use emojis curtos."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Diretrizes de Atendimento e Vendas</label>
+                      <textarea
+                        name="ia_regras_negocio"
+                        value={formData.ia_regras_negocio}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder="Ex: Nunca dê descontos. Sempre tente descobrir o curso de interesse. Responda dúvidas de forma direta."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-800 my-2"></div>
+
+                {/* Dados do Admin */}
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <User size={16} /> Dados do Administrador
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Responsável *</label>
+                      <input 
+                        required name="admin_nome" value={formData.admin_nome} onChange={handleChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                        placeholder="João da Silva"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Email de Login *</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <LogIn size={16} className="text-gray-500" />
+                        </div>
+                        <input 
+                          type="email" required name="admin_email" value={formData.admin_email} onChange={handleChange}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                          placeholder="joao@clinica.com"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Senha Inicial *</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <KeyRound size={16} className="text-gray-500" />
+                        </div>
+                        <input 
+                          type="text" required name="admin_senha" value={formData.admin_senha} onChange={handleChange}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                          placeholder="Senha de acesso"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </form>
+            </div>
+            
+            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3">
+              <button 
+                type="button" onClick={() => setShowModal(false)}
+                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
+                disabled={submitting}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit" form="setup-form" disabled={submitting}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {submitting ? "Criando ambiente..." : "Concluir Setup"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editar Cliente */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
+              <h2 className="text-xl font-bold text-white tracking-tight">Editar Cliente</h2>
+              <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <form id="edit-form" onSubmit={handleEditSubmit} className="space-y-6">
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Building size={16} /> Dados da Empresa
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome da Empresa *</label>
+                      <input 
+                        required name="nome_empresa" value={editFormData.nome_empresa} onChange={handleEditChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Área de Atuação</label>
+                      <input 
+                        name="area_atuacao" value={editFormData.area_atuacao} onChange={handleEditChange}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
+                      <div className="flex items-center gap-4 mt-1">
+                        {editFormData.logo_url && (
+                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
+                            <img src={editFormData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
+                          </div>
+                        )}
+                        <input
+                          type="file"
+                          accept=".png, .jpg, .jpeg, .svg"
+                          onChange={handleEditLogoUpload}
+                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+            
+            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3">
+              <button 
+                type="button" onClick={() => setShowEditModal(false)}
+                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
+                disabled={submitting}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit" form="edit-form" disabled={submitting}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {submitting ? "Salvando..." : "Salvar Alterações"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INTEGRAÇÕES E CONEXÕES */}
+      {showCredenciaisModal && empresaSelecionada && (
+        <div className="fixed inset-0 bg-gray-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                  <Settings className="text-gray-500" size={24} />
+                  Integrações e Canais
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
+              </div>
+              <button 
+                onClick={() => setShowCredenciaisModal(false)}
+                className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="border-b border-gray-100 px-6 pt-4">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveIntegracaoTab("conexoes")}
+                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    activeIntegracaoTab === "conexoes"
+                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  Canais / Conexões
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveIntegracaoTab("openai")}
+                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    activeIntegracaoTab === "openai"
+                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  OpenAI (cliente)
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[80vh] overflow-y-auto p-6">
+              {activeIntegracaoTab === "conexoes" ? (
+                <EmpresaConexoesManager
+                  empresaId={empresaSelecionada.id}
+                  empresaNome={empresaSelecionada.nome_empresa}
+                  conexaoDisparoId={empresaSelecionada.conexao_disparo_id}
+                  disparoDelayMin={empresaSelecionada.disparo_delay_min}
+                  disparoDelayMax={empresaSelecionada.disparo_delay_max}
+                  onConexaoDisparoUpdated={handleConexaoDisparoUpdated}
+                />
+              ) : (
+                <form onSubmit={handleSaveCredenciais} className="space-y-6">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    O WhatsApp (Evolution) é provisionado pelo AgenteOS em <strong>Canais / Conexões</strong>. Aqui você pode opcionalmente definir uma chave OpenAI dedicada a esta empresa.
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Chave da OpenAI (Opcional - Chave do Cliente)
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="sk-..."
+                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        value={credenciais.openai_api_key}
+                        onChange={(e) => setCredenciais({...credenciais, openai_api_key: e.target.value})}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-8 flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={savingCredenciais}
+                      className="bg-gray-900 hover:bg-black text-white px-6 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                    >
+                      {savingCredenciais ? (
+                        <><RefreshCw size={18} className="animate-spin" /> Salvando...</>
+                      ) : (
+                        "Salvar Integração"
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CONFIGURAÇÃO IA */}
+      {showConfigIAModal && empresaSelecionada && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Brain className="text-purple-500" size={24} />
+                  Configuração da IA
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Empresa: {empresaSelecionada.nome_empresa} — identidade, modelos e regras do Agente de Atendimento.
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowConfigIAModal(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto custom-scrollbar">
+              {loadingConfigIA ? (
+                <div className="flex justify-center items-center py-10 text-gray-400">
+                  <RefreshCw size={24} className="animate-spin" />
+                </div>
+              ) : (
+                <form id="config-ia-form" onSubmit={handleSaveConfigIA} className="space-y-6">
+                  <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4 space-y-4">
+                    <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider">
+                      Identidade e regras da empresa
+                    </h3>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Contexto usado pelo Agente de Atendimento. Ajuste tom e políticas comerciais
+                      no detalhe da empresa para manter a configuração em um único lugar.
+                    </p>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Personalidade / tom de voz</label>
+                      <textarea
+                        value={configIAData.ia_personalidade}
+                        onChange={(e) => setConfigIAData({ ...configIAData, ia_personalidade: e.target.value })}
+                        rows={6}
+                        placeholder="Ex.: Tom acolhedor, uso moderado de emojis, como se fosse o consultor da marca."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Regras de negócio e diretrizes</label>
+                      <textarea
+                        value={configIAData.ia_regras_negocio}
+                        onChange={(e) => setConfigIAData({ ...configIAData, ia_regras_negocio: e.target.value })}
+                        rows={6}
+                        placeholder="Ex.: Não prometer prazos sem confirmar; sempre coletar e-mail antes de enviar proposta."
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Agente Principal</label>
+                    <input
+                      type="text"
+                      value={configIAData.nome_agente}
+                      onChange={(e) => setConfigIAData({...configIAData, nome_agente: e.target.value})}
+                      placeholder="Ex: Assistente Virtual"
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Mensagem de Saudação Inicial</label>
+                    <textarea
+                      value={configIAData.mensagem_saudacao}
+                      onChange={(e) => setConfigIAData({...configIAData, mensagem_saudacao: e.target.value})}
+                      rows={2}
+                      placeholder="Ex: Olá! Sou o {nome_agente}, como posso te ajudar hoje?"
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Modelo padrão (LLM)</label>
+                      <select
+                        value={configIAData.modelo_ia}
+                        onChange={(e) => setConfigIAData({...configIAData, modelo_ia: e.target.value})}
+                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all"
+                      >
+                        {modelosDisponiveis.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Parâmetros de roteamento
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Certeza</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={configIAData.limite_certeza}
+                          onChange={(e) => setConfigIAData({...configIAData, limite_certeza: parseFloat(e.target.value) || 0})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Dúvida</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={configIAData.limite_duvida}
+                          onChange={(e) => setConfigIAData({...configIAData, limite_duvida: parseFloat(e.target.value) || 0})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Máx. Agentes de Desempate</label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={configIAData.max_agentes_desempate}
+                          onChange={(e) => setConfigIAData({...configIAData, max_agentes_desempate: parseInt(e.target.value, 10) || 1})}
+                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      O fluxo produtivo usa o Agente de Atendimento e as ferramentas comerciais configuradas para o tenant.
+                    </p>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                       Follow-up Automático
+                    </h3>
+                    
+                    <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-xl cursor-pointer hover:border-indigo-500 transition-colors">
+                      <input
+                        type="checkbox"
+                        className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
+                        checked={configIAData.followup_ativo}
+                        onChange={(e) => setConfigIAData({...configIAData, followup_ativo: e.target.checked})}
+                      />
+                      <div>
+                        <p className="text-sm font-semibold text-white">Ativar Reengajamento (Follow-up)</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Chave-mestra global: liga ou desliga o motor de follow-up para esta empresa.</p>
+                      </div>
+                    </label>
+
+                    <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/30 p-3">
+                      <p className="text-xs text-indigo-200">
+                        As mensagens e os tempos de espera agora são configurados no menu <span className="font-semibold">Cadências / Follow-up</span>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-gray-800 space-y-4">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
+                      Etapas do Funil (Tags)
+                    </h3>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={novaEtapaNome}
+                        onChange={(e) => setNovaEtapaNome(e.target.value)}
+                        placeholder="Nome da nova etapa"
+                        className="flex-1 bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCriarEtapaFunil}
+                        disabled={salvandoEtapaFunil || !String(novaEtapaNome || "").trim()}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        + Nova Etapa
+                      </button>
+                    </div>
+
+                    {loadingEtapasFunil ? (
+                      <p className="text-sm text-gray-400">Carregando etapas...</p>
+                    ) : etapasFunil.length === 0 ? (
+                      <p className="text-sm text-gray-500">Nenhuma etapa de funil cadastrada.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {etapasFunil.map((etapa) => (
+                          <div
+                            key={etapa.id}
+                            className="flex items-center justify-between gap-3 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm text-white truncate">{etapa.nome}</p>
+                              <p className="text-xs text-gray-400">Ordem: {etapa.ordem ?? "-"}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleEditarEtapaFunil(etapa)}
+                                className="text-gray-300 hover:text-indigo-400 transition-colors p-1"
+                                title="Editar etapa"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleExcluirEtapaFunil(etapa)}
+                                className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                                title="Excluir etapa"
+                              >
+                                <Trash size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </form>
+              )}
+            </div>
+            
+            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3 mt-auto shrink-0">
+              <button 
+                type="button" onClick={() => setShowConfigIAModal(false)}
+                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
+                disabled={savingConfigIA}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit" form="config-ia-form" disabled={savingConfigIA || loadingConfigIA}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {savingConfigIA ? <><RefreshCw size={16} className="animate-spin" /> Salvando...</> : "Salvar Configurações"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TREINAMENTO RAG */}
+      {showRagModal && empresaSelecionada && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl shadow-xl w-full max-w-6xl overflow-hidden flex flex-col max-h-[95vh]">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-white">
+              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <Brain className="text-blue-600" size={24} />
+                Treinamento RAG: {empresaSelecionada.nome_empresa}
+              </h2>
+              <button onClick={() => setShowRagModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto custom-scrollbar bg-gray-50">
+              {/* Wrapped the RAG Manager in the modal */}
+              <RAGManager empresaId={empresaSelecionada.id} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+*.lock
+*.log
+.vite
+.env
+__pycache__
+.venv
+venv
+*.tmp
+Thumbs.db
+Desktop.ini
