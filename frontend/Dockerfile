@@ -21,13 +21,15 @@ RUN npm run build
 # Anamnese remain byte-identical. Full builds continue to use the final stage.
 FROM ${PANEL_RUNTIME_BASE} AS panel_release
 ARG SOURCE_COMMIT=unknown
-LABEL org.opencontainers.image.revision=$SOURCE_COMMIT org.agenteos.change="issue16-panel-single-root-20261010"
+ARG SOURCE_CHANGE=issue16-panel-single-root-20261010
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT org.agenteos.change=$SOURCE_CHANGE
 RUN test -f /usr/share/nginx/html/anamnese/leoft/index.html
 COPY --from=panel_build /app/frontend/dist /usr/share/nginx/html
 
 FROM ${PANEL_RUNTIME_BASE} AS full_release
 ARG SOURCE_COMMIT=unknown
-LABEL org.opencontainers.image.revision=$SOURCE_COMMIT org.agenteos.change="issue16-panel-single-root-20261010"
+ARG SOURCE_CHANGE=issue16-panel-single-root-20261010
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT org.agenteos.change=$SOURCE_CHANGE
 COPY --from=panel_build /app/frontend/dist /usr/share/nginx/html
 COPY --from=anamnese_build /app/anamnese/dist /usr/share/nginx/html/anamnese/leoft
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf

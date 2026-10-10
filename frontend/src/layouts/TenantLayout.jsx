@@ -125,9 +125,13 @@ export default function TenantLayout() {
             <InstagramIcon className="h-5 w-5 shrink-0" />
             <span>Instagram</span>
           </NavLink>
-          <NavLink to="/painel/trafego/meta" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
+          <NavLink to="/painel/trafego/meta" end className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
             <BarChart3 className="h-5 w-5 shrink-0" />
             <span>Tráfego Meta</span>
+          </NavLink>
+          <NavLink to="/painel/trafego/meta/conversoes" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
+            <BarChart3 className="h-5 w-5 shrink-0" />
+            <span>Conversões Meta</span>
           </NavLink>
           <NavLink to="/painel/crm" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
             <Users className="h-5 w-5 shrink-0" />

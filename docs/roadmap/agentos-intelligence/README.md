@@ -1,12 +1,12 @@
 # AgentOS — Planejamento de atualização da VPS e Intelligence (10/10/2026)
 
-> **Esta branch contém somente documentação de planejamento.** Não representa o código vigente do AgentOS nem é adequada para deploy. Não faça merge desta branch como se fosse atualização do aplicativo.
+> **Planejamento incorporado à fonte oficial após A00.** O GitHub `master` contém agora a nova raiz validada da VPS. A00 (#1) foi concluída no commit `8938c55181bd21a163b255bcd128cf0e85072e5c`; a correção isolada do painel (#16) está no baseline `bd1ad3b38738a9bd2a1fae6ce0072866db0c3941`. O estado de cada implantação deve ser confirmado na Issue e no relatório da release.
 
 ## Decisão do proprietário
 
 Em 10/10/2026, foi autorizada a **substituição integral do código antigo hospedado no GitHub** pelo estado atual validado da VPS AgentOS. O código antigo não deve ser usado como base de novas funcionalidades. **Não criar cópias de segurança, branches de arquivo, tags de arquivo, espelhos nem snapshots de preservação do repositório antigo.** Substituir integralmente a árvore e as referências antigas pelo projeto atualizado da VPS, preservando apenas o planejamento, as Issues e a operação vigente. A autorização **não** abrange reiniciar/destruir a VPS, expor segredos, apagar dados em produção ou reenviar eventos Meta/WhatsApp.
 
-**A substituição do código remoto ainda não foi executada.** Falta coletar e validar a fonte real da VPS e publicar uma nova raiz Git (histórico novo, sem pais do projeto antigo). Depois, remover os refs obsoletos, inclusive esta branch temporária de planejamento após incorporar a documentação, e continuar as entregas da lista abaixo.
+**A substituição do código remoto foi concluída na A00**, com nova raiz sem pais do projeto antigo e remoção das branches antigas. Planejamento e Issues foram preservados. GitHub atualizado e imagem implantada são evidências distintas; registrar ambos em cada entrega.
 
 ## Objetivo da evolução
 
@@ -43,6 +43,6 @@ Meta Ads → CTWA / Inbox → contexto comercial + JEV → módulos de atendimen
 
 ## Próxima ação
 
-**Executar A00 (#1)** a partir da VPS, auditando e preparando em diretório temporário limpo o código realmente vigente. Validar essa fonte antes de substituir diretamente a branch principal por um histórico novo; remover branches antigas sem manter arquivo do projeto anterior. O estado de produção não deve mudar durante A00.
+**A01 (#2): visão operacional dos senders existentes**, conforme [contrato de execução](../../releases/A01-sender-operations.md). API/painel somente leitura por tenant, estados de recebimento/erro/incerteza, filtros, detalhes e diagnóstico de ownership/dedup exclusivamente SHADOW. O painel permanece utilizável sem canário natural; `NO_EVENT_OBSERVED` e entrega real `NÃO VALIDADO` devem permanecer explícitos enquanto faltar evidência rastreada. Estado final, SHA, imagens, testes e relatório são registrados na [Issue #2](https://github.com/ferriolimidias/agenteos/issues/2).
 
-Não considerar esta branch de planejamento como código-fonte atualizado.
+A02 (#3) exige autorização separada para LIVE/enforcement. Nenhum replay histórico ou envio de teste integra A01.

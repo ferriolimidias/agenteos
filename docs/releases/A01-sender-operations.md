@@ -1,0 +1,19 @@
+# A01 — contrato de execução e operação
+
+Baseline: `bd1ad3b38738a9bd2a1fae6ce0072866db0c3941`. Issue #2.
+
+Objetivo único: API e painel operacional por tenant sobre evidências persistidas P1C.4 dos dois senders legados. Somente leitura; sem migration, pipeline novo, transporte, replay, campanhas, mensagens, JEV ou enforcement. Tags continuam sendo origem dos sinais. LIVE canônico permanece desativado e históricos bloqueados.
+
+Contrato congelado:
+- GET `/api/empresas/{empresa_id}/analytics/meta-sender-operations`: resumo global e lista paginada, filtros `outcome` (accepted/rejected/unknown/not_sent/prepared/blocked), `transport` (business_messaging/capi), `event_name`, `start_at`, `end_at`, `limit` (1..100), `offset` (0..10000). Resumo independe dos filtros.
+- GET no mesmo prefixo `/{attempt_id}`: detalhe somente do tenant ou 404. Autenticação e RBAC existentes `require_tenant_access`; 401/403/200 testados. `META_SENDER_OPERATIONS_ENABLED` aceita false/0/off para desabilitar apenas a leitura (404); habilitado por padrão por não ter efeitos externos.
+- Resposta: `checked_at`, `summary` (observation_status NO_EVENT_OBSERVED ou EVENT_OBSERVED; delivery_validation NÃO_VALIDADO; total_attempts, last_attempt_at, outcome_counts, coverage com paths discovered/instrumented e estado de observação por caminho, configuração sanitizada sem afirmar prontidão operacional; canonical_live_enabled=false, ownership_enforced=false, ownership_mode SHADOW_VALIDATION_ONLY; históricos, outbox, vínculos persistidos, atribuição), `items`, `total`, `limit`, `offset`.
+- Cada tentativa: id, event_name, outcome, delivery_status (accepted/rejected/unknown/not_sent/prepared/blocked), transport, transport_path, started_at, finished_at, http_status, delivery_uncertainty, identidade/destino somente hashes/UUID seguros, classificação e referências explicitamente persistidas. Resposta Graph revalidada por allowlist, sem JSON bruto, tokens, payloads, leads ou PII. Referências associadas e outbox sempre tenant-scoped; vínculo provável não vira exato. UNKNOWN_DELIVERY permanece ambíguo após timeout e não autoriza retry.
+- Diagnóstico ownership/dedup SHADOW por evidências e reservas existentes, sem chamar helpers de claim/commit. Tentativas repetidas não são prova de duplicidade; destino completo hashed + identidade necessários. Nenhum GET altera dados.
+- UI `/painel/trafego/meta/conversoes`, link de navegação, filtros, paginação e detalhes. Mostra erro HTTP separadamente de ausência de tráfego/filtro vazio. Aceitação Graph não significa atribuição; validação real permanece NÃO VALIDADO nesta entrega sem canário natural rastreado. Preservar revisão restrita e guard de grafo único da Issue #16.
+
+Gates: testes focados e PostgreSQL sintético isolado (identidade compartilhada, concorrência, retry, unknown, tenant), frontend, build completo + artifact guard + navegador, regressão integral classificada contra 20 falhas preexistentes, zero regressões novas, baselines protegidas no candidato e pós-deploy, secret scan, revisão independente sem P0/P1. Sem provocar eventos externos.
+
+Deploy: somente backend/painel; manter imagens e containers anteriores para rollback. Sem recriar PG/Redis/Evolution; STARTUP_DATABASE_MODE=skip e flags/workers existentes preservados. Backend candidato deriva da imagem ativa com overlay apenas dos arquivos A01; frontend usa build completo com target panel_release sobre imagem Issue16, preservando nginx e Anamnese. Comparar SHA remoto antes do push fast-forward. Rollback: parar candidatos, restabelecer containers anteriores/portas/alias backend. Sem migração ou rollback de dados.
+
+Estado real observado em 10/10/2026 antes da implementação: 0 tentativas, 126 históricos em commercial_events e outbox HISTORICAL_BLOCKED, 88 LINKED_PROBABLE, 686 UNLINKED, 0 reservas SHADOW. Relatório de execução e imagens finais em reports/.

@@ -1,0 +1,9 @@
+# Add only A01 read-only code to the approved P1C.4 runtime/dependencies.
+ARG BACKEND_RUNTIME_BASE=agenteos-backend:p1c4-final-validation-20261010-01
+FROM ${BACKEND_RUNTIME_BASE}
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT \
+      org.agenteos.change="a01-sender-operations" \
+      org.agenteos.runtime-base="p1c4-final-validation-20261010-01"
+COPY app/api/routers/analytics.py /app/app/api/routers/analytics.py
+COPY app/services/meta/sender_operations.py /app/app/services/meta/sender_operations.py

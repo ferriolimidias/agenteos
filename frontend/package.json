@@ -20,7 +20,8 @@
     "preview": "vite preview",
     "validate:artifacts": "node scripts/validate-panel-artifacts.mjs --root dist",
     "test:artifacts": "node --test scripts/validate-panel-artifacts.test.mjs",
-    "test:panel-smoke": "node scripts/smoke-panel.cjs"
+    "test:panel-smoke": "node scripts/smoke-panel.cjs",
+    "test:sender-operations": "node --test src/utils/conversionOperations.test.js"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

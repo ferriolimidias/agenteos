@@ -25,6 +25,7 @@ const Unidades = lazy(() => import("./pages/tenant/Unidades"));
 const AcessoRestritoOperacional = lazy(() => import("./pages/tenant/AcessoRestritoOperacional"));
 const Instagram = lazy(() => import("./pages/tenant/Instagram"));
 const TrafficMeta = lazy(() => import("./pages/tenant/TrafficMeta"));
+const ConversionOperations = lazy(() => import("./pages/tenant/ConversionOperations"));
 
 function App() {
   useEffect(() => {
@@ -97,6 +98,7 @@ function App() {
           <Route path="conexoes" element={<Conexoes />} />
           <Route path="instagram" element={<Instagram />} />
           <Route path="trafego/meta" element={<TrafficMeta />} />
+          <Route path="trafego/meta/conversoes" element={<ConversionOperations />} />
           <Route path="integracoes" element={<AcessoRestritoOperacional title="Integrações técnicas gerenciadas pelo Super Admin" />} />
           <Route path="transferencias" element={<Transferencias />} />
           <Route path="campanhas/*" element={<Campanhas />} />
