@@ -4,7 +4,7 @@ import re
 import traceback
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query
 from typing import Dict, Any, List
 from pydantic import BaseModel
 import uuid
@@ -26,6 +26,7 @@ from app.services.websocket_manager import manager
 from app.services.meta_attribution import dados_adicionais_for_public_response
 from app.api.routers.auth import require_tenant_access
 from app.api.time_serialization import serialize_utc_timestamp
+from app.services.commercial_journey import commercial_journey, enabled as commercial_journey_enabled
 
 router = APIRouter(
     prefix="/api/empresas",
@@ -38,6 +39,28 @@ logger = logging.getLogger(__name__)
 
 SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
 TECHNICAL_CHAT_EVENT_KINDS = ("status", "reaction")
+
+
+@router.get("/{empresa_id}/inbox/leads/{lead_id}/journey")
+async def get_commercial_journey(
+    empresa_id: uuid.UUID,
+    lead_id: uuid.UUID,
+    category: str | None = Query(default=None, pattern="^(acquisition|conversation|message|crm|commercial|followup|campaign|checkout|payment|booking)$"),
+    limit: int = Query(default=30, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=1024),
+    db: AsyncSession = Depends(get_db),
+    _current_user=Depends(require_tenant_access),
+):
+    if not commercial_journey_enabled():
+        raise HTTPException(status_code=404, detail="Jornada comercial indisponível.")
+    try:
+        result = await commercial_journey(db, empresa_id=empresa_id, lead_id=lead_id,
+                                          category=category, limit=limit, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Filtro ou cursor da jornada inválido.") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Lead não encontrado.")
+    return result
 
 
 def _telefone_eh_simulador(telefone: str | None) -> bool:

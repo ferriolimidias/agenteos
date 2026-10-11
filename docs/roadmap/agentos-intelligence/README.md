@@ -43,6 +43,8 @@ Meta Ads → CTWA / Inbox → contexto comercial + JEV → módulos de atendimen
 
 ## Próxima ação
 
-**A01 (#2): visão operacional dos senders existentes**, conforme [contrato de execução](../../releases/A01-sender-operations.md). API/painel somente leitura por tenant, estados de recebimento/erro/incerteza, filtros, detalhes e diagnóstico de ownership/dedup exclusivamente SHADOW. O painel permanece utilizável sem canário natural; `NO_EVENT_OBSERVED` e entrega real `NÃO VALIDADO` devem permanecer explícitos enquanto faltar evidência rastreada. Estado final, SHA, imagens, testes e relatório são registrados na [Issue #2](https://github.com/ferriolimidias/agenteos/issues/2).
+**A01 (#2) implantada:** visão operacional dos senders existentes no commit `ee527ee2e767e0e3aa2c6fb0f047fb9fa8cdd67c`, conforme [contrato de execução](../../releases/A01-sender-operations.md). API/painel somente leitura por tenant e diagnóstico de ownership/dedup exclusivamente SHADOW. O estado permanece `DEPLOYED_NOT_REAL_VALIDATED`: `NO_EVENT_OBSERVED` e entrega real `NÃO VALIDADO` são explícitos enquanto faltar evidência natural rastreada. Estado, imagens e relatório estão na [Issue #2](https://github.com/ferriolimidias/agenteos/issues/2).
 
 A02 (#3) exige autorização separada para LIVE/enforcement. Nenhum replay histórico ou envio de teste integra A01.
+
+**A04 (#5): jornada comercial no Inbox**, conforme [contrato de execução](../../releases/A04-inbox-commercial-journey.md). Entrega independente com dados já persistidos, sem dependência de JEV ou A05: eventos comprovados, filtros, paginação, snapshots atuais e cobertura da atribuição. Validar uma jornada real preexistente em API e browser, sem criar mensagens/conversões ou inferir transições ausentes. SHA, imagens, gates e relatório são registrados na [Issue #5](https://github.com/ferriolimidias/agenteos/issues/5).

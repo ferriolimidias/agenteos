@@ -1,0 +1,9 @@
+# Add only A04 read-only code to the approved A01 runtime/dependencies.
+ARG BACKEND_RUNTIME_BASE=agenteos-backend:a01-sender-operations-20261011-01
+FROM ${BACKEND_RUNTIME_BASE}
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT \
+      org.agenteos.change="a04-inbox-commercial-journey" \
+      org.agenteos.runtime-base="a01-sender-operations-20261011-01"
+COPY app/api/routers/inbox.py /app/app/api/routers/inbox.py
+COPY app/services/commercial_journey.py /app/app/services/commercial_journey.py

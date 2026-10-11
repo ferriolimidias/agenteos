@@ -7,6 +7,7 @@ import { applyRealtimeReaction } from "../../utils/reactions";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
+import CommercialJourneyTimeline from "../../components/CommercialJourneyTimeline";
 
 const STATUS_ATENDIMENTO_ABERTOS = new Set(["aberto", "aguardando_humano", "manual"]);
 const AI_STATE_UI = {
@@ -106,6 +107,7 @@ export default function Inbox() {
   const [tagsOficiais, setTagsOficiais] = useState([]);
   const [showTransferPanel, setShowTransferPanel] = useState(false);
   const [showTagsPanel, setShowTagsPanel] = useState(false);
+  const [showJourney, setShowJourney] = useState(false);
   const [selectedDestinoId, setSelectedDestinoId] = useState("");
   const [transferindo, setTransferindo] = useState(false);
   const [botToggleLoading, setBotToggleLoading] = useState(false);
@@ -1595,6 +1597,7 @@ export default function Inbox() {
                 </div>
 
                 <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap">
+                  <button type="button" onClick={() => setShowJourney(value => !value)} aria-expanded={showJourney} className="rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
                   <button
                     type="button"
                     onClick={handleToggleStatus}
@@ -1864,6 +1867,7 @@ export default function Inbox() {
           </div>
         )}
       </section>
+      {showJourney && selectedLead?.id && <CommercialJourneyTimeline empresaId={empresa_id} leadId={selectedLead.id} onClose={() => setShowJourney(false)} />}
       </div>
     </div>
   );
