@@ -22,7 +22,8 @@
     "test:artifacts": "node --test scripts/validate-panel-artifacts.test.mjs",
     "test:panel-smoke": "node scripts/smoke-panel.cjs",
     "test:sender-operations": "node --test src/utils/conversionOperations.test.js",
-    "test:journey": "node --test src/utils/commercialJourney.test.js"
+    "test:journey": "node --test src/utils/commercialJourney.test.js",
+    "test:funnel": "node --test src/utils/commercialFunnel.test.js"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

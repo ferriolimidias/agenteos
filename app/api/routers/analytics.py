@@ -202,3 +202,77 @@ async def meta_sender_attempt_detail(
     if result is None:
         raise HTTPException(status_code=404, detail="Tentativa não encontrada.")
     return result
+
+
+# A05 is read-only and additive; A01 and legacy analytics stay unchanged.
+from fastapi.responses import Response
+from app.services.commercial_funnel_dashboard import (
+    enabled as commercial_funnel_dashboard_enabled,
+    dashboard as commercial_funnel_dashboard,
+    drilldown as commercial_funnel_leads,
+    export_csv as commercial_funnel_export,
+)
+
+
+def _commercial_funnel_filters(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    observed_at: datetime | None = Query(default=None),
+    inactivity_hours: int = Query(default=168, ge=1, le=8760),
+    return_window_days: int = Query(default=7, ge=1, le=90),
+    stage: str | None = Query(default=None, min_length=1, max_length=100, pattern=r'^[a-zA-Z0-9_:-]+$'),
+    origin: str | None = Query(default=None, pattern=r'^(whatsapp|instagram|web|sms|telegram|unknown|ctwa_referral|tracked_link_click|manual_touch|unknown_source)$'),
+    campaign_id: str | None = Query(default=None, pattern=r'^[0-9]{1,40}$'),
+    ad_id: str | None = Query(default=None, pattern=r'^[0-9]{1,40}$'),
+    status: str | None = Query(default=None, pattern=r'^(active|inactive|converted|lost|indeterminate)$'),
+):
+    return dict(start=start,end=end,observed_at=observed_at,inactivity_hours=inactivity_hours,
+                return_window_days=return_window_days,stage=stage,origin=origin,campaign_id=campaign_id,ad_id=ad_id,status=status)
+
+
+async def _commercial_funnel_read(service, db, empresa_id, filters):
+    if not commercial_funnel_dashboard_enabled():
+        raise HTTPException(status_code=404, detail='Dashboard comercial indisponível.')
+    try:
+        return await service(db, empresa_id=empresa_id, **filters)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Etapa ou escopo comercial indisponível.') from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Filtro comercial inválido.') from exc
+
+
+@router.get('/commercial-funnel')
+async def commercial_funnel_dashboard_get(
+    empresa_id: uuid.UUID,
+    filters: dict = Depends(_commercial_funnel_filters),
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    return await _commercial_funnel_read(commercial_funnel_dashboard,db,empresa_id,filters)
+
+
+@router.get('/commercial-funnel/leads')
+async def commercial_funnel_leads_get(
+    empresa_id: uuid.UUID,
+    filters: dict = Depends(_commercial_funnel_filters),
+    bottleneck: str | None = Query(default=None,min_length=1,max_length=110,pattern=r'^inactive:[a-zA-Z0-9_:-]+$'),
+    limit: int = Query(default=25,ge=1,le=100),
+    offset: int = Query(default=0,ge=0,le=100000),
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    return await _commercial_funnel_read(commercial_funnel_leads,db,empresa_id,
+                                        filters|dict(bottleneck=bottleneck,limit=limit,offset=offset))
+
+
+@router.get('/commercial-funnel/export')
+async def commercial_funnel_export_get(
+    empresa_id: uuid.UUID,
+    filters: dict = Depends(_commercial_funnel_filters),
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    content = await _commercial_funnel_read(commercial_funnel_export,db,empresa_id,filters)
+    return Response(content=content,media_type='text/csv; charset=utf-8',headers={
+        'Content-Disposition':'attachment; filename="commercial-funnel-aggregated.csv"',
+        'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})

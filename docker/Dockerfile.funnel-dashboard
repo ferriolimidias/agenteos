@@ -1,0 +1,9 @@
+# Incremental read-only analytics over the approved A04 runtime.
+ARG BACKEND_RUNTIME_BASE=agenteos-backend:a04-inbox-journey-20261011-01
+FROM ${BACKEND_RUNTIME_BASE}
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT \
+      org.agenteos.change="a05-cohort-funnel-dashboard" \
+      org.agenteos.runtime-base="a04-inbox-journey-20261011-01"
+COPY app/api/routers/analytics.py /app/app/api/routers/analytics.py
+COPY app/services/commercial_funnel_dashboard.py /app/app/services/commercial_funnel_dashboard.py

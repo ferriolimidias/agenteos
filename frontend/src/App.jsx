@@ -9,6 +9,7 @@ const TenantLayout = lazy(() => import("./layouts/TenantLayout"));
 const Empresas = lazy(() => import("./pages/super-admin/Empresas"));
 const ConfiguracoesGlobais = lazy(() => import("./pages/super-admin/ConfiguracoesGlobais"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
+const FunnelDashboard = lazy(() => import("./pages/tenant/FunnelDashboard"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
 const TenantAgentes = lazy(() => import("./pages/tenant/TenantAgentes"));
 const TenantFollowUps = lazy(() => import("./pages/tenant/TenantFollowUps"));
@@ -86,6 +87,7 @@ function App() {
         {/* Rota do Cliente (Tenant) */}
         <Route path="/painel" element={<TenantLayout />}>
           <Route index element={<TenantDashboard />} />
+          <Route path="funil" element={<FunnelDashboard />} />
           <Route path="agentes" element={<TenantAgentes />} />
           <Route path="followups" element={<TenantFollowUps />} />
           <Route path="crm" element={<Crm />} />

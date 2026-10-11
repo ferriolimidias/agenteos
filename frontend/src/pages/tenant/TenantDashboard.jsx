@@ -19,6 +19,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import api from "../../services/api";
+import { Link } from "react-router-dom";
 import { EmptyState, MetricCard, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 
@@ -336,6 +337,8 @@ export default function TenantDashboard() {
         icon={Activity}
         eyebrow="Painel cliente"
       />
+
+      <Link to="/painel/funil" className="inline-flex rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700">Abrir Funil e gargalos comerciais</Link>
 
       {loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">

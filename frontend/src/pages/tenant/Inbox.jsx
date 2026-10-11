@@ -1,6 +1,8 @@
 import React, { useCallback, useState, useEffect, useMemo, useRef } from "react";
 import { AlertCircle, ArrowLeft, ArrowRightLeft, Check, FileAudio, FileImage, FileText, FileVideo, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
+import { Link, useLocation } from "react-router-dom";
+import { allowlistedFunnelFilters, journeyLeadFromSearch } from "../../utils/commercialFunnel";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import { applyRealtimeReaction } from "../../utils/reactions";
@@ -80,6 +82,11 @@ const translateAiState = (state) => {
 };
 
 export default function Inbox() {
+  const location = useLocation();
+  const journeyLeadId = journeyLeadFromSearch(location.search);
+  const [journeyLinkMessage, setJourneyLinkMessage] = useState("");
+  const journeyLinkAppliedRef = useRef("");
+  const leadsTenantRef = useRef(null);
   const buildWsUrl = (empresaId) => {
     const baseRaw = String(api?.defaults?.baseURL || "/api").trim();
     let apiHttpBase = "";
@@ -208,6 +215,23 @@ export default function Inbox() {
   const activeEmpresaId = getActiveEmpresaId();
   const empresa_id = activeEmpresaId;
 
+  const funnelContext = location.state?.funnelContext?.tenant === empresa_id
+    ? { tenant: empresa_id, filters: allowlistedFunnelFilters(location.state.funnelContext.filters) } : null;
+  useEffect(() => {
+    if (!journeyLeadId || !empresa_id || leadsTenantRef.current !== empresa_id) return;
+    const linkScope = `${empresa_id}:${journeyLeadId}`;
+    if (journeyLinkAppliedRef.current === linkScope) return;
+    const contact = leads.find(lead => String(lead.id).toLowerCase() === journeyLeadId.toLowerCase());
+    if (!contact) {
+      setJourneyLinkMessage("Contato não disponível no Inbox deste tenant. Nenhum contato foi criado para abrir a jornada.");
+      return;
+    }
+    journeyLinkAppliedRef.current = linkScope;
+    setJourneyLinkMessage(""); setSelectedLead(contact);
+    setFiltroStatus(contact.status_atendimento || "aberto");
+    setShowJourney(true);
+  }, [empresa_id, journeyLeadId, leads]);
+
   const updateLeadInState = useCallback((leadId, updates) => {
     const targetId = String(leadId || "");
     setLeads((prev) => (prev || []).map((lead) => (String(lead?.id || "") === targetId ? { ...lead, ...updates } : lead)));
@@ -264,6 +288,7 @@ export default function Inbox() {
     try {
       const res = await api.get(`/empresas/${empresa_id}/inbox`);
       const nextLeads = res.data || [];
+      leadsTenantRef.current = empresa_id;
       setLeads(nextLeads);
       setSelectedLead((prev) => {
         if (!prev?.id) return prev;
@@ -1445,6 +1470,8 @@ export default function Inbox() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {funnelContext && <Link to="/painel/funil" state={{ funnelContext }} className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">← Voltar ao funil com os filtros</Link>}
+      {journeyLinkMessage && <p role="alert" className="shrink-0 px-3 py-2 text-sm text-amber-800 bg-amber-50">{journeyLinkMessage}</p>}
       <div className="relative flex min-h-0 min-w-0 flex-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       {toast ? (
         <div className="fixed right-6 top-6 z-[80]">

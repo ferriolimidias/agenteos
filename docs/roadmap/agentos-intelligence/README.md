@@ -48,3 +48,8 @@ Meta Ads → CTWA / Inbox → contexto comercial + JEV → módulos de atendimen
 A02 (#3) exige autorização separada para LIVE/enforcement. Nenhum replay histórico ou envio de teste integra A01.
 
 **A04 (#5): jornada comercial no Inbox**, conforme [contrato de execução](../../releases/A04-inbox-commercial-journey.md). Entrega independente com dados já persistidos, sem dependência de JEV ou A05: eventos comprovados, filtros, paginação, snapshots atuais e cobertura da atribuição. Validar uma jornada real preexistente em API e browser, sem criar mensagens/conversões ou inferir transições ausentes. SHA, imagens, gates e relatório são registrados na [Issue #5](https://github.com/ferriolimidias/agenteos/issues/5).
+
+
+**A04 (#5) REAL_VALIDATED:** release `4e9a85e304922184f1431753081f93acdfbd907e`, com jornada real consultada e renderizada em API/browser. Essa prova de um contato não demonstra cobertura da base inteira; A01 permanece sem entrega Meta natural validada.
+
+**A05 (#6): dashboard de funil por coorte**, conforme [contrato de execução](../../releases/A05-cohort-funnel-dashboard.md). Agrega dados existentes com contatos únicos, estágios/transições observados, snapshots, cobertura, gargalos, filtros e drill-down para A04. Atribuição e pagamentos exigem evidência; desconhecido não vira zero. SHA/imagens/gates e relatório serão registrados na [Issue #6](https://github.com/ferriolimidias/agenteos/issues/6).

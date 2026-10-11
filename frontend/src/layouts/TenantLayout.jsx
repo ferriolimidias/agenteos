@@ -25,6 +25,7 @@ export default function TenantLayout() {
   const location = useLocation();
   const user = getStoredUser();
   const isReviewer = user?.role === "meta_app_reviewer";
+  const isFunnelRoute = location.pathname === "/painel/funil";
   const isInboxRoute = ["/painel/chat", "/painel/inbox", "/painel/conversas"].includes(location.pathname);
 
   useEffect(() => {
@@ -76,7 +77,7 @@ export default function TenantLayout() {
   }, []);
 
   return (
-    <div className={`flex ${isInboxRoute ? "chat-shell h-dvh overflow-hidden" : shellStyles.page}`}>
+    <div className={`flex ${isFunnelRoute ? "funnel-route-shell" : ""} ${isInboxRoute ? "chat-shell h-dvh overflow-hidden" : shellStyles.page}`}>
       <aside className={`${shellStyles.sidebar} ${isInboxRoute ? "chat-shell-sidebar" : ""}`}>
         <div className={`${shellStyles.sidebarHeader} ${isInboxRoute ? "chat-shell-brand" : ""}`}>
           {configVisual.logoBase64 ? (
@@ -113,6 +114,7 @@ export default function TenantLayout() {
             <LayoutDashboard className="h-5 w-5 shrink-0" />
             <span>Dashboard</span>
           </NavLink>
+          <NavLink to="/painel/funil" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}><BarChart3 className="h-5 w-5 shrink-0" /><span>Funil e gargalos</span></NavLink>
           <NavLink to="/painel/chat" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
             <MessageCircle className="h-5 w-5 shrink-0" />
             <span>Inbox WhatsApp</span>
