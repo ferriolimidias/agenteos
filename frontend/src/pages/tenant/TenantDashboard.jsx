@@ -22,6 +22,7 @@ import api from "../../services/api";
 import { Link } from "react-router-dom";
 import { EmptyState, MetricCard, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import "./TenantDashboard.css";
 
 function startOfToday() {
   const d = new Date();
@@ -330,7 +331,7 @@ export default function TenantDashboard() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="fm-tenant-dashboard space-y-6">
       <PageHeader
         title="Dashboard"
         description="Visão rápida da operação do tenant: atendimento, leads, mensagens e saúde da IA."
@@ -338,7 +339,7 @@ export default function TenantDashboard() {
         eyebrow="Painel cliente"
       />
 
-      <Link to="/painel/funil" className="inline-flex rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700">Abrir Funil e gargalos comerciais</Link>
+      <Link to="/painel/funil" className="fm-dashboard-funnel-link">Abrir Funil e gargalos comerciais</Link>
 
       {loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -385,10 +386,10 @@ export default function TenantDashboard() {
             Canal cadastrado pela equipe AgenteOS para avisos operacionais do agente.
           </p>
         </div>
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <div className="fm-dashboard-alert-contact">
           {telefoneNotificacao ? telefoneNotificacao : "Nenhum telefone de alerta cadastrado."}
         </div>
-        <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+        <div className="fm-dashboard-alert-note">
           Configurações de IA, chaves, modelos e alertas técnicos são gerenciados pelo Super Admin.
         </div>
       </SectionCard>
@@ -401,19 +402,19 @@ export default function TenantDashboard() {
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={activitySeries}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={{ stroke: "#e2e8f0" }} />
-                  <YAxis allowDecimals={false} tick={{ fill: "#64748b", fontSize: 12 }} axisLine={{ stroke: "#e2e8f0" }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--fm-border)" />
+                  <XAxis dataKey="label" tick={{ fill: "var(--fm-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--fm-border)" }} />
+                  <YAxis allowDecimals={false} tick={{ fill: "var(--fm-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--fm-border)" }} />
                   <Tooltip
                     contentStyle={{
                       borderRadius: 12,
-                      border: "1px solid #e2e8f0",
-                      backgroundColor: "#ffffff",
-                      color: "#0f172a",
+                      border: "1px solid var(--fm-border)",
+                      backgroundColor: "var(--fm-raised)",
+                      color: "var(--fm-text)",
                     }}
-                    labelStyle={{ color: "#0f172a" }}
+                    labelStyle={{ color: "var(--fm-text)" }}
                   />
-                  <Line type="monotone" dataKey="mensagens" stroke="#818cf8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="mensagens" stroke="var(--fm-primary)" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -421,7 +422,7 @@ export default function TenantDashboard() {
         </SectionCard>
 
         <SectionCard title="Atividade recente">
-          <div className="overflow-hidden rounded-xl border border-slate-200">
+          <div className="fm-dashboard-recent-table" tabIndex={0} role="region" aria-label="Atividade recente">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>

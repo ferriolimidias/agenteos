@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -15,6 +15,8 @@ import {
   BarChart3,
   Building2,
   Instagram as InstagramIcon,
+  Menu,
+  X,
 } from "lucide-react";
 import api from "../services/api";
 import { clearImpersonation, getStoredUser } from "../utils/auth";
@@ -25,8 +27,45 @@ export default function TenantLayout() {
   const location = useLocation();
   const user = getStoredUser();
   const isReviewer = user?.role === "meta_app_reviewer";
-  const isFunnelRoute = location.pathname === "/painel/funil";
-  const isJevRoute = location.pathname === "/painel/inteligencia";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const sidebarRef = useRef(null);
+  const menuToggleRef = useRef(null);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => { if (desktop.matches) setMenuOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const sidebar = sidebarRef.current;
+    const menuToggle = menuToggleRef.current;
+    const focusables = () => [...sidebar.querySelectorAll("a[href], button:not([disabled])")];
+    const initialFocus = requestAnimationFrame(() => focusables()[0]?.focus({ preventScroll: true }));
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); setMenuOpen(false); }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      const first = items[0];
+      const last = items.at(-1);
+      if (!sidebar.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus({ preventScroll: true });
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(initialFocus);
+      document.removeEventListener("keydown", handleKeyDown);
+      requestAnimationFrame(() => menuToggle?.focus());
+    };
+  }, [menuOpen]);
+
   const isInboxRoute = ["/painel/chat", "/painel/inbox", "/painel/conversas"].includes(location.pathname);
 
   useEffect(() => {
@@ -78,24 +117,26 @@ export default function TenantLayout() {
   }, []);
 
   return (
-    <div className={`flex ${isFunnelRoute ? "funnel-route-shell" : ""} ${isJevRoute ? "jev-route-shell" : ""} ${isInboxRoute ? "chat-shell h-dvh overflow-hidden" : shellStyles.page}`}>
-      <aside className={`${shellStyles.sidebar} ${isInboxRoute ? "chat-shell-sidebar" : ""}`}>
-        <div className={`${shellStyles.sidebarHeader} ${isInboxRoute ? "chat-shell-brand" : ""}`}>
+    <div className={`${shellStyles.page} ${isInboxRoute ? "fm-shell-inbox chat-shell" : ""}`}>
+      <a href="#tenant-content" className="fm-skip-link">Ir para o conteúdo</a>
+      <aside ref={sidebarRef} id="tenant-navigation" className={`${shellStyles.sidebar} ${menuOpen ? "fm-sidebar-open" : ""}`} role={menuOpen ? "dialog" : undefined} aria-modal={menuOpen ? "true" : undefined} aria-label="Navegação do cliente">
+        <button type="button" className="fm-menu-close" aria-label="Fechar menu" onClick={() => setMenuOpen(false)}><X size={20} aria-hidden="true" /></button>
+        <div className={shellStyles.sidebarHeader}>
           {configVisual.logoBase64 ? (
             <img
               src={configVisual.logoBase64}
-              alt="Logo"
-              className="h-12 max-w-[190px] rounded-lg border border-slate-200 bg-white object-contain p-1.5"
+              alt={`Logo ${configVisual.nomeSistema}`}
+              className="fm-brand-logo"
             />
           ) : (
-            <h2 className="truncate text-xl font-semibold text-slate-950">{configVisual.nomeSistema}</h2>
+            <h2 className="fm-brand-name">{configVisual.nomeSistema}</h2>
           )}
-          <span className="mt-2 inline-block rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold tracking-[0.16em] text-emerald-700">
+          <span className="fm-brand-role">
             PAINEL CLIENTE
           </span>
         </div>
 
-        <nav className="flex-1 space-y-1.5 overflow-y-auto py-5">
+        <nav className="fm-sidebar-nav" aria-label="Menu principal" onClick={(event) => { if (event.target.closest("a")) setMenuOpen(false); }}>
           {isReviewer ? (
             <>
               <p className={shellStyles.navSection}>Demonstração Meta</p>
@@ -187,40 +228,38 @@ export default function TenantLayout() {
           )}
         </nav>
 
-        <div className="border-t border-slate-100 p-3">
-          <button onClick={handleLogout} className="flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm font-medium text-red-600 transition-colors duration-200 hover:border-red-100 hover:bg-red-50 hover:text-red-700">
+        <div className="fm-sidebar-footer">
+          <button onClick={handleLogout} className={shellStyles.navItem}>
             <LogOut className="h-5 w-5 shrink-0" />
             <span>Sair</span>
           </button>
         </div>
       </aside>
 
-      <main className={`flex min-w-0 flex-1 flex-col ${isInboxRoute ? "min-h-0 overflow-hidden" : "overflow-auto"}`}>
+      <button type="button" className="fm-shell-backdrop" tabIndex={-1} aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />
+      <main className="fm-shell-main" {...(menuOpen ? { inert: "" } : {})}>
         {isImpersonating && (
-          <div className="relative z-10 flex items-center justify-between border-b border-emerald-200 bg-emerald-50 px-8 py-2 text-sm font-medium text-emerald-800 shadow-sm">
+          <div className="fm-impersonation">
             <span className="flex items-center gap-2">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500"></span>
               Acessando como: <strong>{impersonatingEmpresa}</strong>
             </span>
             <button
               onClick={handleReturnToAdmin}
-              className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-4 py-1.5 text-emerald-700 transition-colors hover:bg-emerald-100"
+              className="fm-return-admin"
             >
               <LogOut size={14} /> Sair e Voltar
             </button>
           </div>
         )}
-        <header className={`${shellStyles.topbar} ${isInboxRoute ? "hidden" : ""}`}>
-          <h1 className="text-sm font-medium text-slate-600">
-            {user ? `Olá, ${user.nome}` : "Bem-vindo(a)"}
-          </h1>
-          <div className="flex items-center space-x-4">
-            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-indigo-600 text-sm font-semibold text-white shadow-sm">
-              {user && user.nome ? user.nome.charAt(0).toUpperCase() : "A"}
-            </div>
+        <header className={shellStyles.topbar}>
+          <button ref={menuToggleRef} type="button" className="fm-menu-toggle" aria-label="Abrir menu" aria-expanded={menuOpen} aria-controls="tenant-navigation" onClick={() => setMenuOpen(true)}><Menu size={20} aria-hidden="true" /></button>
+          <div className="fm-topbar-context">
+            <span className="fm-topbar-label">Painel do cliente</span>
+            <span className="fm-topbar-title">{user ? `Olá, ${user.nome}` : "Bem-vindo(a)"}</span>
           </div>
+          <span className="fm-avatar" aria-hidden="true">{user?.nome ? user.nome.charAt(0).toUpperCase() : "A"}</span>
         </header>
-        <div className={`${isInboxRoute ? "chat-shell-content" : shellStyles.content} ${isInboxRoute ? "flex min-h-0 flex-1 flex-col overflow-hidden" : ""}`}>
+        <div id="tenant-content" tabIndex={-1} className={isInboxRoute ? "chat-shell-content" : shellStyles.content}>
           <Outlet />
         </div>
       </main>

@@ -5,6 +5,7 @@ import RAGManager from "../../components/RAGManager";
 import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import { ActionButton, PageHeader, StatusBadge } from "../../components/ui";
 import { clearImpersonation } from "../../utils/auth";
+import "./Empresas.css";
 
 import { useNavigate } from "react-router-dom";
 
@@ -401,7 +402,7 @@ export default function Empresas() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="fm-companies space-y-6">
       <PageHeader
         title="Clientes / Empresas"
         description="Gerencie tenants, acessos, credenciais, base de conhecimento e configurações operacionais."
@@ -418,7 +419,7 @@ export default function Empresas() {
         }
       />
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="fm-companies-health">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
@@ -464,8 +465,9 @@ export default function Empresas() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
+      <section className="fm-companies-registry" aria-label="Clientes cadastrados">
+        <div className="fm-companies-registry-heading"><h2>Carteira de clientes</h2><p>Gestão de acessos e operação por empresa</p></div>
+        <div className="fm-companies-table-scroll" tabIndex={0} role="region" aria-label="Tabela de clientes">
           <table className="w-full text-left text-xs whitespace-nowrap">
             <thead className="border-b border-slate-200 bg-slate-50 font-semibold uppercase tracking-wider text-slate-500">
               <tr>
@@ -581,15 +583,15 @@ export default function Empresas() {
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
       {/* Modal Novo Cliente */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
               <h2 className="text-xl font-bold text-white tracking-tight">Setup de Novo Cliente</h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-white transition-colors">
+              <button onClick={() => setShowModal(false)} aria-label="Fechar novo cliente" className="text-gray-400 hover:text-white transition-colors">
                 <X size={20} />
               </button>
             </div>
@@ -748,10 +750,10 @@ export default function Empresas() {
       {/* Modal Editar Cliente */}
       {showEditModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
+          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
             <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
               <h2 className="text-xl font-bold text-white tracking-tight">Editar Cliente</h2>
-              <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-white transition-colors">
+              <button onClick={() => setShowEditModal(false)} aria-label="Fechar edição do cliente" className="text-gray-400 hover:text-white transition-colors">
                 <X size={20} />
               </button>
             </div>
@@ -919,7 +921,7 @@ export default function Empresas() {
       {/* MODAL CONFIGURAÇÃO IA */}
       {showConfigIAModal && empresaSelecionada && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">

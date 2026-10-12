@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { KeyRound } from "lucide-react";
+import { PageHeader, StatusBadge } from "../../components/ui";
 import api from "../../services/api";
 import { getAuthenticatedUser } from "../../utils/auth";
 import { jevError, jevTime } from "../../utils/jevDiagnostics";
@@ -54,7 +56,7 @@ function IntegrationForm({ tenant }) {
   }
   return <section className="jev-card" data-testid="jev-integration-form"><h2>Configuração por empresa · somente SHADOW</h2>
     {busy && <p role="status">Consultando configuração JEV...</p>}{error && <p className="jev-notice" role="alert">{error}</p>}{message && <p role="status" className="jev-notice">{message}</p>}
-    {saved && <><p>Credencial: {saved.has_key ? "Configurada (somente escrita)" : "Não configurada"} · {CONNECTION[saved.status] || "Não testado"}</p><p className="jev-muted">Último teste: {jevTime(saved.tested_at)}. Armazenamento protegido: {saved.credential_storage_available ? "disponível" : "indisponível"}.</p></>}
+    {saved && <><p className="jev-credential-status">Credencial: {saved.has_key ? "Configurada (somente escrita)" : "Não configurada"} · {CONNECTION[saved.status] || "Não testado"}</p><p className="jev-muted">Último teste: {jevTime(saved.tested_at)}. Armazenamento protegido: {saved.credential_storage_available ? "disponível" : "indisponível"}.</p></>}
     {form && <form onSubmit={save}><div className="jev-columns"><label>Provider<select value={form.provider} disabled><option value="typesafe">TypeSafe</option></select></label><label>Modelo<select value={form.model} disabled><option value="jev-1.13.0">jev-1.13.0</option></select></label></div>
       <label>Chave da API (nova ou substituição)<input type="password" autoComplete="new-password" value={key} onChange={event => { setKey(event.target.value); setRemoveKey(false); }} placeholder={saved?.has_key ? "Deixe vazio para preservar a chave" : "Informe uma chave para configurar"} disabled={busy || !saved?.credential_storage_available} /></label>
       {saved?.has_key && <label className="jev-checkbox"><input type="checkbox" checked={removeKey} onChange={event => { setRemoveKey(event.target.checked); setKey(""); }} disabled={busy} />Remover credencial salva ao salvar</label>}
@@ -77,5 +79,5 @@ export default function JevIntegration() {
     return () => controller.abort();
   }, [authorized]);
   if (!authorized) return <p role="alert">Configuração JEV exclusiva do Super Admin.</p>;
-  return <div className="jev-diagnostics" data-testid="jev-admin"><p className="jev-muted">Configurações → Integrações → JEV</p><h1>Integração JEV <span className="jev-badge">SHADOW</span></h1><p>Configuração segura por tenant, sem reiniciar a página ou o atendimento.</p><p className="jev-notice">A habilitação permite somente exemplos sintéticos explícitos. Conversas reais continuam bloqueadas para envio externo nesta configuração.</p><p><Link to="/admin/configuracoes">Voltar às configurações</Link></p>{error && <p role="alert">{error}</p>}<label>Empresa<select aria-label="Empresa" value={tenant} onChange={event => setTenant(event.target.value)}><option value="">Selecione uma empresa</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{tenant && <IntegrationForm key={tenant} tenant={tenant} />}</div>;
+  return <div className="jev-diagnostics" data-testid="jev-admin"><PageHeader className="jev-heading" eyebrow="Configurações → Integrações → JEV" title={<>Integração JEV <StatusBadge tone="info">SHADOW</StatusBadge></>} icon={KeyRound} description="Configuração segura por tenant, sem reiniciar a página ou o atendimento." /><p className="jev-notice">A habilitação permite somente exemplos sintéticos explícitos. Conversas reais continuam bloqueadas para envio externo nesta configuração.</p><p><Link to="/admin/configuracoes">Voltar às configurações</Link></p>{error && <p role="alert">{error}</p>}<div className="jev-card jev-company-selection"><label>Empresa<select aria-label="Empresa" value={tenant} onChange={event => setTenant(event.target.value)}><option value="">Selecione uma empresa</option>{companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>{tenant && <IntegrationForm key={tenant} tenant={tenant} />}</div>;
 }

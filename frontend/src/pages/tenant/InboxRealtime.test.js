@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 const source = readFileSync(new URL("./Inbox.jsx", import.meta.url), "utf8");
 const layoutSource = readFileSync(new URL("../../layouts/TenantLayout.jsx", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+const shellStylesSource = readFileSync(new URL("../../styles/shell.css", import.meta.url), "utf8");
 
 function sortChronologically(messages) {
   return [...messages].sort((a, b) => {
@@ -113,8 +114,12 @@ test("Inbox keeps the chat as the viewport-level layout", () => {
   assert.match(source, /lg:w-\[clamp\(280px,30vw,380px\)\]/);
 });
 
-test("Inbox removes only the redundant tenant header and preserves the admin banner", () => {
-  assert.match(layoutSource, /isInboxRoute \? "hidden" : ""/);
+test("Inbox hides the desktop tenant header, preserves mobile navigation and the admin banner", () => {
+  assert.match(layoutSource, /isInboxRoute \? "fm-shell-inbox chat-shell" : ""/);
+  assert.match(shellStylesSource, /\.fm-shell-inbox \.fm-topbar\s*\{\s*display:\s*none;/);
+  assert.match(shellStylesSource, /@media \(max-width: 1023px\)[\s\S]*\.fm-shell-inbox \.fm-topbar\s*\{\s*display:\s*flex;/);
+  assert.match(layoutSource, /aria-label="Abrir menu" aria-expanded=\{menuOpen\} aria-controls="tenant-navigation"/);
+  assert.match(shellStylesSource, /\.fm-shell-inbox \.fm-shell-main\s*\{\s*overflow:\s*hidden;/);
   assert.match(layoutSource, /Acessando como:/);
   assert.match(layoutSource, /Sair e Voltar/);
   assert.match(stylesSource, /\.chat-shell-content[\s\S]*min-height: 0/);

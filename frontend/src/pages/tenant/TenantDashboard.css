@@ -1,0 +1,11 @@
+
+.fm-dashboard-funnel-link { display:inline-flex; align-items:center; min-height:42px; border:1px solid var(--fm-border-strong); border-radius:var(--fm-radius-md); background:var(--fm-primary-soft); color:var(--fm-primary); padding:10px 16px; font-size:.875rem; font-weight:600; }
+.fm-dashboard-funnel-link:hover { background:var(--fm-inset); }
+.fm-dashboard-alert-contact { border:1px solid var(--fm-border); border-radius:var(--fm-radius-md); padding:12px 16px; background:var(--fm-surface); color:var(--fm-secondary); font-size:.875rem; }
+.fm-dashboard-alert-note { margin-top:12px; border-left:3px solid var(--fm-bronze); border-radius:var(--fm-radius-sm); padding:12px 16px; background:var(--fm-bronze-soft); color:var(--fm-secondary); font-size:.875rem; line-height:1.6; }
+.fm-dashboard-recent-table { overflow:auto; border:1px solid var(--fm-border); border-radius:var(--fm-radius-md); }
+.fm-dashboard-recent-table table { min-width:480px; }
+.fm-dashboard-recent-table th { color:var(--fm-secondary); background:var(--fm-inset); }
+.fm-dashboard-recent-table td { color:var(--fm-secondary); border-color:var(--fm-border); }
+.fm-tenant-dashboard .text-slate-500 { color:var(--fm-muted); }
+.fm-dashboard-recent-table:focus-visible { outline:3px solid var(--fm-focus); outline-offset:3px; }
