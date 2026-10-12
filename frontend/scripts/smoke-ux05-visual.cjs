@@ -339,7 +339,7 @@ async function main() {
         result.checks.push(`${viewport.name}:tenant-scoped-collapse-preferences-survive-switch`);
       }
       await context.close();
-      if (!before) {
+      if (!before && !process.env.UX05_PART && fixtureMode==='normal') {
         const reviewer = await createSession(viewport, 'meta_app_reviewer');
         for (const forbidden of routePaths.filter(routePath => !['/painel/conexoes', '/painel/tags'].includes(routePath))) {
           await reviewer.page.goto(origin + forbidden, { waitUntil: 'networkidle' }); await reviewer.page.waitForURL('**/painel/conexoes');
@@ -361,7 +361,7 @@ async function main() {
       }
     }
     if (!before) assert.deepEqual(result.errors, []); assert.deepEqual(result.failedAssets, []); assert.deepEqual(result.externalRequests, []); assert.deepEqual(result.unexpectedWrites, []);
-    result.checks.push(`${routePaths.length}-declared-tenant-route-examples-covered-at-${selectedViewports.length}-widths-with-direct-reload`, 'every-api-fulfilled-locally', 'external-and-WebSockets-blocked', 'no-provider-message-Meta-tags-write');
+    result.checks.push(`${process.env.UX05_PART ? F.routes[process.env.UX05_PART].length : routePaths.length}-declared-tenant-route-examples-covered-at-${selectedViewports.length}-widths-with-direct-reload`, 'every-api-fulfilled-locally', 'external-and-WebSockets-blocked', 'no-provider-message-Meta-tags-write');
     result.status = before && result.errors.length ? 'BASELINE_RECORDED_WITH_EXISTING_FAILURES' : 'PASS';
   } catch (error) { result.status = 'FAIL'; result.failure = error.stack; process.exitCode = 1; }
   finally {
