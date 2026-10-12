@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../../services/api";
 import { Users, Plus, Phone, Clock, Upload, X, Trash2, GripVertical, RefreshCw } from "lucide-react";
-import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import { getActiveEmpresaId, getStoredToken, getStoredUser } from "../../utils/auth";
+import { CRM_LEAD_SAVE_TIMEOUT_MS, confirmedCrmLeadResponse, crmSaveError } from "../../utils/crmLeadSave";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
@@ -47,6 +48,17 @@ export default function Crm() {
 
   const user = getStoredUser();
   const empresaId = getActiveEmpresaId();
+  const leadSaveScopeRef = useRef(null);
+  const editorEmpresaRef = useRef(empresaId);
+
+  useLayoutEffect(() => {
+    if (editorEmpresaRef.current !== empresaId) {
+      editorEmpresaRef.current = empresaId;
+      setSelectedLead(null);
+    }
+    leadSaveScopeRef.current = { empresaId, leadId: selectedLead?.id };
+    return () => { leadSaveScopeRef.current = null; };
+  }, [empresaId, selectedLead?.id]);
 
   /**
    * Colunas do Kanban = apenas `etapas` do GET /empresas/:id/crm (tabela CRMEtapa).
@@ -300,22 +312,24 @@ export default function Crm() {
   };
 
   const handleLeadSave = async (leadId, updates) => {
-    try {
-      // Salva as edições do modal na API
-      await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates);
-      
-      // Atualização cirúrgica e segura do estado visual (SEM usar res.data)
-      updateLeadInState(leadId, updates);
-
-      // Fecha o modal se aplicável
-      if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(null);
-      }
-      showToast("Lead atualizado com sucesso!");
-    } catch (err) {
-      console.error("Erro ao salvar lead:", err);
-      alert("Erro ao salvar as alterações do lead.");
+    const scope = leadSaveScopeRef.current;
+    const token = getStoredToken();
+    if (!scope || scope.empresaId !== empresaId || scope.leadId !== leadId || getActiveEmpresaId() !== empresaId) {
+      throw crmSaveError('CRM_CONTEXT_CHANGED');
     }
+    const response = await api.put(`/empresas/${empresaId}/crm/leads/${leadId}`, updates, {
+      timeout: CRM_LEAD_SAVE_TIMEOUT_MS,
+      headers: { Authorization: token ? `Bearer ${token}` : '' },
+      crmFieldsSaveContext: { empresaId, leadId },
+    });
+    if (leadSaveScopeRef.current !== scope || getActiveEmpresaId() !== empresaId || getStoredToken() !== token) {
+      throw crmSaveError('CRM_CONTEXT_CHANGED');
+    }
+    if (!confirmedCrmLeadResponse(response, leadId)) throw crmSaveError('CRM_SAVE_NOT_CONFIRMED');
+    // Merge only submitted fields: never replace stage/tags with response data.
+    updateLeadInState(leadId, updates);
+    showToast("Lead atualizado com sucesso!");
+    return { saved: true, empresaId, leadId };
   };
 
   const handleDeleteLead = async (leadId) => {
@@ -607,6 +621,8 @@ export default function Crm() {
       )}
 
       <LeadDetailsModal
+        key={`${empresaId}:${selectedLead?.id || 'none'}`}
+        scopeId={empresaId}
         open={Boolean(selectedLead)}
         lead={selectedLead}
         onClose={() => setSelectedLead(null)}
