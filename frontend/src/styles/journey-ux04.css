@@ -1,0 +1,23 @@
+/* Read-only A04 Journey, docked above the existing composer. */
+.inbox-journey-panel { min-width: 0; height: 100%; color: var(--fm-text); background: var(--fm-raised); border-left: 1px solid var(--fm-border); }
+.inbox-journey-panel .inbox-journey-heading { padding: var(--fm-space-3) var(--fm-space-4); background: var(--fm-surface); border-color: var(--fm-border); }
+.inbox-journey-panel h2, .inbox-journey-panel h3 { color: var(--fm-text); }
+.inbox-journey-panel h2 svg { color: var(--fm-bronze); }
+.inbox-journey-panel p, .inbox-journey-panel label { overflow-wrap: anywhere; }
+.inbox-journey-panel header > p, .inbox-journey-panel .inbox-journey-scroll > p { color: var(--fm-muted); line-height: 1.6; }
+.inbox-journey-panel select { min-width: 0; min-height: 2.5rem; background: var(--fm-raised); color: var(--fm-text); border-color: var(--fm-border-strong); border-radius: var(--fm-radius-md); }
+.inbox-journey-panel .inbox-journey-scroll { padding: var(--fm-space-4); scrollbar-gutter: stable; }
+.inbox-journey-panel .inbox-journey-coverage { background: var(--fm-surface); border-color: var(--fm-border); }
+.inbox-journey-panel .inbox-journey-coverage p { color: var(--fm-muted); line-height: 1.65; }
+.inbox-journey-panel summary { color: var(--fm-primary); }
+.inbox-journey-panel [data-testid="journey-events"] { padding-left: var(--fm-space-3); border-left: 1px solid var(--fm-border-strong); }
+.inbox-journey-panel .inbox-journey-event { position: relative; background: var(--fm-raised); border-color: var(--fm-border); border-radius: var(--fm-radius-md); box-shadow: var(--fm-shadow-card); }
+.inbox-journey-panel .inbox-journey-event::before { position: absolute; content: ""; width: 0.5rem; height: 0.5rem; left: -1.05rem; top: 1rem; border-radius: 50%; background: var(--fm-bronze); }
+.inbox-journey-panel .inbox-journey-event > p { color: var(--fm-muted); line-height: 1.6; }
+.inbox-journey-panel details > summary { min-height: 1.75rem; }
+.inbox-journey-panel dd { overflow-wrap: anywhere; }
+.inbox-journey-panel button:focus-visible, .inbox-journey-panel select:focus-visible, .inbox-journey-panel summary:focus-visible { outline: 2px solid var(--fm-focus); outline-offset: 2px; }
+@media (max-width: 639px) {
+  .inbox-journey-panel .inbox-journey-heading, .inbox-journey-panel .inbox-journey-scroll { padding: var(--fm-space-3); }
+  .inbox-journey-panel select { font-size: 1rem; }
+}

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../../services/api";
-import { Users, Plus, Phone, Clock, MessageSquare, Upload, X, Trash2, GripVertical } from "lucide-react";
+import { Users, Plus, Phone, Clock, Upload, X, Trash2, GripVertical, RefreshCw } from "lucide-react";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import LeadDetailsModal from "../../components/LeadDetailsModal";
 import { CRM_ETAPAS_ATUALIZADAS } from "../../utils/events";
 import { ActionButton, EmptyState, LoadingState, PageHeader } from "../../components/ui";
+import "../../styles/crm-workspace.css";
 
 function formatDate(value) {
   if (!value) return "Hoje";
@@ -28,9 +29,11 @@ export default function Crm() {
   const location = useLocation();
   const [funil, setFunil] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [selectedLead, setSelectedLead] = useState(null);
   const [availableTags, setAvailableTags] = useState([]);
   const [showImportModal, setShowImportModal] = useState(false);
+  const importDialogRef = useRef(null);
   const [importFile, setImportFile] = useState(null);
   const [importPreviewColumns, setImportPreviewColumns] = useState([]);
   const [importSelectedTags, setImportSelectedTags] = useState([]);
@@ -63,6 +66,7 @@ export default function Crm() {
     if (!empresaId) return;
     try {
       setLoading(true);
+      setLoadError("");
       const res = await api.get(`/empresas/${empresaId}/crm`);
       const raw = res.data;
       const etapasApi = Array.isArray(raw?.etapas) ? raw.etapas : [];
@@ -74,6 +78,7 @@ export default function Crm() {
       });
     } catch (err) {
       console.error("Erro ao buscar dados do CRM:", err);
+      setLoadError("Não foi possível carregar o CRM. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -125,6 +130,43 @@ export default function Crm() {
       window.removeEventListener("storage", onStorage);
     };
   }, [empresaId, fetchCrmData]);
+
+  useEffect(() => {
+    if (!showImportModal) return undefined;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = requestAnimationFrame(() => importDialogRef.current?.querySelector("input[type='file']")?.focus());
+    const handleKeyDown = (event) => {
+      const dialog = importDialogRef.current;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dialog?.querySelector("[data-import-close]")?.click();
+      }
+      if (event.key !== "Tab") return;
+      const items = [...(dialog?.querySelectorAll("button:not([disabled]), input:not([disabled])") || [])]
+        .filter((item) => item.getClientRects().length > 0 && getComputedStyle(item).visibility !== "hidden");
+      const first = items[0];
+      const last = items.at(-1);
+      if (!dialog?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [showImportModal]);
 
   const showToast = useCallback((message) => {
     setToastMessage(message);
@@ -363,9 +405,9 @@ export default function Crm() {
   if (!user) return <EmptyState title="Sessão expirada" description="Faça login novamente para acessar o CRM." />;
 
   return (
-    <div className="flex h-full flex-col space-y-6">
+    <div className="ux04-crm">
       {toastMessage ? (
-        <div className="fixed right-4 top-4 z-[70] rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 shadow-lg">
+        <div role="status" className="ux04-crm-toast">
           {toastMessage}
         </div>
       ) : null}
@@ -374,7 +416,7 @@ export default function Crm() {
         title="Leads / CRM"
         description={
           funil
-            ? `Funil: ${funil.funil_nome}. Colunas baseadas nas etapas reais do CRM.`
+            ? `Funil: ${funil.funil_nome}. Acompanhe contatos e oportunidades em cada etapa.`
             : "Gerencie os leads capturados pela IA e mova oportunidades entre etapas."
         }
         icon={Users}
@@ -400,13 +442,21 @@ export default function Crm() {
         }
       />
 
+      <div className="ux04-crm-toolbar">
+        <span>{etapasOrdenadas.reduce((total, etapa) => total + (etapa.leads?.length || 0), 0)} contatos · {etapasOrdenadas.length} etapas</span>
+        <span role="status" className={movingLeadId ? "ux04-crm-moving" : ""}>
+          {movingLeadId ? <><RefreshCw size={14} className="animate-spin" aria-hidden="true" /> Atualizando etapa…</> : "Arraste um contato para mudar a etapa"}
+        </span>
+      </div>
+
+      {loadError ? <div className="ux04-crm-error" role="alert"><span>{loadError}</span><ActionButton type="button" variant="secondary" onClick={fetchCrmData}>Tentar novamente</ActionButton></div> : null}
       {loading ? (
         <LoadingState label="Carregando funil..." />
-      ) : !funil || !Array.isArray(funil.etapas) || etapasOrdenadas.length === 0 ? (
+      ) : loadError && !funil ? null : !funil || !Array.isArray(funil.etapas) || etapasOrdenadas.length === 0 ? (
         <EmptyState title="Funil sem etapas" description="Nenhum dado de CRM encontrado ou o funil ainda não tem etapas. Configure o funil para esta empresa." />
       ) : (
-        <div className="custom-scrollbar flex-1 overflow-x-auto pb-4">
-          <div className="flex h-full min-w-max space-x-6">
+        <div className="ux04-crm-board custom-scrollbar" role="region" aria-label="Quadro de etapas do CRM" tabIndex={0}>
+          <div className="ux04-crm-columns">
             {etapasOrdenadas.map((etapa) => {
               const etapaId = etapa?.id;
               if (!etapaId) return null;
@@ -430,33 +480,29 @@ export default function Crm() {
                   onDragOver={(ev) => handleEtapaDragOver(ev, etapaId)}
                   onDragLeave={handleEtapaDragLeave}
                   onDrop={(ev) => handleEtapaDrop(ev, etapaId)}
-                  className={`flex w-80 flex-col overflow-hidden rounded-2xl border bg-gray-50/80 shadow-sm transition-colors ${
-                    dragOverEtapaId === etapaId
-                      ? "border-blue-400 ring-2 ring-blue-200"
-                      : "border-gray-200/60"
-                  }`}
+                  data-etapa-id={etapaId}
+                  className={`ux04-crm-column ${dragOverEtapaId === etapaId ? "is-drop-target" : ""}`}
                 >
-                  <div className="flex items-center justify-between border-b border-gray-200/60 bg-gray-100/50 px-4 py-3">
+                  <div className="ux04-crm-column-header">
                     <div className="min-w-0">
-                      <h3 className="truncate font-semibold text-gray-800" title={etapa.nome}>
+                      <h3 className="ux04-crm-column-title" title={etapa.nome}>
                         {etapa.nome}
                       </h3>
                       <p
-                        className={`mt-1 text-xs font-medium ${
-                          totalLeadsConvertidosEtapa > 0 ? "text-emerald-700" : "text-gray-400"
-                        }`}
+                        className={`ux04-crm-column-value ${totalLeadsConvertidosEtapa > 0 ? "has-value" : ""}`}
                       >
                         {resumoFaturamentoEtapa}
                       </p>
                     </div>
-                    <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-bold text-gray-600 shadow-sm">
+                    <span className="ux04-crm-column-count" aria-label={`${etapa.leads?.length || 0} contatos`}>
                       {etapa.leads?.length || 0}
                     </span>
                   </div>
 
-                  <div className="custom-scrollbar min-h-[150px] flex-1 space-y-3 overflow-y-auto p-3">
+                  {dragOverEtapaId === etapaId ? <p className="ux04-crm-drop-hint" role="status">Solte para mover para {etapa.nome}</p> : null}
+                  <div className="ux04-crm-column-body custom-scrollbar">
                     {!etapa.leads || etapa.leads.length === 0 ? (
-                      <div className="flex h-full items-center justify-center rounded-xl border-2 border-dashed border-gray-200 p-4 text-center text-sm font-medium text-gray-400/70">
+                      <div className="ux04-crm-column-empty">
                         Nenhum lead nesta etapa
                       </div>
                     ) : (
@@ -464,41 +510,41 @@ export default function Crm() {
                         <div
                           key={lead.id}
                           role="button"
+                          aria-label={`Abrir detalhes de ${lead.nome_contato || "contato"}`}
+                          aria-busy={movingLeadId === lead.id}
+                          data-lead-id={lead.id}
                           tabIndex={0}
                           draggable={!movingLeadId}
                           onDragStart={(ev) => handleLeadDragStart(ev, lead.id)}
                           onDragEnd={() => setDragOverEtapaId(null)}
-                          onClick={() => setSelectedLead(lead)}
+                          onClick={(ev) => {
+                            ev.currentTarget.focus({ preventScroll: true });
+                            setSelectedLead(lead);
+                          }}
                           onKeyDown={(ev) => {
-                            if (ev.key === "Enter" || ev.key === " ") {
+                            if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) {
                               ev.preventDefault();
                               setSelectedLead(lead);
                             }
                           }}
-                          className={`group rounded-xl border border-gray-100 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-all hover:border-blue-300 hover:shadow-md ${
-                            movingLeadId === lead.id ? "pointer-events-none opacity-60" : ""
-                          } ${!movingLeadId ? "cursor-grab active:cursor-grabbing" : "cursor-wait"}`}
+                          className={`ux04-crm-card ${movingLeadId === lead.id ? "is-moving" : ""} ${!movingLeadId ? "can-drag" : "is-waiting"}`}
                         >
-                          <div className="mb-2 flex justify-between gap-3">
+                          <div className="ux04-crm-card-heading">
                             <div className="flex min-w-0 flex-1 items-center gap-2">
                               <span
-                                className="shrink-0 text-gray-300 opacity-0 transition-opacity group-hover:opacity-100"
+                                className="ux04-crm-grip"
                                 title="Arrastar para outra etapa"
                                 aria-hidden
                               >
                                 <GripVertical size={16} />
                               </span>
-                              <h4 className="line-clamp-1 font-semibold text-gray-900">{lead.nome_contato}</h4>
+                              <h4 className="ux04-crm-contact-name">{lead.nome_contato}</h4>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
-                                className="rounded-lg bg-blue-50 p-1.5 text-blue-600 opacity-0 transition-opacity group-hover:opacity-100"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <MessageSquare size={14} />
-                              </button>
-                              <button
-                                className="rounded-lg bg-red-50 p-1.5 text-red-600 opacity-0 transition-opacity hover:bg-red-100 group-hover:opacity-100"
+                                type="button"
+                                aria-label={`Excluir lead ${lead.nome_contato || "contato"}`}
+                                className="ux04-crm-delete"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleDeleteLead(lead.id);
@@ -511,14 +557,14 @@ export default function Crm() {
                           </div>
 
                           {lead.telefone ? (
-                            <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
-                              <Phone size={14} className="text-green-600" />
-                              <span className="font-medium text-gray-700">{lead.telefone}</span>
+                            <div className="ux04-crm-phone">
+                              <Phone size={14} aria-hidden="true" />
+                              <span>{lead.telefone}</span>
                             </div>
                           ) : null}
 
                           {lead.historico_resumo ? (
-                            <p className="mb-3 line-clamp-2 rounded-lg border border-gray-100 bg-gray-50 p-2 text-xs text-gray-500">
+                            <p className="ux04-crm-summary">
                               {lead.historico_resumo}
                             </p>
                           ) : null}
@@ -531,27 +577,23 @@ export default function Crm() {
                             tagDefinitions={availableTags}
                           />
 
-                          <div className="mt-3 flex items-center justify-between gap-3">
-                            <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                          <div className="ux04-crm-sale">
+                            <span className="ux04-crm-sale-label">
                               Valor Venda
                             </span>
                             <span
-                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                Number(lead.valor_conversao || 0) > 0
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : "bg-gray-100 text-gray-600"
-                              }`}
+                              className={`ux04-crm-sale-value ${Number(lead.valor_conversao || 0) > 0 ? "has-value" : ""}`}
                             >
                               {formatCurrency(lead.valor_conversao || 0)}
                             </span>
                           </div>
 
-                          <div className="mt-3 flex items-center justify-between border-t border-gray-50 pt-3">
-                            <div className="flex items-center gap-1 text-[11px] font-medium text-gray-400 opacity-80">
+                          <div className="ux04-crm-card-footer">
+                            <div className="ux04-crm-date">
                               <Clock size={12} />
                               {formatDate(lead.criado_em)}
                             </div>
-                            <span className="text-[11px] font-medium text-blue-600">Detalhes</span>
+                            <span className="ux04-crm-details">{movingLeadId === lead.id ? "Atualizando…" : "Detalhes →"}</span>
                           </div>
                         </div>
                       ))
@@ -574,37 +616,38 @@ export default function Crm() {
       />
 
       {showImportModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div className="ux04-lead-overlay">
+          <div ref={importDialogRef} className="ux04-lead-dialog ux04-crm-import" role="dialog" aria-modal="true" aria-labelledby="ux04-import-title" aria-describedby="ux04-import-description">
+            <div className="ux04-lead-header">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Importar Leads</h2>
-                <p className="text-sm text-gray-500">Envie um CSV ou Excel com colunas de Nome e Telefone.</p>
+                <h2 id="ux04-import-title" className="ux04-crm-import-title">Importar Leads</h2>
+                <p id="ux04-import-description" className="ux04-lead-helper">Envie um CSV ou Excel com colunas de Nome e Telefone.</p>
               </div>
-              <button type="button" onClick={resetImportModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+              <button type="button" onClick={resetImportModal} aria-label="Fechar importação" data-import-close className="ux04-lead-close">
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitImport} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <form onSubmit={handleSubmitImport} className="ux04-lead-form" aria-busy={importSaving}>
+              <div className="ux04-lead-body">
                 <div className="space-y-5">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Arquivo</label>
+                    <label htmlFor="ux04-import-file" className="ux04-crm-import-label">Arquivo</label>
                     <input
+                      id="ux04-import-file"
                       type="file"
                       accept=".csv,.xlsx"
                       onChange={handleImportFileChange}
-                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800"
+                      className="fm-field"
                     />
                   </div>
 
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Preview das colunas</p>
+                  <div className="ux04-crm-import-section">
+                    <p className="ux04-crm-import-label">Preview das colunas</p>
                     {importPreviewColumns.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
                         {importPreviewColumns.map((column) => (
-                          <span key={column} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                          <span key={column} className="fm-badge fm-tone-info">
                             {column}
                           </span>
                         ))}
@@ -616,8 +659,8 @@ export default function Crm() {
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags iniciais da lista</p>
+                  <div className="ux04-crm-import-section">
+                    <p className="ux04-crm-import-label">Tags iniciais da lista</p>
                     <div className="flex flex-wrap gap-2">
                       {availableTags.map((tag) => {
                         const selected = importSelectedTags.includes(tag.nome);
@@ -625,16 +668,13 @@ export default function Crm() {
                           <button
                             key={tag.id}
                             type="button"
+                            aria-pressed={selected}
                             onClick={() =>
                               setImportSelectedTags((prev) =>
                                 selected ? prev.filter((item) => item !== tag.nome) : [...prev, tag.nome]
                               )
                             }
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                              selected
-                                ? "border-blue-300 bg-blue-600 text-white"
-                                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
-                            }`}
+                            className={`ux04-crm-import-tag ${selected ? "is-selected" : ""}`}
                           >
                             {tag.nome}
                           </button>
@@ -644,14 +684,14 @@ export default function Crm() {
                   </div>
                 </div>
               </div>
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
-                <button type="button" onClick={resetImportModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
+              <div className="ux04-lead-footer justify-end">
+                <button type="button" onClick={resetImportModal} className="fm-button fm-button-secondary">
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={!importFile || importSaving}
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="fm-button fm-button-primary"
                 >
                   {importSaving ? "Importando..." : "Importar leads"}
                 </button>

@@ -1,25 +1,7 @@
 import { useMemo, useState } from "react";
 import { Tag, X } from "lucide-react";
 import { normalizeLeadTags, normalizeLeadTagsForApi, normalizeTagValue } from "../utils/leadTags";
-
-const TAG_COLOR_VARIANTS = [
-  "bg-blue-50 text-blue-700 border-blue-200",
-  "bg-violet-50 text-violet-700 border-violet-200",
-  "bg-emerald-50 text-emerald-700 border-emerald-200",
-  "bg-amber-50 text-amber-700 border-amber-200",
-  "bg-rose-50 text-rose-700 border-rose-200",
-  "bg-cyan-50 text-cyan-700 border-cyan-200",
-];
-
-function getTagColorClass(tag) {
-  const text = String(tag || "").trim().toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (hash << 5) - hash + text.charCodeAt(i);
-    hash |= 0;
-  }
-  return TAG_COLOR_VARIANTS[Math.abs(hash) % TAG_COLOR_VARIANTS.length];
-}
+import "../styles/lead-workspace.css";
 
 function getTagDefinitionMap(tagDefinitions) {
   const byName = new Map();
@@ -110,9 +92,34 @@ export default function LeadTagsEditor({
     await submitTags([...normalizedTags, tagName]);
   };
 
+  const tagChoices = (
+    <div className="ux04-tags-choices">
+      <p>{placeholder}</p>
+      <div className="ux04-tags-grid">
+        {availableTagNames.map((tagOption) => {
+          const tagKey = tagOption.id || tagOption.nome;
+          const tagLabel = tagOption.nome || tagOption.id;
+          const checked = normalizedTags.some((tag) => tag.toLowerCase() === String(tagKey).toLowerCase());
+          return (
+            <label key={tagKey} className={`ux04-tags-option ${checked ? "is-selected" : ""}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={saving}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => handleToggleOfficialTag(tagKey)}
+              />
+              <span>{tagLabel}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
-    <div className={`space-y-2 ${className}`}>
-      <div className="flex flex-wrap items-center gap-2">
+    <div className={`ux04-tags ${className}`} aria-busy={saving} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") e.stopPropagation(); }}>
+      <div className="ux04-tags-selected">
         {normalizedTags.length > 0 ? (
           normalizedTags.map((tag) => {
             const tagDefinition =
@@ -122,12 +129,8 @@ export default function LeadTagsEditor({
               selectedTagLabelsMap.get(tag) ||
               String(tagDefinition?.nome || tagDefinition?.id || tag || "").trim();
             return (
-              <span
-                key={tag}
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${getTagColorClass(label)}`}
-                style={getTagInlineStyle(tagDefinition)}
-              >
-                <Tag size={12} />
+              <span key={tag} className="ux04-tag-chip" style={getTagInlineStyle(tagDefinition)}>
+                <Tag size={12} aria-hidden="true" />
                 <span>{label || tag}</span>
                 <button
                   type="button"
@@ -135,58 +138,31 @@ export default function LeadTagsEditor({
                     e.stopPropagation();
                     handleRemoveTag(tag);
                   }}
-                  className="rounded-full p-0.5 transition-colors hover:bg-white/60"
                   disabled={saving}
                   aria-label={`Remover tag ${label || tag}`}
                 >
-                  <X size={12} />
+                  <X size={12} aria-hidden="true" />
                 </button>
               </span>
             );
           })
-        ) : (
-          <span className="text-xs text-gray-400">Sem tags</span>
-        )}
+        ) : <span className="ux04-tags-empty">Sem tags</span>}
       </div>
 
       {tagDefinitions.length === 0 ? (
-        <p className="text-xs text-amber-600">
-          Nenhuma tag oficial cadastrada. Peça ao administrador para criar tags na Gestão de Tags.
-        </p>
+        <p className="ux04-tags-warning">Nenhuma tag oficial cadastrada. Peça ao administrador para criar tags na Gestão de Tags.</p>
       ) : null}
 
       {availableTagNames.length > 0 ? (
-        <div className={`rounded-xl border border-gray-200 bg-white ${compact ? "p-2" : "p-3"}`}>
-          <p className={`mb-2 text-gray-500 ${compact ? "text-[11px]" : "text-xs"}`}>{placeholder}</p>
-          <div className={`grid gap-2 ${compact ? "grid-cols-1" : "grid-cols-2"}`}>
-            {availableTagNames.map((tagOption) => {
-              const tagKey = tagOption.id || tagOption.nome;
-              const tagLabel = tagOption.nome || tagOption.id;
-              const checked = normalizedTags.some((tag) => tag.toLowerCase() === String(tagKey).toLowerCase());
-              return (
-                <label
-                  key={tagKey}
-                  className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-medium ${
-                    checked ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 bg-white text-gray-600"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={saving}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={() => handleToggleOfficialTag(tagKey)}
-                    className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>{tagLabel}</span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
+        compact ? (
+          <details className="ux04-tags-disclosure">
+            <summary>Tags oficiais</summary>
+            {tagChoices}
+          </details>
+        ) : tagChoices
       ) : null}
-
-      {error ? <p className="text-xs text-red-500">{error}</p> : null}
+      {saving ? <p className="ux04-tags-status" role="status">Salvando tags…</p> : null}
+      {error ? <p className="ux04-tags-error" role="alert">{error}</p> : null}
     </div>
   );
 }

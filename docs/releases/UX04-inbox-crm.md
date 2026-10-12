@@ -1,0 +1,19 @@
+# UX04 — contrato congelado Inbox, CRM e Jornada
+
+Autorização: pedido UX04 e Issue #21 integral, incluindo publicação master após revisão independente e deploy frontend-only. Baseline e74d9b9332e0bd4cbb39dcd0721a386ea63ae1d1, imagem UX03 ativa confirmada. AGENTS, safe-production-change, relatórios e documentação UX01–UX03 e Design System Ferrioli lidos. Fonte isolada /tmp/agentos-ux04-20261012/source, backup prechange-approved-source; árvore principal preservada.
+
+## Objetivo e limites
+Melhorar hierarquia, densidade, leitura, contexto, formulários e estados do trabalho diário em Inbox/CRM/Jornada com tokens Ferrioli. Desktop/notebook: lista e conversa limitadas ao viewport, contexto sem cobrir composer; mobile lista/conversa/contexto preservam seleção. Kanban etapas/cartões/drag/drop e feedback, contato com seções/foco/Escape/scroll, tags com interação explícita original, Jornada A04 somente leitura.
+Backend, banco, APIs, payloads, WebSocket/reconexão/heartbeat, envio/mídia/retry, regras/tags/conversão/estado comercial, JEV/followups/Meta/pagamentos/auth/tenant/root React/URLs fora de escopo. Nenhuma mensagem/tag/upload/ação externa real nos testes. Tags mantêm ação manual imediata EXISTENTE; salvar dados do contato não reaplica tags. Valor da venda permanece informação CRM. Preserve A01/A04/A05/A06, UX01/02/03 e aliases.
+
+## Ownership
+Implementador Inbox: frontend/src/pages/tenant/Inbox.jsx, components/MessageList.jsx, MessageBubble.jsx, CommercialJourneyTimeline.jsx; CSS inbox/journey específico. Apresentação/aria/estado visual apenas, callbacks e lógica anteriores ao JSX equivalentes salvo estado local estritamente visual e comprovado.
+Implementador CRM/contato: frontend/src/pages/tenant/Crm.jsx, components/LeadDetailsModal.jsx, LeadTagsEditor.jsx; CSS crm/lead específico. Manter endpoints, payloads, fluxos tag/DnD/import/contato; foco/escopo visual acessível; sem refatoração funcional.
+Integrador root: docs, inventário, scripts browser/fixtures/contratos, evidências, testes/build/scan, deploy/rollback e relatório. Revisão independente somente leitura; integrador declara conclusão.
+
+## Gates congelados
+Frontend integral baseline161+ testes significativos DOM em Chromium; Node22 build/guard artifacts single-root, lint focado sem novos erros. Capturas antes/candidata/público com dataset sintético: desktop1440×1000, notebook1280×800, mobile390×844. Inbox lista/filtros/seleção, mensagens autoria/status/mídia/ordem/reação, scroll/foco/composer, WS simulado/reconexão preservados, contexto/Jornada filtros/paginação/coverage/UNKNOWN; CRM DnD e persistência mock, edição/cancel/salvar/foco/tags manuais, erro/loading/vazio; Funil→Jornada→Inbox/retorno; URLs/roles/reviewer/impersonation. APIs interceptadas, todos sockets reais bloqueados. Zero novas regressões nos gates, sem alegar backend integral verde (18 falhas históricas A06).
+Regressões UX01–UX03, A01/A04/A05/A06 e React#16; WhatsApp/auth/backend focados mocks. 14 protected baselines antes/candidata/pré/pós com backend A06 --candidate-image --require-candidate; candidato frontend validado separadamente. Diff permitido, contratos preservados, secret scan, nginx/59Anamnese idênticos. Auditoria independente antes publicação/deploy, nenhum P0/P1 aberto.
+
+## Release/fechamento
+Imagem panel_release sobre UX03 aprovada, SHA vinculado. Master fast-forward após gates/revisão. Trocar somente agent_os_frontend_issue16, preservar config/rede/env/mounts, rollback automático/readiness e standby UX03. Backend/PG/Redis/Evolution IDs/imagens/start/env/mounts/flags preservados; nenhuma migration. Saúde pública/assets/browser e protected pós-deploy; rollback se falha da release. Relatório final único reports/ux04-inbox-crm-20261012/RELATORIO.md, comparativo/capturas/evidências sanitizadas, rollback dry-run; atualização Issue #21 autorizada pela própria issue. REAL_VALIDATED restrito a navegação/assets públicos com APIs sintéticas, sem validação comercial real.

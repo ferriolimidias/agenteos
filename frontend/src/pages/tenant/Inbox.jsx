@@ -10,6 +10,8 @@ import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
 import CommercialJourneyTimeline from "../../components/CommercialJourneyTimeline";
+import { ActionButton, EmptyState, InfoBanner, LoadingState } from "../../components/ui";
+import "../../styles/inbox-ux04.css";
 
 const STATUS_ATENDIMENTO_ABERTOS = new Set(["aberto", "aguardando_humano", "manual"]);
 const AI_STATE_UI = {
@@ -106,6 +108,13 @@ export default function Inbox() {
 
   const [leads, setLeads] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
+  const [showConversationList, setShowConversationList] = useState(false);
+  const [leadsLoading, setLeadsLoading] = useState(true);
+  const [leadsError, setLeadsError] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState(false);
+  const [connectionState, setConnectionState] = useState(0);
+  const journeyButtonRef = useRef(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [isSendingMedia, setIsSendingMedia] = useState(false);
@@ -285,6 +294,8 @@ export default function Inbox() {
     }
 
     leadsFetchInFlightRef.current = true;
+    setLeadsLoading(true);
+    setLeadsError(false);
     try {
       const res = await api.get(`/empresas/${empresa_id}/inbox`);
       const nextLeads = res.data || [];
@@ -296,8 +307,10 @@ export default function Inbox() {
       });
     } catch (e) {
       console.error("Erro ao buscar leads no Inbox:", e);
+      setLeadsError(true);
       setLeads([]);
     } finally {
+      setLeadsLoading(false);
       leadsFetchInFlightRef.current = false;
       if (leadsFetchQueuedRef.current) {
         leadsFetchQueuedRef.current = false;
@@ -319,12 +332,17 @@ export default function Inbox() {
 
   const fetchMessages = useCallback(async (telefone) => {
     if (!empresa_id || !telefone) return;
+    setMessagesLoading(true);
+    setMessagesError(false);
     try {
       const res = await api.get(`/empresas/${empresa_id}/inbox/${telefone}`);
       setMessages(res.data || []);
     } catch (e) {
       console.error("Erro ao buscar mensagens do lead no Inbox:", e);
+      setMessagesError(true);
       setMessages([]);
+    } finally {
+      setMessagesLoading(false);
     }
   }, [empresa_id]);
 
@@ -1371,6 +1389,29 @@ export default function Inbox() {
 
   const handleSelectLead = (lead) => {
     setSelectedLead(lead);
+    setShowConversationList(false);
+  };
+
+  // Observe the active socket for presentation only. Connection ownership,
+  // heartbeat and reconnect scheduling remain in the existing effect above.
+  useEffect(() => {
+    const socket = wsRef.current;
+    if (!socket) return;
+    const observe = () => setConnectionState(socket.readyState);
+    observe();
+    socket.addEventListener("open", observe);
+    socket.addEventListener("close", observe);
+    socket.addEventListener("error", observe);
+    return () => {
+      socket.removeEventListener("open", observe);
+      socket.removeEventListener("close", observe);
+      socket.removeEventListener("error", observe);
+    };
+  });
+
+  const closeJourney = () => {
+    setShowJourney(false);
+    journeyButtonRef.current?.focus({ preventScroll: true });
   };
 
   const tagsOficiaisLookup = useMemo(() => {
@@ -1469,12 +1510,12 @@ export default function Inbox() {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="inbox-ux04 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {funnelContext && <Link to="/painel/funil" state={{ funnelContext }} className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">← Voltar ao funil com os filtros</Link>}
       {journeyLinkMessage && <p role="alert" className="shrink-0 px-3 py-2 text-sm text-amber-800 bg-amber-50">{journeyLinkMessage}</p>}
-      <div className="relative flex min-h-0 min-w-0 flex-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="inbox-frame relative flex min-h-0 min-w-0 flex-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       {toast ? (
-        <div className="fixed right-6 top-6 z-[80]">
+        <div className="inbox-toast fixed right-6 top-6 z-[80]" role={toast.type === "error" ? "alert" : "status"}>
           <div
             className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
               toast.type === "success"
@@ -1490,7 +1531,7 @@ export default function Inbox() {
                 <p className="text-sm font-semibold">{toast.type === "success" ? "Tudo certo" : "Atenção"}</p>
                 <p className="mt-0.5 text-sm">{toast.message}</p>
               </div>
-              <button type="button" onClick={() => setToast(null)} className="rounded-lg p-1 opacity-70 hover:opacity-100">
+              <button type="button" aria-label="Fechar aviso" onClick={() => setToast(null)} className="rounded-lg p-1 opacity-70 hover:opacity-100">
                 <X size={14} />
               </button>
             </div>
@@ -1498,12 +1539,14 @@ export default function Inbox() {
         </div>
       ) : null}
 
-      <aside className={`flex h-full min-h-0 min-w-0 w-full shrink-0 flex-col border-r border-gray-200 bg-white lg:w-[clamp(280px,30vw,380px)] ${selectedLead ? "hidden lg:flex" : "flex"}`}>
-        <div className="shrink-0 border-b border-gray-200 px-5 py-5">
-          <h2 className="text-xl font-semibold text-gray-800">Conversas</h2>
+      <aside aria-label="Lista de conversas" className={`inbox-list flex h-full min-h-0 min-w-0 w-full shrink-0 flex-col border-r border-gray-200 bg-white lg:w-[clamp(280px,30vw,380px)] ${selectedLead && !showConversationList ? "hidden lg:flex" : "flex"}`}>
+        <div className="inbox-list-heading shrink-0 border-b border-gray-200 px-5 py-5">
+          <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-semibold text-gray-800">Conversas</h2><span className="inbox-count">{filteredLeads.length}</span></div>
+          <p data-testid="inbox-connection" role="status" className={`inbox-connection ${connectionState > 1 ? "inbox-connection-offline" : ""}`}><span aria-hidden="true" />{connectionState === 1 ? "Atualizações em tempo real" : connectionState > 1 ? "Conexão interrompida · aguardando reconexão" : "Conectando atualizações…"}</p>
+          {selectedLead && showConversationList && <button type="button" aria-label="Voltar à conversa selecionada" onClick={() => setShowConversationList(false)} className="inbox-resume lg:hidden">Voltar à conversa de {selectedLead.nome_contato}</button>}
         </div>
-        <div className="shrink-0 border-b border-gray-100 px-5 py-4">
-          <div className="inline-flex rounded-xl bg-gray-100 p-1">
+        <div className="inbox-filters shrink-0 border-b border-gray-100 px-5 py-4">
+          <div className="inbox-status-filters inline-flex rounded-xl bg-gray-100 p-1" aria-label="Status do atendimento">
             {[
               { id: "aberto", label: "Abertos" },
               { id: "concluido", label: "Concluídos" },
@@ -1511,6 +1554,7 @@ export default function Inbox() {
               <button
                 key={status.id}
                 type="button"
+                aria-pressed={filtroStatus === status.id}
                 onClick={() => setFiltroStatus(status.id)}
                 className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-colors ${
                   filtroStatus === status.id
@@ -1526,6 +1570,7 @@ export default function Inbox() {
           <div className="relative mt-3">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
+              aria-label="Buscar por nome ou telefone"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar por nome ou telefone"
@@ -1534,6 +1579,7 @@ export default function Inbox() {
           </div>
 
           <select
+            aria-label="Filtrar por departamento"
             value={abaAtiva}
             onChange={(e) => setAbaAtiva(e.target.value)}
             className="mb-3 mt-3 w-full rounded-md border border-gray-200 bg-gray-50 p-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1547,12 +1593,17 @@ export default function Inbox() {
             <option value="Sem Grupo">Sem Departamento</option>
           </select>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div data-testid="inbox-conversations" aria-busy={leadsLoading} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {leadsError && <div className="inbox-list-state" role="alert"><InfoBanner tone="danger">Não foi possível carregar as conversas.</InfoBanner><ActionButton variant="secondary" onClick={fetchLeads}>Tentar novamente</ActionButton></div>}
+          {leadsLoading && !leads.length && <div className="inbox-list-state"><LoadingState label="Carregando conversas…" /></div>}
           {filteredLeads?.map((lead) => (
-            <div
+            <button
               key={lead.id}
+              type="button"
+              data-lead-id={lead.id}
+              aria-pressed={selectedLead?.id === lead.id}
               onClick={() => handleSelectLead(lead)}
-              className={`cursor-pointer border-b border-gray-100 px-5 py-4 transition-colors duration-200 ${
+              className={`inbox-lead-row w-full text-left cursor-pointer border-b border-gray-100 px-5 py-4 transition-colors duration-200 ${
                 selectedLead?.id === lead.id ? "bg-blue-50" : "hover:bg-gray-50"
               }`}
             >
@@ -1584,17 +1635,15 @@ export default function Inbox() {
                   ) : null}
                 </div>
               </div>
-            </div>
+            </button>
           ))}
-          {(!filteredLeads || filteredLeads.length === 0) && (
-            <div className="p-6 text-center text-sm text-gray-400">
-              Nenhuma conversa encontrada para os filtros atuais.
-            </div>
+          {!leadsLoading && !leadsError && (!filteredLeads || filteredLeads.length === 0) && (
+            <div className="inbox-list-state"><EmptyState title="Nenhuma conversa encontrada" description="Nenhuma conversa encontrada para os filtros atuais. Ajuste a busca, o status ou o departamento." /></div>
           )}
         </div>
       </aside>
 
-      <section className={`h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#f0f2f5] ${selectedLead ? "flex" : "hidden lg:flex"}`}>
+      <section aria-label="Conversa selecionada" className={`inbox-conversation h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#f0f2f5] ${selectedLead && !showConversationList ? "flex" : "hidden lg:flex"}`}>
         {selectedLead ? (
           <>
             <header className="chat-conversation-header z-20 shrink-0 border-b border-gray-200 bg-white px-5 py-4 shadow-sm">
@@ -1603,11 +1652,11 @@ export default function Inbox() {
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedLead(null);
-                      setMessages([]);
+                      setShowConversationList(true);
                     }}
                     className="shrink-0 rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
                     title="Voltar para conversas"
+                    aria-label="Voltar para conversas"
                   >
                     <ArrowLeft size={18} />
                   </button>
@@ -1617,14 +1666,15 @@ export default function Inbox() {
                     size="lg"
                     className="flex-shrink-0"
                   />
-                  <div className="min-w-0">
+                  <div className="inbox-contact-identity min-w-0">
                     <h3 className="truncate text-base font-semibold text-gray-900">{selectedLead.nome_contato}</h3>
                     <p className="truncate text-sm text-gray-500">{selectedLead.telefone_contato}</p>
+                    {selectedLead.etapa_crm && <p className="inbox-contact-stage" title={selectedLead.etapa_crm}>CRM · {selectedLead.etapa_crm}</p>}
                   </div>
                 </div>
 
-                <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap">
-                  <button type="button" onClick={() => setShowJourney(value => !value)} aria-expanded={showJourney} className="rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
+                <div className="inbox-header-actions flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap">
+                  <button ref={journeyButtonRef} type="button" onClick={() => setShowJourney(value => !value)} aria-expanded={showJourney} aria-controls="inbox-journey-panel" className="inbox-journey-trigger rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
                   <button
                     type="button"
                     onClick={handleToggleStatus}
@@ -1636,12 +1686,14 @@ export default function Inbox() {
                     } disabled:cursor-not-allowed disabled:opacity-70`}
                     title={statusConcluir ? "Reabrir atendimento" : "Concluir atendimento"}
                   >
-                    <Check size={14} />
+                    {statusToggleLoading ? <RefreshCw size={14} className="animate-spin" aria-label="Atualizando atendimento" /> : <Check size={14} />}
                     {statusConcluir ? "Reabrir" : "Concluir"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowTagsPanel((prev) => !prev)}
+                    aria-expanded={showTagsPanel}
+                    aria-controls="inbox-tags-panel"
                     className="rounded-lg px-2.5 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100"
                   >
                     Tags
@@ -1650,6 +1702,7 @@ export default function Inbox() {
                     type="button"
                     onClick={handleToggleBot}
                     disabled={botToggleLoading}
+                    aria-busy={botToggleLoading}
                     className={`chat-header-ai basis-full flex min-w-0 max-w-full flex-1 items-center gap-2 rounded-full border px-2.5 py-1.5 transition-colors lg:basis-auto ${
                       selectedLeadPaused
                         ? "border-orange-200 bg-orange-50 hover:bg-orange-100"
@@ -1679,6 +1732,9 @@ export default function Inbox() {
                   <button
                     type="button"
                     onClick={() => setShowTransferPanel((prev) => !prev)}
+                    aria-expanded={showTransferPanel}
+                    aria-controls="inbox-transfer-panel"
+                    aria-label="Transferir"
                     className="rounded-lg p-2 text-emerald-700 transition-colors hover:bg-emerald-50"
                     title="Transferir"
                   >
@@ -1688,6 +1744,7 @@ export default function Inbox() {
                     type="button"
                     onClick={handleExcluirLead}
                     title="Excluir lead"
+                    aria-label="Excluir lead"
                     className="rounded-lg p-2 text-red-600 transition-colors hover:bg-red-50"
                   >
                     <Trash2 size={16} />
@@ -1696,9 +1753,9 @@ export default function Inbox() {
               </div>
 
               {(showTagsPanel || showTransferPanel) ? (
-                <div className="mt-3 space-y-2">
+                <div className="inbox-context-controls mt-3 space-y-2">
                   {showTagsPanel ? (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-2.5">
+                    <div id="inbox-tags-panel" className="rounded-xl border border-gray-200 bg-gray-50 p-2.5">
                       <LeadTagsEditor
                         tags={normalizeLeadTags(selectedLead?.tags)}
                         compact
@@ -1709,9 +1766,10 @@ export default function Inbox() {
                     </div>
                   ) : null}
                   {showTransferPanel ? (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5">
+                    <div id="inbox-transfer-panel" className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5">
                       <div className="flex gap-2">
                         <select
+                          aria-label="Destino da transferência"
                           value={selectedDestinoId}
                           onChange={(e) => setSelectedDestinoId(e.target.value)}
                           className="flex-1 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500"
@@ -1738,17 +1796,24 @@ export default function Inbox() {
               ) : null}
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 xl:px-8">
+            <div className={`inbox-workspace min-h-0 flex-1 ${showJourney ? "inbox-workspace-with-journey" : ""}`}>
+            <div data-testid="inbox-message-scroll" aria-label="Histórico de mensagens" aria-busy={messagesLoading} className="inbox-message-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 xl:px-8">
+              {connectionState > 1 && <p role="status" className="inbox-reconnect-notice">Conexão interrompida. Aguardando reconexão para receber novas atualizações.</p>}
+              {messagesError && <div role="alert" className="inbox-history-state"><InfoBanner tone="danger">Não foi possível carregar o histórico.</InfoBanner><ActionButton variant="secondary" onClick={() => fetchMessages(selectedLead.telefone_contato)}>Tentar novamente</ActionButton></div>}
+              {messagesLoading && !messages.length && <div className="inbox-history-state"><LoadingState label="Carregando histórico…" /></div>}
               <MessageList
                 messages={messages || []}
                 renderMessageContent={renderMensagemConteudo}
                 messagesEndRef={messagesEndRef}
                 contactName={selectedLead?.nome_contato}
                 contactPhotoUrl={selectedLead?.foto_url}
+                hideEmptyState={messagesLoading || messagesError}
               />
             </div>
+            {showJourney && selectedLead?.id && <CommercialJourneyTimeline empresaId={empresa_id} leadId={selectedLead.id} onClose={closeJourney} />}
+            </div>
 
-            <footer className="shrink-0 border-t border-gray-200 bg-gray-100 p-4">
+            <footer className="inbox-composer shrink-0 border-t border-gray-200 bg-gray-100 p-4">
               <div className="w-full">
                 {selectedFile ? (
                   <div className="mb-2 rounded-xl border border-gray-200 bg-white p-2.5">
@@ -1765,7 +1830,7 @@ export default function Inbox() {
                         )}
                         <span className="max-w-[320px] truncate font-medium">{selectedFile.name}</span>
                       </div>
-                      <button type="button" onClick={clearSelectedFile} className="rounded-md p-1 text-gray-500 hover:bg-gray-100">
+                      <button type="button" aria-label="Retirar anexo" onClick={clearSelectedFile} className="rounded-md p-1 text-gray-500 hover:bg-gray-100">
                         <X size={14} />
                       </button>
                     </div>
@@ -1773,6 +1838,7 @@ export default function Inbox() {
                       value={mediaCaption}
                       onChange={(e) => setMediaCaption(e.target.value)}
                       placeholder="Legenda opcional..."
+                      aria-label="Legenda opcional do anexo"
                       className="mt-2 w-full rounded-full border-none bg-gray-100 px-3 py-2 text-sm outline-none focus:ring-0"
                     />
                   </div>
@@ -1791,6 +1857,7 @@ export default function Inbox() {
                     onClick={() => fileInputRef.current?.click()}
                     className="rounded-full bg-white p-2.5 text-gray-600 shadow-sm transition-colors hover:bg-gray-50"
                     title="Anexar"
+                    aria-label="Anexar"
                   >
                     <Paperclip size={18} />
                   </button>
@@ -1847,6 +1914,7 @@ export default function Inbox() {
                         onChange={(e) => setNewMessage(e.target.value)}
                         onKeyDown={handleComposerKeyDown}
                         placeholder="Digite uma mensagem"
+                        aria-label="Digite uma mensagem"
                         rows={1}
                         className="max-h-32 min-h-[56px] flex-1 resize-none rounded-3xl border-none bg-white px-3 py-2.5 text-[13px] outline-none shadow-sm focus:ring-0 lg:min-h-[50px] lg:px-5 lg:py-3.5 lg:text-[15px]"
                       />
@@ -1854,16 +1922,18 @@ export default function Inbox() {
                         <button
                           type="button"
                           onClick={handleSendMedia}
+                          aria-label={isSendingMedia ? "Enviando anexo" : "Enviar anexo"}
                           disabled={isSendingMedia}
                           className={`rounded-full p-3 text-white shadow-sm transition-colors ${
                             hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
                           } disabled:cursor-not-allowed disabled:opacity-80`}
                         >
-                          <Send size={18} />
+                          {isSendingMedia ? <RefreshCw size={18} className="animate-spin" /> : <Send size={18} />}
                         </button>
                       ) : newMessage.trim() ? (
                         <button
                           type="submit"
+                          aria-label="Enviar mensagem"
                           className={`rounded-full p-3 text-white shadow-sm transition-colors ${
                             hasPayload ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-300"
                           } disabled:cursor-not-allowed disabled:opacity-80`}
@@ -1887,14 +1957,13 @@ export default function Inbox() {
             </footer>
           </>
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center text-gray-500">
+          <div className="inbox-selection-empty flex flex-1 flex-col items-center justify-center text-gray-500">
             <MessageSquare size={54} className="mb-3 text-gray-400" />
             <p className="text-base font-medium">Selecione uma conversa</p>
             <p className="text-sm text-gray-400">Escolha um lead na lateral para iniciar o atendimento.</p>
           </div>
         )}
       </section>
-      {showJourney && selectedLead?.id && <CommercialJourneyTimeline empresaId={empresa_id} leadId={selectedLead.id} onClose={() => setShowJourney(false)} />}
       </div>
     </div>
   );

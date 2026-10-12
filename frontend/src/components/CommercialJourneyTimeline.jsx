@@ -4,6 +4,7 @@ import api from "../services/api";
 import { getActiveEmpresaId } from "../utils/auth";
 import { JOURNEY_CATEGORIES, journeyError, journeyState, journeyTime, mergeJourney, safeJourneyDetails } from "../utils/commercialJourney";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, StatusBadge } from "./ui";
+import "../styles/journey-ux04.css";
 
 export default function CommercialJourneyTimeline({ empresaId, leadId, onClose }) {
   const [activeTenant, setActiveTenant] = useState(getActiveEmpresaId);
@@ -14,6 +15,7 @@ export default function CommercialJourneyTimeline({ empresaId, leadId, onClose }
   const [error, setError] = useState(null);
   const [moreScope, setMoreScope] = useState(null);
   const moreController = useRef(null);
+  const closeButtonRef = useRef(null);
   const scope = JSON.stringify([activeTenant, empresaId, leadId, category, refresh]);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -21,6 +23,10 @@ export default function CommercialJourneyTimeline({ empresaId, leadId, onClose }
   const data = result?.scope === scope && validTenant ? result.data : null;
   const failure = error?.scope === scope ? error.message : null;
   const zoneLabel = zone === "UTC" ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  useEffect(() => {
+    closeButtonRef.current?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     const sync = () => setActiveTenant(getActiveEmpresaId());
@@ -60,22 +66,22 @@ export default function CommercialJourneyTimeline({ empresaId, leadId, onClose }
     } finally { setMoreScope(previous => previous === scope ? null : previous); }
   };
 
-  return <aside aria-label="Jornada comercial" data-testid="commercial-journey" className="absolute right-0 top-0 z-30 flex h-[65%] w-full flex-col border-l border-slate-200 bg-white shadow-xl lg:relative lg:h-full lg:w-[360px] lg:max-w-[40vw] lg:shrink-0">
-    <header className="shrink-0 border-b border-slate-200 p-4">
-      <div className="flex items-center justify-between gap-3"><h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Activity size={17} />Jornada comercial</h2><button type="button" aria-label="Fechar jornada comercial" onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={18} /></button></div>
+  return <aside id="inbox-journey-panel" aria-label="Jornada comercial" data-testid="commercial-journey" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); onClose?.(); } }} className="inbox-journey-panel flex min-h-0 w-full flex-col">
+    <header className="inbox-journey-heading shrink-0 border-b border-slate-200 p-4">
+      <div className="flex items-center justify-between gap-3"><h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Activity size={17} />Jornada comercial</h2><button ref={closeButtonRef} type="button" aria-label="Fechar jornada comercial" onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={18} /></button></div>
       <p className="mt-1 text-xs text-slate-500">Fatos persistidos · mais recentes primeiro · somente leitura</p>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <div><label htmlFor="journey-category" className="text-xs font-semibold text-slate-600">Categoria</label><select id="journey-category" value={category} onChange={event => setCategory(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-xs"><option value="">Todas</option>{Object.entries(JOURNEY_CATEGORIES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
         <div><label htmlFor="journey-zone" className="text-xs font-semibold text-slate-600">Fuso horário</label><select id="journey-zone" value={zone} onChange={event => setZone(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-xs"><option value="UTC">UTC</option><option value="local">Local</option></select></div>
       </div>
     </header>
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4">
+    <div className="inbox-journey-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4">
       <p className="text-xs text-slate-500">Horários em {zoneLabel}{data ? ` · consulta ${journeyTime(data.checked_at, zone)}` : ""}</p>
       {!validTenant ? <InfoBanner tone="warning">Tenant alterado. Selecione um contato no tenant atual para consultar sua jornada.</InfoBanner> : <>
         {failure && <div role="alert"><InfoBanner tone="warning">{failure}</InfoBanner><ActionButton variant="secondary" className="mt-2" onClick={() => setRefresh(value => value + 1)}>Atualizar jornada</ActionButton></div>}
         {!data && !failure && <LoadingState label="Consultando fatos da jornada..." />}
         {data && <>
-          <details className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-800">Estado atual e cobertura</summary>
+          <details className="inbox-journey-coverage rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-800">Estado atual e cobertura</summary>
             <div className="mt-3 space-y-3 text-xs text-slate-600">
               <p>CRM atual: {data.summary?.crm?.stage?.name || "Não observado"}. Tags atuais: {(data.summary?.crm?.tags || []).map(tag => tag.name).join(", ") || "Nenhuma registrada"}.</p>
               <p>FunnelSpec: {data.summary?.funnel?.version || "Não disponível"}{data.summary?.commercial_state?.stage_key ? ` · estado comercial atual ${data.summary.commercial_state.stage_key}` : ""}. Etapas definidas: {(data.summary?.funnel?.stages || []).map(stage => stage.display_name || stage.key).join(" → ") || "Não disponíveis"}.</p>
@@ -91,7 +97,7 @@ export default function CommercialJourneyTimeline({ empresaId, leadId, onClose }
           </details>
           {!data.items?.length ? <EmptyState title="Nenhum fato observado neste filtro" description="Não observado nas fontes consultadas. Isso não comprova que o evento não ocorreu." /> : <ol className="space-y-3" data-testid="journey-events">{data.items.map(item => {
             const state = journeyState(item.status);
-            return <li key={item.id} className="rounded-xl border border-slate-200 p-3" data-event-id={item.id}>
+            return <li key={item.id} className="inbox-journey-event rounded-xl border border-slate-200 p-3" data-event-id={item.id}>
               <p className="text-xs text-slate-500">{journeyTime(item.occurred_at, zone)} · {zoneLabel}</p>
               <h3 className="mt-1 text-sm font-semibold text-slate-900">{item.title}</h3>
               <p className="mt-1 text-xs text-slate-500">{JOURNEY_CATEGORIES[item.category] || "Categoria desconhecida"} · {item.evidence?.source}</p>
