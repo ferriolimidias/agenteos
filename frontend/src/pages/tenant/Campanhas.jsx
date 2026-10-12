@@ -26,6 +26,8 @@ import {
   X,
 } from "lucide-react";
 
+import "../../styles/ux05-automation.css";
+
 import MetaTemplateSelector from "../../components/MetaTemplateSelector";
 import api from "../../services/api";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, MetricCard, PageHeader, StatusBadge } from "../../components/ui";
@@ -209,7 +211,7 @@ function ResultsLineChart({ timeline }) {
   }
   return (
     <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[640px] rounded-lg border border-slate-200 bg-white">
+      <svg role="img" aria-label="Desempenho das campanhas ao longo do tempo" viewBox={`0 0 ${width} ${height}`} className="min-w-[640px] rounded-lg border border-slate-200 bg-white">
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#cbd5e1" />
         <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#cbd5e1" />
         {keys.map(([key, label, color]) => (
@@ -489,8 +491,8 @@ function TemplateReadOnlyDetails({ template, onClose }) {
   const variables = templateVariables(template);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-slate-950/40 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Detalhes do template">
-      <div className="flex h-full w-full max-w-3xl flex-col overflow-hidden bg-white shadow-xl sm:rounded-xl">
+    <div className="fm-automation-overlay fixed inset-0 z-50 flex items-stretch justify-end bg-slate-950/40 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Detalhes do template">
+      <div className="fm-template-details flex h-full w-full max-w-3xl flex-col overflow-hidden bg-white shadow-xl sm:rounded-xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
             <p className="text-xs font-semibold uppercase text-slate-500">Template somente leitura</p>
@@ -1208,7 +1210,7 @@ export default function Campanhas() {
   const doubleAsteriskWarning = hasDoubleAsterisk(`${templateForm.blocks.header.text || ""}\n${templateForm.blocks.body.text || ""}\n${templateForm.blocks.footer.text || ""}`);
 
   return (
-    <div className="space-y-6">
+    <div className="fm-automation fm-campaigns space-y-6">
       <PageHeader
         title="Central de Campanhas"
         description="Campanhas, templates, públicos, custos e conversões em uma operação única. Follow-ups continuam em área própria."
@@ -1223,17 +1225,17 @@ export default function Campanhas() {
         }
       />
 
-      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 pb-2">
+      <nav className="fm-automation-tabs" aria-label="Áreas da Central de Campanhas">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
           return (
-            <button key={tab.id} type="button" onClick={() => navigate(tab.path)} className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
+            <button key={tab.id} type="button" onClick={() => navigate(tab.path)} aria-current={active ? "page" : undefined} className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
               <Icon size={15} /> {tab.label}
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {message ? <InfoBanner tone={message.includes("não") || message.includes("Revise") ? "warning" : "success"}>{message}</InfoBanner> : null}
 
@@ -1252,14 +1254,14 @@ export default function Campanhas() {
           {campaigns.length || templates.length ? null : (
             <EmptyState title="Nenhuma operação preparada" description="Crie um template local ou prepare uma campanha em safe mode para começar." icon={FolderOpen} />
           )}
-          <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <section className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-semibold text-slate-950">Campanhas recentes</h2>
               <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={loadData}>Atualizar</ActionButton>
             </div>
-            <div className="mt-4 overflow-x-auto">
+            <div className="fm-table-scroll mt-4 overflow-x-auto" role="region" aria-label="Campanhas recentes" tabIndex={0}>
               {campaigns.length ? (
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <table className="fm-table min-w-full divide-y divide-slate-200 text-sm">
                   <thead>
                     <tr className="text-left text-xs font-semibold uppercase text-slate-500">
                       <th className="px-3 py-2">Campanha</th>
@@ -1316,7 +1318,7 @@ export default function Campanhas() {
 
       {activeTab === "templates" ? (
         <div className="space-y-5">
-          <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
+          <section className="fm-automation-panel fm-template-editor space-y-4 rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-slate-950">Editor visual de template</h2>
@@ -1326,32 +1328,32 @@ export default function Campanhas() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <select value={templateForm.conexao_id} onChange={(e) => setTemplateForm({ ...templateForm, conexao_id: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <label className="fm-automation-field"><span>Conexão WhatsApp oficial</span><select value={templateForm.conexao_id} onChange={(e) => setTemplateForm({ ...templateForm, conexao_id: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="">Conexão WhatsApp oficial</option>
                 {officialConnections.map((connection) => (
                   <option key={connection.id} value={connection.id}>
                     {connection.nome_instancia || connection.display_number || connection.phone_number_id || "WhatsApp Meta"}
                   </option>
                 ))}
-              </select>
-              <input value={templateForm.internal_name} onChange={(e) => setTemplateForm({ ...templateForm, internal_name: e.target.value })} placeholder="Nome interno" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <input value={templateForm.technical_name} onChange={(e) => setTemplateForm({ ...templateForm, technical_name: e.target.value.toLowerCase() })} placeholder="nome_tecnico" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <input value={templateForm.language} onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })} placeholder="pt_BR" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <select value={templateForm.category} onChange={(e) => setTemplateForm({ ...templateForm, category: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              </select></label>
+              <label className="fm-automation-field"><span>Nome interno</span><input value={templateForm.internal_name} onChange={(e) => setTemplateForm({ ...templateForm, internal_name: e.target.value })} placeholder="Nome interno" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="fm-automation-field"><span>Nome técnico</span><input value={templateForm.technical_name} onChange={(e) => setTemplateForm({ ...templateForm, technical_name: e.target.value.toLowerCase() })} placeholder="nome_tecnico" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="fm-automation-field"><span>Idioma</span><input value={templateForm.language} onChange={(e) => setTemplateForm({ ...templateForm, language: e.target.value })} placeholder="pt_BR" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="fm-automation-field"><span>Categoria</span><select value={templateForm.category} onChange={(e) => setTemplateForm({ ...templateForm, category: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="MARKETING">Marketing</option>
                 <option value="UTILITY">Utilidade</option>
                 <option value="AUTHENTICATION">Autenticação</option>
-              </select>
-              <select value={templateForm.blocks.header.kind} onChange={(e) => setTemplateForm({ ...templateForm, blocks: { ...templateForm.blocks, header: { kind: e.target.value, text: "" } } })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              </select></label>
+              <label className="fm-automation-field"><span>Tipo de cabeçalho</span><select value={templateForm.blocks.header.kind} onChange={(e) => setTemplateForm({ ...templateForm, blocks: { ...templateForm.blocks, header: { kind: e.target.value, text: "" } } })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="none">Sem cabeçalho</option>
                 <option value="text">Cabeçalho em texto</option>
                 <option value="image">Imagem</option>
-              </select>
-              <input value={templateForm.description} onChange={(e) => setTemplateForm({ ...templateForm, description: e.target.value })} placeholder="Descrição interna" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              </select></label>
+              <label className="fm-automation-field"><span>Descrição interna</span><input value={templateForm.description} onChange={(e) => setTemplateForm({ ...templateForm, description: e.target.value })} placeholder="Descrição interna" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
             </div>
 
             {templateForm.blocks.header.kind === "text" ? (
-              <input ref={headerRef} value={templateForm.blocks.header.text} onFocus={() => setActiveTextField("header")} onChange={(e) => updateTemplateText("header", e.target.value)} placeholder="Texto do cabeçalho" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <label className="fm-automation-field"><span>Texto do cabeçalho</span><input ref={headerRef} value={templateForm.blocks.header.text} onFocus={() => setActiveTextField("header")} onChange={(e) => updateTemplateText("header", e.target.value)} placeholder="Texto do cabeçalho" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
             ) : null}
 
             {templateForm.blocks.header.kind === "image" ? (
@@ -1379,8 +1381,8 @@ export default function Campanhas() {
               </div>
             ) : null}
 
-            <textarea ref={bodyRef} value={templateForm.blocks.body.text} onFocus={() => setActiveTextField("body")} onChange={(e) => updateTemplateText("body", e.target.value)} rows={5} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            <input value={templateForm.blocks.footer.text} onChange={(e) => setTemplateForm({ ...templateForm, blocks: { ...templateForm.blocks, footer: { text: e.target.value } } })} placeholder="Rodapé opcional" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            <label className="fm-automation-field"><span>Mensagem</span><textarea ref={bodyRef} value={templateForm.blocks.body.text} onFocus={() => setActiveTextField("body")} onChange={(e) => updateTemplateText("body", e.target.value)} rows={5} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+            <label className="fm-automation-field"><span>Rodapé opcional</span><input value={templateForm.blocks.footer.text} onChange={(e) => setTemplateForm({ ...templateForm, blocks: { ...templateForm.blocks, footer: { text: e.target.value } } })} placeholder="Rodapé opcional" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
 
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -1393,16 +1395,16 @@ export default function Campanhas() {
                     {"{{"}{variable.position}{"}}"}
                     <small className="font-normal uppercase text-slate-400">{variable.component || "body"}</small>
                   </span>
-                  <input value={variable.represents || ""} onChange={(e) => {
+                  <label className="fm-automation-field"><span>Representa</span><input value={variable.represents || ""} onChange={(e) => {
                     const variables = [...templateForm.variables];
                     variables[index] = { ...variable, represents: e.target.value };
                     setTemplateForm({ ...templateForm, variables });
-                  }} placeholder="Representa" maxLength={120} className="rounded border border-slate-300 px-2 py-2 text-sm" />
-                  <input value={variable.example || ""} onChange={(e) => {
+                  }} placeholder="Representa" maxLength={120} className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
+                  <label className="fm-automation-field"><span>Exemplo para Meta</span><input value={variable.example || ""} onChange={(e) => {
                     const variables = [...templateForm.variables];
                     variables[index] = { ...variable, example: e.target.value };
                     setTemplateForm({ ...templateForm, variables });
-                  }} placeholder="Exemplo para Meta" maxLength={160} className="rounded border border-slate-300 px-2 py-2 text-sm" />
+                  }} placeholder="Exemplo para Meta" maxLength={160} className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
                   <button type="button" onClick={() => deleteVariable(variable.position)} aria-label={`Excluir variável ${variable.position}`} title="Excluir variável" className="inline-flex items-center justify-center rounded border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500">
                     <Trash2 size={15} />
                   </button>
@@ -1432,19 +1434,19 @@ export default function Campanhas() {
               </div>
               {(templateForm.blocks.buttons || []).map((button, index) => (
                 <div key={`button-${index}`} className="grid gap-2 rounded-lg border border-slate-200 p-3 md:grid-cols-[160px_1fr_1fr_auto]">
-                  <select value={button.type || "QUICK_REPLY"} onChange={(event) => updateTemplateButton(index, { type: event.target.value, url: "", phone_number: "", example: "" })} className="rounded border border-slate-300 px-2 py-2 text-sm">
+                  <label className="fm-automation-field"><span>Tipo do botão</span><select value={button.type || "QUICK_REPLY"} onChange={(event) => updateTemplateButton(index, { type: event.target.value, url: "", phone_number: "", example: "" })} className="rounded border border-slate-300 px-2 py-2 text-sm">
                     {templateButtonTypes.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                  <input value={button.text || ""} onChange={(event) => updateTemplateButton(index, { text: event.target.value })} placeholder="Texto do botão" maxLength={25} className="rounded border border-slate-300 px-2 py-2 text-sm" />
+                  </select></label>
+                  <label className="fm-automation-field"><span>Texto do botão</span><input value={button.text || ""} onChange={(event) => updateTemplateButton(index, { text: event.target.value })} placeholder="Texto do botão" maxLength={25} className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
                   {button.type === "URL" ? (
                     <div className="grid gap-2">
-                      <input value={button.url || ""} onChange={(event) => updateTemplateButton(index, { url: event.target.value })} placeholder="https://..." className="rounded border border-slate-300 px-2 py-2 text-sm" />
+                      <label className="fm-automation-field"><span>URL do botão</span><input value={button.url || ""} onChange={(event) => updateTemplateButton(index, { url: event.target.value })} placeholder="https://..." className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
                       {extractNumericPlaceholders(button.url).length ? (
-                        <input value={button.example || ""} onChange={(event) => updateTemplateButton(index, { example: event.target.value })} placeholder="Exemplo da parte dinâmica" className="rounded border border-slate-300 px-2 py-2 text-sm" />
+                        <label className="fm-automation-field"><span>Exemplo da parte dinâmica</span><input value={button.example || ""} onChange={(event) => updateTemplateButton(index, { example: event.target.value })} placeholder="Exemplo da parte dinâmica" className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
                       ) : null}
                     </div>
                   ) : button.type === "PHONE_NUMBER" ? (
-                    <input value={button.phone_number || ""} onChange={(event) => updateTemplateButton(index, { phone_number: event.target.value })} placeholder="+5551999999999" className="rounded border border-slate-300 px-2 py-2 text-sm" />
+                    <label className="fm-automation-field"><span>Telefone do botão</span><input value={button.phone_number || ""} onChange={(event) => updateTemplateButton(index, { phone_number: event.target.value })} placeholder="+5551999999999" className="rounded border border-slate-300 px-2 py-2 text-sm" /></label>
                   ) : (
                     <span className="flex items-center text-xs text-slate-500">Sem valor adicional.</span>
                   )}
@@ -1468,7 +1470,7 @@ export default function Campanhas() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <section className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-950">Templates da conta</h2>
@@ -1478,23 +1480,24 @@ export default function Campanhas() {
                 <label className="relative block">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                   <input
+                    aria-label="Busca por nome do template"
                     value={templateSearch}
                     onChange={(event) => setTemplateSearch(event.target.value)}
                     placeholder="Busca por nome"
                     className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm sm:w-56"
                   />
                 </label>
-                <select value={templateStatusFilter} onChange={(event) => setTemplateStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                <label className="fm-automation-field"><span>Status do template</span><select value={templateStatusFilter} onChange={(event) => setTemplateStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                   {templateStatusOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
-                </select>
+                </select></label>
                 <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={syncTemplates} disabled={saving || !templateForm.conexao_id}>Sincronizar com a Meta</ActionButton>
               </div>
             </div>
 
             <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
               {visibleTemplates.length ? (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <div className="fm-table-scroll overflow-x-auto" role="region" aria-label="Templates da conta" tabIndex={0}>
+                  <table className="fm-table min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
                       <tr>
                         <th className="px-4 py-3">Nome</th>
@@ -1537,19 +1540,19 @@ export default function Campanhas() {
       ) : null}
 
       {activeTab === "campaigns" ? (
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-5 rounded-xl border border-slate-200 bg-white p-5">
+        <section className="fm-campaign-builder grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="fm-automation-panel space-y-5 rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-semibold text-slate-950">Construtor de campanha</h2>
             <div className="grid gap-4 md:grid-cols-2">
-              <input value={campaignForm.name} onChange={(e) => setCampaignForm({ ...campaignForm, name: e.target.value })} placeholder="Nome da campanha" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <input value={campaignForm.objective} onChange={(e) => setCampaignForm({ ...campaignForm, objective: e.target.value })} placeholder="Objetivo" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <select value={campaignForm.conexao_id} onChange={(e) => setCampaignForm({ ...campaignForm, conexao_id: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <label className="fm-automation-field"><span>Nome da campanha</span><input value={campaignForm.name} onChange={(e) => setCampaignForm({ ...campaignForm, name: e.target.value })} placeholder="Nome da campanha" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="fm-automation-field"><span>Objetivo</span><input value={campaignForm.objective} onChange={(e) => setCampaignForm({ ...campaignForm, objective: e.target.value })} placeholder="Objetivo" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="fm-automation-field"><span>Conexão oficial</span><select value={campaignForm.conexao_id} onChange={(e) => setCampaignForm({ ...campaignForm, conexao_id: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="">Conexão oficial</option>
                 {officialConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.nome_instancia || "WhatsApp Oficial"}</option>)}
-              </select>
-              <input value={campaignForm.timezone} onChange={(e) => setCampaignForm({ ...campaignForm, timezone: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              </select></label>
+              <label className="fm-automation-field"><span>Fuso horário</span><input value={campaignForm.timezone} onChange={(e) => setCampaignForm({ ...campaignForm, timezone: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
             </div>
-            <textarea value={campaignForm.description} onChange={(e) => setCampaignForm({ ...campaignForm, description: e.target.value })} rows={3} placeholder="Descrição interna" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            <label className="fm-automation-field"><span>Descrição interna</span><textarea value={campaignForm.description} onChange={(e) => setCampaignForm({ ...campaignForm, description: e.target.value })} rows={3} placeholder="Descrição interna" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
             <label className="flex items-start gap-3 rounded-lg border border-slate-200 p-4">
               <input
                 type="checkbox"
@@ -1568,17 +1571,17 @@ export default function Campanhas() {
                 {tags.map((tag) => {
                   const selected = campaignForm.include_tags.includes(tag.id);
                   return (
-                    <button key={tag.id} type="button" onClick={() => setCampaignForm({ ...campaignForm, include_tags: selected ? campaignForm.include_tags.filter((item) => item !== tag.id) : [...campaignForm.include_tags, tag.id] })} className={`rounded-full border px-3 py-1 text-xs font-semibold ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
+                    <button aria-pressed={selected} key={tag.id} type="button" onClick={() => setCampaignForm({ ...campaignForm, include_tags: selected ? campaignForm.include_tags.filter((item) => item !== tag.id) : [...campaignForm.include_tags, tag.id] })} className={`rounded-full border px-3 py-1 text-xs font-semibold ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
                       {tag.nome}
                     </button>
                   );
                 })}
                 {!tags.length ? <p className="text-sm text-slate-500">Sem tags disponíveis para seleção.</p> : null}
               </div>
-              <select value={campaignForm.saved_audience_id} onChange={(e) => setCampaignForm({ ...campaignForm, saved_audience_id: e.target.value })} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <label className="fm-automation-field"><span>Público salvo</span><select value={campaignForm.saved_audience_id} onChange={(e) => setCampaignForm({ ...campaignForm, saved_audience_id: e.target.value })} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="">Ou selecione um público salvo</option>
                 {savedAudiences.map((audience) => <option key={audience.id} value={audience.id}>{audience.name}</option>)}
-              </select>
+              </select></label>
             </div>
             <div className="rounded-lg border border-slate-200 p-4">
               <h3 className="mb-3 text-sm font-semibold text-slate-900">Template aprovado</h3>
@@ -1592,7 +1595,7 @@ export default function Campanhas() {
                     return (
                     <div key={variable.key} className="grid gap-2 rounded-lg border border-slate-200 p-3 text-sm md:grid-cols-[180px_180px_1fr]">
                       <span className="font-semibold text-slate-700">{variable.label}</span>
-                      <select
+                      <label className="fm-automation-field"><span>Origem do valor</span><select
                         value={binding.type || "FIXED_VALUE"}
                         onChange={(event) => setCampaignForm({
                           ...campaignForm,
@@ -1604,11 +1607,11 @@ export default function Campanhas() {
                         className="rounded border border-slate-300 px-2 py-1"
                       >
                         {campaignVariableBindingTypes.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
+                      </select></label>
                       {binding.type === "CONTACT_NAME" ? (
                         <span className="flex items-center text-xs text-slate-500">Resolvido pelo lead/contato no start.</span>
                       ) : (
-                        <input
+                        <label className="fm-automation-field"><span>Valor fixo para esta campanha</span><input
                           value={binding.value || ""}
                           onChange={(event) => setCampaignForm({
                             ...campaignForm,
@@ -1623,7 +1626,7 @@ export default function Campanhas() {
                           })}
                           placeholder="Valor fixo para esta campanha"
                           className="rounded border border-slate-300 px-2 py-1"
-                        />
+                        /></label>
                       )}
                     </div>
                     );
@@ -1670,7 +1673,7 @@ export default function Campanhas() {
             </div>
           </div>
           <aside className="space-y-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
               <h3 className="text-sm font-semibold text-slate-900">Revisão</h3>
               <dl className="mt-3 space-y-2 text-sm">
                 <div className="flex justify-between gap-3"><dt className="text-slate-500">Público</dt><dd>{campaignForm.include_tags.length ? `${campaignForm.include_tags.length} filtro(s)` : (selectedSavedAudience?.name || "Não definido")}</dd></div>
@@ -1681,7 +1684,7 @@ export default function Campanhas() {
               </dl>
             </div>
             {campaignPreparation ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                 <h3 className="text-sm font-semibold text-slate-900">Snapshot</h3>
                 <p className="mt-2 text-sm text-slate-600">Selecionados: {campaignPreparation.snapshot?.selected ?? 0}</p>
                 <p className="text-sm font-semibold text-slate-900">Envio autorizado para: {campaignPreparation.snapshot?.selected ?? 0} contatos</p>
@@ -1711,7 +1714,7 @@ export default function Campanhas() {
 
       {activeTab === "audiences" ? (
         <section className="space-y-4">
-          <div className="flex gap-2 overflow-x-auto">
+          <div className="fm-automation-tabs fm-automation-subtabs" role="group" aria-label="Tipos de público">
             {[
               { id: "tags", label: "Listas por tags", icon: <Users size={15} /> },
               { id: "imports", label: "Listas importadas", icon: <Upload size={15} /> },
@@ -1721,7 +1724,7 @@ export default function Campanhas() {
               { id: "snapshots", label: "Snapshots de campanhas", icon: <FolderOpen size={15} /> },
             ].map((tab) => {
               return (
-                <button key={tab.id} type="button" onClick={() => setAudienceTab(tab.id)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${audienceTab === tab.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
+                <button key={tab.id} type="button" onClick={() => setAudienceTab(tab.id)} aria-pressed={audienceTab === tab.id} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${audienceTab === tab.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
                   {tab.icon} {tab.label}
                 </button>
               );
@@ -1731,7 +1734,7 @@ export default function Campanhas() {
           {audienceTab === "tags" ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {tagAudiences.map((tag) => (
-                <div key={tag.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div key={tag.id} className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-950">{tag.nome}</p>
@@ -1758,17 +1761,17 @@ export default function Campanhas() {
 
           {audienceTab === "imports" ? (
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-              <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
                 <h2 className="text-lg font-semibold text-slate-950">Importar CSV</h2>
                 <p className="mt-1 text-sm text-slate-500">Importa contatos antigos sem criar conversas, janelas ou opt-in fictício.</p>
-                <input type="file" accept=".csv,text/csv" onChange={(e) => setImportFile(e.target.files?.[0] || null)} className="mt-4 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <label className="fm-automation-field"><span>Arquivo CSV</span><input type="file" accept=".csv,text/csv" onChange={(e) => setImportFile(e.target.files?.[0] || null)} className="mt-4 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <select value={importPayload.tag_id} onChange={(e) => setImportPayload({ ...importPayload, tag_id: e.target.value, tag_name: "" })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  <label className="fm-automation-field"><span>Tag existente</span><select value={importPayload.tag_id} onChange={(e) => setImportPayload({ ...importPayload, tag_id: e.target.value, tag_name: "" })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                     <option value="">Escolher tag existente</option>
                     {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.nome}</option>)}
-                  </select>
-                  <input value={importPayload.tag_name} onChange={(e) => setImportPayload({ ...importPayload, tag_name: e.target.value, tag_id: "" })} placeholder="Ou criar nova tag" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  <select value={importPayload.source} onChange={(e) => setImportPayload({ ...importPayload, source: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  </select></label>
+                  <label className="fm-automation-field"><span>Nova tag</span><input value={importPayload.tag_name} onChange={(e) => setImportPayload({ ...importPayload, tag_name: e.target.value, tag_id: "" })} placeholder="Ou criar nova tag" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                  <label className="fm-automation-field"><span>Origem da lista</span><select value={importPayload.source} onChange={(e) => setImportPayload({ ...importPayload, source: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                     <option value="base_anterior">Base anterior da empresa</option>
                     <option value="clientes_antigos">Clientes antigos</option>
                     <option value="leads_antigos">Leads antigos</option>
@@ -1777,16 +1780,16 @@ export default function Campanhas() {
                     <option value="planilha">Planilha</option>
                     <option value="importacao_manual">Importação manual</option>
                     <option value="outro">Outro</option>
-                  </select>
-                  <select value={importPayload.consent_status} onChange={(e) => setImportPayload({ ...importPayload, consent_status: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  </select></label>
+                  <label className="fm-automation-field"><span>Consentimento</span><select value={importPayload.consent_status} onChange={(e) => setImportPayload({ ...importPayload, consent_status: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                     <option value="unknown">Consentimento desconhecido</option>
                     <option value="opted_in">Opted-in com evidência</option>
                     <option value="opted_out">Opted-out</option>
                     <option value="blocked">Bloqueado</option>
                     <option value="transactional_only">Somente transacional</option>
-                  </select>
+                  </select></label>
                 </div>
-                {importPayload.consent_status === "opted_in" ? <input value={importPayload.consent_source || ""} onChange={(e) => setImportPayload({ ...importPayload, consent_source: e.target.value })} placeholder="Origem/evidência do consentimento" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /> : null}
+                {importPayload.consent_status === "opted_in" ? <label className="fm-automation-field"><span>Origem/evidência do consentimento</span><input value={importPayload.consent_source || ""} onChange={(e) => setImportPayload({ ...importPayload, consent_source: e.target.value })} placeholder="Origem/evidência do consentimento" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label> : null}
                 <div className="mt-4 flex gap-2">
                   <ActionButton type="button" variant="secondary" icon={Search} onClick={previewImport} disabled={!importFile}>Prévia</ActionButton>
                   <ActionButton type="button" icon={Upload} onClick={confirmImport} disabled={!importFile || (!importPayload.tag_id && !importPayload.tag_name)}>Importar sem enviar</ActionButton>
@@ -1801,7 +1804,7 @@ export default function Campanhas() {
               </div>
               <aside className="space-y-3">
                 {importBatches.map((batch) => (
-                  <div key={batch.id} className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                  <div key={batch.id} className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4 text-sm">
                     <div className="flex items-start justify-between gap-3">
                       <p className="font-semibold text-slate-900">{batch.filename}</p>
                       <button type="button" onClick={() => deleteImport(batch)} disabled={Boolean(deletingImportId)} title="Excluir lista" aria-label={`Excluir lista ${batch.filename}`} className="rounded-md p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1819,10 +1822,10 @@ export default function Campanhas() {
 
           {audienceTab === "saved" ? (
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-              <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
                 <h2 className="text-lg font-semibold text-slate-950">Construtor de público salvo</h2>
-                <input value={savedAudienceForm.name} onChange={(e) => setSavedAudienceForm({ ...savedAudienceForm, name: e.target.value })} placeholder="Nome do público" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                <textarea value={savedAudienceForm.description} onChange={(e) => setSavedAudienceForm({ ...savedAudienceForm, description: e.target.value })} placeholder="Descrição" rows={2} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <label className="fm-automation-field"><span>Nome do público</span><input value={savedAudienceForm.name} onChange={(e) => setSavedAudienceForm({ ...savedAudienceForm, name: e.target.value })} placeholder="Nome do público" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                <label className="fm-automation-field"><span>Descrição</span><textarea value={savedAudienceForm.description} onChange={(e) => setSavedAudienceForm({ ...savedAudienceForm, description: e.target.value })} placeholder="Descrição" rows={2} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
 
                 {["include", "exclude"].map((section) => {
                   const normalized = normalizeAudienceRules(savedAudienceForm.rules);
@@ -1836,6 +1839,7 @@ export default function Campanhas() {
                           <p className="mt-1 text-xs text-slate-500">{helper}</p>
                         </div>
                         <select
+                          aria-label="Combinação das regras"
                           value={normalized[section].match}
                           onChange={(e) => setSavedAudienceForm({ ...savedAudienceForm, rules: { ...normalized, [section]: { ...normalized[section], match: e.target.value } } })}
                           className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -1849,7 +1853,7 @@ export default function Campanhas() {
                           const selected = audienceRuleHas(normalized, section, tag.id);
                           const alsoExcluded = section === "include" && audienceRuleHas(normalized, "exclude", tag.id);
                           return (
-                            <button
+                            <button aria-pressed={selected}
                               key={`${section}-${tag.id}`}
                               type="button"
                               onClick={() => setSavedAudienceForm({ ...savedAudienceForm, rules: updateAudienceTagRule(normalized, section, tag.id, !selected) })}
@@ -1927,7 +1931,7 @@ export default function Campanhas() {
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
               <div className="space-y-3">
                 {smartAudiences.map((suggestion) => (
-                  <div key={suggestion.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div key={suggestion.id} className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                     <p className="text-sm font-semibold text-slate-950">{suggestion.name}</p>
                     <p className="mt-1 text-xs text-slate-500">{suggestion.funnel_name}</p>
                     <div className="mt-3 grid gap-2 text-xs md:grid-cols-2">
@@ -1942,7 +1946,7 @@ export default function Campanhas() {
                 ))}
                 {!smartAudiences.length ? <EmptyState title="Nenhum público sugerido" description="Configure etapas com regras para gerar sugestões automaticamente." icon={GitBranch} /> : null}
               </div>
-              <aside className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+              <aside className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4 text-sm">
                 <h3 className="font-semibold text-slate-900">Prévia da sugestão</h3>
                 {smartAudiencePreview?.preview ? (
                   <>
@@ -1980,7 +1984,7 @@ export default function Campanhas() {
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
               <div className="space-y-4">
                 {funnels.map((funnel) => (
-                  <div key={funnel.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div key={funnel.id} className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold text-slate-950">{funnel.name}</p>
@@ -2011,25 +2015,25 @@ export default function Campanhas() {
                 {!funnels.length ? <EmptyState title="Nenhum funil" description="Crie um funil para gerar públicos sugeridos." icon={BarChart3} /> : null}
               </div>
               <aside className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="font-semibold text-slate-900">Criar funil</h3>
-                  <input value={funnelForm.name} onChange={(e) => setFunnelForm({ ...funnelForm, name: e.target.value })} placeholder="Nome do funil" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  <textarea value={funnelForm.description} onChange={(e) => setFunnelForm({ ...funnelForm, description: e.target.value })} placeholder="Descrição" rows={2} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <label className="fm-automation-field"><span>Nome do funil</span><input value={funnelForm.name} onChange={(e) => setFunnelForm({ ...funnelForm, name: e.target.value })} placeholder="Nome do funil" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                  <label className="fm-automation-field"><span>Descrição</span><textarea value={funnelForm.description} onChange={(e) => setFunnelForm({ ...funnelForm, description: e.target.value })} placeholder="Descrição" rows={2} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                   <ActionButton type="button" className="mt-3" icon={Save} onClick={saveFunnel}>Salvar funil</ActionButton>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="font-semibold text-slate-900">Adicionar etapa</h3>
-                  <select value={stageForm.funnel_id} onChange={(e) => setStageForm({ ...stageForm, funnel_id: e.target.value })} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  <label className="fm-automation-field"><span>Funil</span><select value={stageForm.funnel_id} onChange={(e) => setStageForm({ ...stageForm, funnel_id: e.target.value })} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                     <option value="">Escolher funil</option>
                     {funnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}
-                  </select>
-                  <input value={stageForm.name} onChange={(e) => setStageForm({ ...stageForm, name: e.target.value })} placeholder="Nome da etapa" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  <input type="number" value={stageForm.position} onChange={(e) => setStageForm({ ...stageForm, position: e.target.value })} placeholder="Posição" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </select></label>
+                  <label className="fm-automation-field"><span>Nome da etapa</span><input value={stageForm.name} onChange={(e) => setStageForm({ ...stageForm, name: e.target.value })} placeholder="Nome da etapa" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                  <label className="fm-automation-field"><span>Posição</span><input type="number" value={stageForm.position} onChange={(e) => setStageForm({ ...stageForm, position: e.target.value })} placeholder="Posição" className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {tags.map((tag) => {
                       const selected = audienceRuleHas(stageForm.rules, "include", tag.id);
                       return (
-                        <button key={`stage-${tag.id}`} type="button" onClick={() => setStageForm({ ...stageForm, rules: updateAudienceTagRule(stageForm.rules, "include", tag.id, !selected) })} className={`rounded-full border px-3 py-1 text-xs font-semibold ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
+                        <button aria-pressed={selected} key={`stage-${tag.id}`} type="button" onClick={() => setStageForm({ ...stageForm, rules: updateAudienceTagRule(stageForm.rules, "include", tag.id, !selected) })} className={`rounded-full border px-3 py-1 text-xs font-semibold ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"}`}>
                           {tag.nome}
                         </button>
                       );
@@ -2042,7 +2046,7 @@ export default function Campanhas() {
           ) : null}
 
           {audienceTab === "snapshots" ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
               <h2 className="text-lg font-semibold text-slate-950">Snapshots de campanhas</h2>
               <p className="mt-1 text-sm text-slate-500">Destinatários congelados para campanhas já preparadas.</p>
               <div className="mt-4 space-y-2">
@@ -2056,8 +2060,8 @@ export default function Campanhas() {
 
       {["results", "costs", "conversions"].includes(activeTab) ? (
         <section className="space-y-5">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap items-end gap-3">
+          <div className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-4">
+            <div className="fm-campaign-result-filters flex flex-wrap items-end gap-3">
               <label className="min-w-[220px] flex-1 text-sm font-semibold text-slate-700">
                 Campanha
                 <select value={resultsFilters.campaign_id} onChange={(e) => setResultsFilters((prev) => ({ ...prev, campaign_id: e.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
@@ -2086,7 +2090,7 @@ export default function Campanhas() {
 
           {resultsError ? <InfoBanner tone="warning">{resultsError}</InfoBanner> : null}
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <div className="fm-campaign-result-metrics grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <MetricCard label="Público" value={formatNumber(resultMetrics.audience_total)} icon={Users} />
             <MetricCard label="Aceitas pela Meta" value={formatNumber(resultMetrics.meta_accepted)} icon={Send} />
             <MetricCard label="Entregues" value={formatNumber(resultMetrics.delivered)} icon={CheckCircle2} tone="active" />
@@ -2107,13 +2111,13 @@ export default function Campanhas() {
           ) : null}
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-            <section className="rounded-xl border border-slate-200 bg-white p-5">
+            <section className="fm-automation-panel rounded-xl border border-slate-200 bg-white p-5">
               <h2 className="text-lg font-semibold text-slate-950">Desempenho ao longo do tempo</h2>
               <div className="mt-4">
                 <ResultsLineChart timeline={analyticsResults?.timeline} />
               </div>
             </section>
-            <section className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+            <section className="fm-automation-panel rounded-xl border border-slate-200 bg-slate-50 p-5">
               <h2 className="text-lg font-semibold text-slate-950">Funil</h2>
               <div className="mt-4">
                 <ResultsFunnel funnel={analyticsResults?.funnel} failed={resultMetrics.failed} />

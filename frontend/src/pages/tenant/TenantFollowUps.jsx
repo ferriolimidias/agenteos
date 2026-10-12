@@ -13,6 +13,8 @@ import {
   X,
 } from "lucide-react";
 
+import "../../styles/ux05-automation.css";
+
 import MetaTemplateSelector from "../../components/MetaTemplateSelector";
 import api from "../../services/api";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
@@ -110,7 +112,8 @@ function ModeCard({ active, title, description, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl border p-4 text-left transition-colors ${
+      aria-pressed={active}
+      className={`fm-automation-choice rounded-xl border p-4 text-left transition-colors ${
         active
           ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500"
           : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
@@ -484,7 +487,7 @@ export default function TenantFollowUps() {
   const selectedTriggerTag = triggerTag;
 
   return (
-    <div className="space-y-6">
+    <div className="fm-automation fm-followups space-y-6">
       <PageHeader
         title="Follow-ups"
         description="Configure dois comportamentos claros: retomar conversa parada ou enviar uma mensagem programada."
@@ -516,7 +519,7 @@ export default function TenantFollowUps() {
           }
         />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="fm-followup-list grid gap-4 lg:grid-cols-2">
           {followups.map((item) => {
             const cancelTagNames = (Array.isArray(item.cancel_tag_ids) ? item.cancel_tag_ids : [])
               .map((tagId) => tagsMap.get(tagId)?.nome || null)
@@ -528,12 +531,12 @@ export default function TenantFollowUps() {
             return (
               <article
                 key={item.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+                className="fm-followup-card rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-lg font-semibold text-slate-950">{item.nome}</h3>
+                      <h3 className="break-words text-lg font-semibold text-slate-950">{item.nome}</h3>
                       <StatusBadge tone={item.mode === FOLLOWUP_MODE_CONVERSATION_RESUME ? "info" : "active"}>
                         {modeLabel(item.mode)}
                       </StatusBadge>
@@ -587,7 +590,7 @@ export default function TenantFollowUps() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-5">
+                <div className="fm-followup-metrics mt-4 grid gap-3 md:grid-cols-5">
                   <div className="rounded-lg border border-slate-100 bg-white p-3">
                     <p className="text-xs font-semibold uppercase text-slate-500">Agendados</p>
                     <p className="mt-1 text-lg font-semibold text-slate-950">{countValue(item.executions_scheduled)}</p>
@@ -621,7 +624,7 @@ export default function TenantFollowUps() {
                   </div>
                   <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
                     <p className="text-xs font-semibold uppercase text-slate-500">Último erro</p>
-                    <p className="mt-1 truncate text-sm text-slate-900">{item.last_error || "Sem erro registrado"}</p>
+                    <p className="mt-1 break-words text-sm text-slate-900">{item.last_error || "Sem erro registrado"}</p>
                   </div>
                 </div>
 
@@ -651,11 +654,11 @@ export default function TenantFollowUps() {
       )}
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
-            <div className="mb-5 flex items-start justify-between gap-3">
+        <div className="fm-automation-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="followup-editor-title">
+          <div className="fm-followup-editor max-h-[92vh] w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-xl">
+            <div className="fm-automation-dialog-heading flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-xl font-semibold text-slate-950">
+                <h2 id="followup-editor-title" className="text-xl font-semibold text-slate-950">
                   {editingItem ? "Editar follow-up" : "Novo follow-up"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
@@ -665,18 +668,19 @@ export default function TenantFollowUps() {
               <button
                 type="button"
                 onClick={closeModal}
+                aria-label="Fechar editor de follow-up"
                 className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-100"
               >
                 <X size={14} />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="fm-automation-dialog-body space-y-5" aria-busy={saving}>
               <SectionCard title="Dados básicos" description="Nome e ativação da regra.">
                 <div className="grid gap-4 md:grid-cols-[1fr_220px]">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Nome do follow-up</label>
-                    <input
+                    <label htmlFor="followup-nome" className="mb-1 block text-sm font-medium text-slate-700">Nome do follow-up</label>
+                    <input id="followup-nome"
                       required
                       value={formData.nome}
                       onChange={(event) => setFormData((prev) => ({ ...prev, nome: event.target.value }))}
@@ -715,7 +719,7 @@ export default function TenantFollowUps() {
                   <div>
                     <label className="mb-1 block text-sm font-medium text-slate-700">Enviar após</label>
                     <div className="grid grid-cols-[1fr_150px] gap-2">
-                      <input
+                      <input aria-label="Quantidade de tempo"
                         required
                         type="number"
                         min="1"
@@ -725,7 +729,7 @@ export default function TenantFollowUps() {
                         }
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
                       />
-                      <select
+                      <select aria-label="Unidade do atraso"
                         value={formData.delay_unit}
                         onChange={(event) => setFormData((prev) => ({ ...prev, delay_unit: event.target.value }))}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
@@ -738,8 +742,8 @@ export default function TenantFollowUps() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Contado a partir de</label>
-                    <select
+                    <label htmlFor="followup-anchor-type" className="mb-1 block text-sm font-medium text-slate-700">Contado a partir de</label>
+                    <select id="followup-anchor-type"
                       value={formData.anchor_type}
                       onChange={(event) => updateAnchor(event.target.value)}
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500"
@@ -755,8 +759,8 @@ export default function TenantFollowUps() {
 
                 {selectedAnchorIsTag ? (
                   <div className="mt-4">
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Tag que dispara esta regra</label>
-                    <select
+                    <label htmlFor="followup-campaign-or-event-id" className="mb-1 block text-sm font-medium text-slate-700">Tag que dispara esta regra</label>
+                    <select id="followup-campaign-or-event-id"
                       value={formData.campaign_or_event_id}
                       onChange={(event) =>
                         setFormData((prev) => ({ ...prev, campaign_or_event_id: event.target.value }))
@@ -804,8 +808,8 @@ export default function TenantFollowUps() {
 
                 {selectedAnchorIsFixedDate ? (
                   <div className="mt-4">
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Data e hora de execução</label>
-                    <input
+                    <label htmlFor="followup-activation-at" className="mb-1 block text-sm font-medium text-slate-700">Data e hora de execução</label>
+                    <input id="followup-activation-at"
                       required
                       type="datetime-local"
                       value={formData.activation_at}
@@ -837,6 +841,7 @@ export default function TenantFollowUps() {
                         <button
                           key={option.value}
                           type="button"
+                          aria-pressed={formData.message_mode === option.value}
                           onClick={() =>
                             setFormData((prev) => ({
                               ...prev,
@@ -862,6 +867,7 @@ export default function TenantFollowUps() {
                             <button
                               key={type}
                               type="button"
+                              aria-pressed={formData.content_type === type}
                               onClick={() => setFormData((prev) => ({ ...prev, content_type: type }))}
                               className={`rounded-xl border px-3 py-3 text-left text-sm ${formData.content_type === type ? "border-indigo-500 bg-indigo-50 text-indigo-900" : "border-slate-200 bg-white text-slate-700"}`}
                             >
@@ -888,7 +894,7 @@ export default function TenantFollowUps() {
                                 Enviar como mensagem de voz
                               </label>
                               {formData.content_type === "text_audio" ? (
-                                <input value={formData.audio_caption} onChange={(event) => setFormData((prev) => ({ ...prev, audio_caption: event.target.value }))} placeholder="Texto complementar opcional" className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                                <input aria-label="Texto complementar do áudio" value={formData.audio_caption} onChange={(event) => setFormData((prev) => ({ ...prev, audio_caption: event.target.value }))} placeholder="Texto complementar opcional" className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
                               ) : null}
                             </div>
                           ) : null}
@@ -899,10 +905,10 @@ export default function TenantFollowUps() {
                   )}
                   {formData.message_mode === MESSAGE_MODE_META_TEMPLATE ? null : (
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">
+                    <label htmlFor="followup-message-content" className="mb-1 block text-sm font-medium text-slate-700">
                       {formData.message_mode === MESSAGE_MODE_AI_CONTEXTUAL ? "Instrução para a IA" : "Mensagem"}
                     </label>
-                    <textarea
+                    <textarea id="followup-message-content"
                       rows={5}
                       value={formData.message_content}
                       onChange={(event) =>
@@ -947,16 +953,16 @@ export default function TenantFollowUps() {
                   </label>
                   <div className="grid gap-4 md:grid-cols-3">
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-slate-700">De</label>
-                      <input type="time" value={formData.send_window_start} onChange={(event) => setFormData((prev) => ({ ...prev, send_window_start: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+                      <label htmlFor="followup-send-window-start" className="mb-1 block text-sm font-medium text-slate-700">De</label>
+                      <input id="followup-send-window-start" type="time" value={formData.send_window_start} onChange={(event) => setFormData((prev) => ({ ...prev, send_window_start: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
                     </div>
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-slate-700">Até</label>
-                      <input type="time" value={formData.send_window_end} onChange={(event) => setFormData((prev) => ({ ...prev, send_window_end: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+                      <label htmlFor="followup-send-window-end" className="mb-1 block text-sm font-medium text-slate-700">Até</label>
+                      <input id="followup-send-window-end" type="time" value={formData.send_window_end} onChange={(event) => setFormData((prev) => ({ ...prev, send_window_end: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
                     </div>
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-slate-700">Fuso</label>
-                      <input value={formData.timezone} onChange={(event) => setFormData((prev) => ({ ...prev, timezone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" placeholder="America/Sao_Paulo" />
+                      <label htmlFor="followup-timezone" className="mb-1 block text-sm font-medium text-slate-700">Fuso</label>
+                      <input id="followup-timezone" value={formData.timezone} onChange={(event) => setFormData((prev) => ({ ...prev, timezone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" placeholder="America/Sao_Paulo" />
                     </div>
                   </div>
                   <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
@@ -1087,7 +1093,7 @@ export default function TenantFollowUps() {
                 </div>
               </SectionCard>
 
-              <div className="flex justify-end gap-2 pt-1">
+              <div className="fm-automation-dialog-actions flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={closeModal}
