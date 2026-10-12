@@ -173,7 +173,15 @@ async function main() {
     }
   }
   async function closeMenu(page, viewport) {
-    if (viewport.width < 1024) { await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' }); }
+    if (viewport.width < 1024) {
+      await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement === document.querySelector('.fm-menu-toggle'), null, { timeout: 12000 });
+    }
+  }
+  async function activeModuleReady(page, href) {
+    // History commits before the concurrent/lazy route. Wait for the actual
+    // destination context instead of reading a prior page after waitForURL.
+    await page.waitForFunction(href => document.querySelector('#tenant-navigation nav[aria-label="Menu principal"] a[aria-current="page"]')?.getAttribute('href') === href, href, { timeout: 12000 });
   }
   async function contentReady(page, routePath) {
     await page.locator('#tenant-content').waitFor();
@@ -239,7 +247,7 @@ async function main() {
           if (viewport.width < 1024 && !(await page.getByRole('dialog').isVisible())) await openMenu(page, viewport);
           const link = nav.locator(`a[href="${href}"]`), group = link.locator('xpath=ancestor::*[@data-navigation-group]');
           const toggle = group.getByRole('button').first(); if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-          await link.click(); await page.waitForURL(url => url.pathname === href); await contentReady(page, href);
+          await link.click(); await page.waitForURL(url => url.pathname === href); await activeModuleReady(page, href); await contentReady(page, href);
           if (viewport.width < 1024) assert.equal(await page.getByRole('dialog').count(), 0, 'Link did not close drawer');
           assert.equal(await nav.locator('a[aria-current="page"]').getAttribute('href'), href);
         }
@@ -264,7 +272,7 @@ async function main() {
         // Browser history changes before React's concurrent/lazy route commit.
         // Exercise Back only after the destination has actually rendered.
         await contentReady(page, '/painel/crm');
-        await page.waitForFunction(() => document.querySelector('#tenant-navigation a[aria-current="page"]')?.getAttribute('href') === '/painel/crm');
+        await activeModuleReady(page, '/painel/crm');
         await page.goBack(); await page.waitForURL('**/painel'); await openMenu(page, viewport);
         await page.waitForFunction(() => {
           const current = document.querySelector('#tenant-navigation nav[aria-label="Menu principal"] a[aria-current="page"]');
@@ -272,7 +280,7 @@ async function main() {
         }, null, { timeout: 12000 });
         assert.equal(await nav.locator('a[aria-current="page"]').getAttribute('href'), '/painel', 'Back did not commit Dashboard navigation');
         await closeMenu(page, viewport); await page.goForward(); await page.waitForURL('**/painel/crm'); await contentReady(page, '/painel/crm');
-        await page.waitForFunction(() => document.querySelector('#tenant-navigation a[aria-current="page"]')?.getAttribute('href') === '/painel/crm');
+        await activeModuleReady(page, '/painel/crm');
         result.checks.push(`${viewport.name}:collapse-persistence-keyboard-back-forward`);
         if (viewport.width < 1024) {
           const menu = page.getByRole('button', { name: 'Abrir menu', exact: true }); await menu.focus(); await page.keyboard.press('Enter');
@@ -283,7 +291,9 @@ async function main() {
             await page.keyboard.press(count < 45 ? 'Tab' : 'Shift+Tab');
             assert.equal(await page.evaluate(() => !!document.activeElement.closest('[role="dialog"]') && document.activeElement.getClientRects().length > 0), true, 'Drawer focus escaped or entered hidden group');
           }
-          await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' }); assert.equal(await menu.evaluate(node => document.activeElement === node), true);
+          await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
+          await page.waitForFunction(() => document.activeElement === document.querySelector('.fm-menu-toggle'), null, { timeout: 12000 });
+          assert.equal(await menu.evaluate(node => document.activeElement === node), true);
           result.checks.push(`${viewport.name}:drawer-keyboard-visible-focus-trap-Escape-return`);
         }
         await page.goto(origin + '/painel/funil', { waitUntil: 'networkidle' });
