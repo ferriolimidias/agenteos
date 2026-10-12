@@ -1,0 +1,27 @@
+/* Tenant-only structure; UX01 tokens, shells and shared controls stay authoritative. */
+.fm-tenant-navigation { padding-top: var(--fm-space-3); }
+.fm-navigation-group + .fm-navigation-group { margin-top: var(--fm-space-2); }
+.fm-navigation-heading { margin: 0; }
+.fm-navigation-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--fm-space-2); width: calc(100% - 1.5rem); min-height: 2.75rem; margin: 0 0.75rem; padding: 0.625rem 0.75rem; border-radius: var(--fm-radius-sm); border: 1px solid transparent; color: var(--fm-sidebar-muted); text-align: left; font-size: 0.6875rem; line-height: 1.5; font-weight: 650; letter-spacing: 0.025em; }
+.fm-navigation-toggle > span:first-child { min-width: 0; }
+.fm-navigation-toggle > svg { flex-shrink: 0; }
+.fm-navigation-toggle[aria-expanded="false"] > svg { transform: rotate(-90deg); }
+.fm-navigation-toggle:hover { color: var(--fm-sidebar-text); background: var(--fm-sidebar-raised); }
+.fm-navigation-group-active .fm-navigation-toggle { color: var(--fm-bronze-light); }
+.fm-navigation-items { margin: 0; padding: 0; list-style: none; }
+.fm-navigation-items[hidden] { display: none; }
+.fm-tenant-navigation .fm-nav-item { margin-top: 0.125rem; margin-bottom: 0.125rem; }
+.fm-tenant-topbar .fm-topbar-context { flex: 1; }
+.fm-tenant-breadcrumb { color: var(--fm-muted); font-size: 0.6875rem; min-width: 0; line-height: 1.5; }
+.fm-tenant-breadcrumb ol { display: flex; align-items: center; gap: 0.375rem; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.fm-tenant-breadcrumb li { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.fm-tenant-breadcrumb li + li::before { content: "/"; flex-shrink: 0; color: var(--fm-muted); }
+.fm-tenant-breadcrumb li > a, .fm-tenant-breadcrumb li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-tenant-breadcrumb a { color: var(--fm-primary); text-decoration: none; }
+.fm-tenant-breadcrumb a:hover { text-decoration: underline; }
+.fm-tenant-topbar .fm-topbar-title { font-size: 0.875rem; }
+@media (max-width: 1023px) {
+  .fm-tenant-breadcrumb li:nth-child(n+3) { display: none; }
+  .fm-tenant-breadcrumb li:nth-child(2) { flex: 1; }
+  .fm-tenant-topbar .fm-topbar-title { font-size: 0.8125rem; }
+}

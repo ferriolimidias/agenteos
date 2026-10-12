@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CheckCircle2, ClipboardList, Headphones, Image, Sparkles } from "lucide-react";
+import { Bot, CheckCircle2, ClipboardList, Headphones, Image, Send, Sparkles } from "lucide-react";
 import api from "../../services/api";
 import { ActionButton, EmptyState, FeatureCard, InfoBanner, PageHeader, RestrictedNotice, SectionCard, StatusBadge } from "../../components/ui";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";

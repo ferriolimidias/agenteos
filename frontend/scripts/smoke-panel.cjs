@@ -134,10 +134,21 @@ async function main() {
     }
     if (synthetic) {
       // Exercise the actual router link and a browser history transition as well.
-      await page.locator('nav a[href="/painel/crm"]').click();
+      // UX02 keeps task groups collapsed until selected; open the containing
+      // group before exercising the same actual route link as this regression.
+      async function clickTenantLink(href) {
+        const link = page.locator(`nav[aria-label="Menu principal"] a[href="${href}"]`);
+        const group = link.locator('xpath=ancestor::*[@data-navigation-group]');
+        if (await group.count()) {
+          const toggle = group.getByRole('button').first();
+          if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+        }
+        await link.click();
+      }
+      await clickTenantLink('/painel/crm');
       await page.waitForURL('**/painel/crm'); await page.locator('main').waitFor();
       await page.goBack(); await page.waitForURL('**/painel');
-      await page.locator('nav a[href="/painel/trafego/meta/conversoes"]').click();
+      await clickTenantLink('/painel/trafego/meta/conversoes');
       const operations = page.getByTestId('sender-operations');
       await operations.getByText('21 resultados · página 1', { exact: true }).waitFor();
       await operations.getByRole('button', { name: 'Próxima', exact: true }).click();
