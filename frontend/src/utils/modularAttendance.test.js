@@ -44,5 +44,6 @@ test("response contract rejects missing, wrong-version and oversized results", (
 });
 test("classification provenance does not turn local or failed calls into observed JEV", () => {
   for (const jev of [{}, { source: "observed_external", provider_used: false }, { source: "local_deterministic", provider_used: true }]) assert.match(previewClassification(jev), /não utilizado/);
-  assert.match(previewClassification({ provider_used: true, source: "observed_external" }), /externa observada/);
+  assert.match(previewClassification({ provider_used: true, source: "typesafe", status: "completed" }), /externa observada/);
+  assert.equal(previewStage({ value: "consideration", status: "synthetic", source: "synthetic_fixture" }), "Consideração · sintética");
 });

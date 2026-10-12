@@ -48,9 +48,14 @@ export function previewResponse(data) {
 }
 export function previewStage(stage) {
   if (stage?.status === "unknown" || !stage?.value) return "Etapa desconhecida";
-  const value = String(stage.value).slice(0, 100);
-  return `${value} · ${stage.source === "synthetic" ? "sintética" : stage.source === "canonical" ? "canônica" : "fonte não confirmada"}`;
+  const labels = { consideration: "Consideração", discovery: "Descoberta", decision: "Decisão", support: "Suporte" };
+  const value = labels[stage.value] || String(stage.value).slice(0, 100);
+  return `${value} · ${["synthetic", "synthetic_fixture"].includes(stage.source) ? "sintética" : ["canonical", "crm_snapshot"].includes(stage.source) ? "canônica" : "fonte não confirmada"}`;
 }
 export function previewClassification(jev) {
-  return jev?.provider_used === true && jev?.source === "observed_external" ? "JEV: decisão externa observada em exemplo sintético" : "Seleção local determinística; JEV não utilizado";
+  return jev?.provider_used === true && jev?.status === "completed" && ["observed_external", "typesafe"].includes(jev?.source) ? "JEV: decisão externa observada em exemplo sintético" : "Seleção local determinística; JEV não utilizado";
+}
+export function previewTopics(items) {
+  const labels = { price: "Preço", conditions: "Condições", trust: "Confiança", availability: "Disponibilidade", booking: "Agendamento", human: "Atendimento humano", closing: "Fechamento", questions: "Dúvidas", objection: "Objeção", support: "Suporte" };
+  return Array.isArray(items) ? [...new Set(items.filter(key => Object.hasOwn(labels, key)))].map(key => labels[key]) : [];
 }

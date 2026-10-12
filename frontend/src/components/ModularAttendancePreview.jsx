@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FlaskConical } from "lucide-react";
 import api from "../services/api";
 import { getActiveEmpresaId, getStoredToken } from "../utils/auth";
-import { buildPreviewRequest, canPreviewProvider, metricValue, modularError, moduleVersion, previewClassification, previewModules, previewResponse, previewScopeCurrent, previewStage } from "../utils/modularAttendance";
+import { buildPreviewRequest, canPreviewProvider, metricValue, modularError, moduleVersion, previewClassification, previewModules, previewResponse, previewScopeCurrent, previewStage, previewTopics } from "../utils/modularAttendance";
 import { ActionButton, InfoBanner, LoadingState, SectionCard, StatusBadge } from "./ui";
 
 export default function ModularAttendancePreview() {
@@ -74,6 +74,7 @@ function PreviewEditor({ scope }) {
     {status ? <>
       <div className="mt-4 flex flex-wrap gap-2"><StatusBadge tone="info">Produção: {status.mode === "MODULAR" ? "MODULAR" : "LEGACY"}</StatusBadge><StatusBadge>Composição {moduleVersion(status.composition_version)}</StatusBadge><StatusBadge>{status.provider?.jev_configured ? "JEV configurado" : "JEV não configurado"}</StatusBadge></div>
       <p className="fm-helper mt-2">Modo de produção somente leitura. A pré-visualização não ativa atendimento modular nem altera autorizações.</p>
+      <details className="mt-3 text-sm"><summary className="cursor-pointer font-medium">Catálogo de módulos versionados</summary><ul className="mt-2 grid gap-2 sm:grid-cols-2">{previewModules(status.modules).map(item => <li key={item.id}>{item.title} · {item.version}</li>)}</ul></details>
       <form className="mt-4 grid min-w-0 gap-4 md:grid-cols-2" onSubmit={event => { event.preventDefault(); void simulate(); }} aria-busy={busy}>
         <div><label htmlFor="a07-source" className="mb-1 block text-sm font-medium">Entrada da simulação</label><select id="a07-source" className="fm-field w-full" value={source} disabled={busy} onChange={event => { setSource(event.target.value); setResult(null); }}><option value="example">Exemplo sintético</option><option value="custom">Mensagem personalizada local</option></select></div>
         <div><label htmlFor="a07-channel" className="mb-1 block text-sm font-medium">Canal do cenário</label><select id="a07-channel" className="fm-field w-full" value={channel} disabled={busy} onChange={event => { setChannel(event.target.value); setResult(null); }}><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="simulator">Simulador</option></select></div>
@@ -86,6 +87,7 @@ function PreviewEditor({ scope }) {
       {result ? <div ref={resultRef} tabIndex={-1} role="region" aria-label="Resultado da simulação modular" className="mt-5 min-w-0 space-y-4">
         <h3 className="font-semibold">Resultado da simulação</h3>
         <p className="fm-helper">Etapa principal: {previewStage(result.primary_stage)}</p>
+        <p className="fm-helper">Assuntos simultâneos: {previewTopics(result.active_topics).join(", ") || "Não identificados"}</p>
         <div aria-label="Módulos selecionados" className="flex flex-wrap gap-2">{modules.length ? modules.map(item => <StatusBadge key={item.id} tone="info">{item.title} · {item.version}</StatusBadge>) : <p className="fm-helper">Sem módulos selecionados; resposta segura ou legado.</p>}</div>
         <p className="fm-helper">{previewClassification(result.jev)}</p>
         {result.fallback_reason ? <InfoBanner tone="warning">Fallback seguro para o legado. Motivo: {moduleVersion(result.fallback_reason)}</InfoBanner> : null}
