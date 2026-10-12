@@ -50,10 +50,10 @@ function response(url,mode){
   if(p.endsWith('/history'))return {items:empty?[]:[{id:'execution-1',status:'error',created_at:T,comment_text:'Gostaria da agenda',public_reply:'Veja os horários',private_reply:'Detalhes sintéticos'}]};
  }
  if(p.endsWith('/rag'))return empty?[]:[{source_name:'Perguntas frequentes sintéticas',source_type:'text',total_chunks:3}];
- if(p.endsWith('/agenda'))return {config:{dias_funcionamento:{seg:{aberto:true,inicio:'08:00',fim:'18:00'},ter:{aberto:true,inicio:'08:00',fim:'18:00'}},excecoes:[]},agendamentos:empty?[]:[{id:'appointment-1',lead:{nome_contato:'Ana sintética'},data_hora_inicio:'2026-10-12T09:00:00Z',data_hora_fim:'2026-10-12T09:30:00Z',status:'confirmado'}]};
+ if(p.endsWith('/agenda'))return {config:{duracao_minutos:30,dias_funcionamento:{seg:{aberto:true,inicio:'08:00',fim:'18:00'},ter:{aberto:true,inicio:'08:00',fim:'18:00'}},excecoes:[]},agendamentos:empty?[]:[{id:'appointment-1',lead:{nome_contato:'Ana sintética'},data_hora_inicio:'2026-10-12T09:00:00Z',data_hora_fim:'2026-10-12T09:30:00Z',status:'confirmado'}]};
  if(p.endsWith('/agentes'))return empty?[]:[{id:'agent-1',nome:'Atendimento sintético',status:'ativo',ativo:true}];
- if(p.endsWith('/transferencias/destinos'))return empty?[]:[{id:'destination-1',nome_destino:'Equipe sintética',contatos_destino:['SYNTHETIC_ADMIN'],instrucoes_ativacao:'Pedido explícito de atendimento humano.'}];
- if(p.endsWith('/transferencias/historico'))return empty?[]:[{id:'transfer-1',nome_contato:'Ana sintética',nome_destino:'Equipe sintética',criado_em:T,status:'concluido'}];
+ if(p.endsWith('/transferencias/destinos'))return empty?[]:[{id:'destination-1',nome_destino:'Equipe sintética',contatos_destino:['SYNTHETIC_ADMIN'],instrucoes_ativacao:'Pedido explícito de atendimento humano.',criado_em:T}];
+ if(p.endsWith('/transferencias/historico'))return empty?[]:[{id:'transfer-1',lead_nome:'Ana sintética',destino_nome:'Equipe sintética',motivo_ia:'Solicitação sintética de atendimento humano',resumo_enviado:'Resumo sintético da conversa',criado_em:T,status:'concluido'}];
  if(p.endsWith('/unidades'))return empty?[]:[{id:'unit-1',nome_unidade:'Unidade sintética',endereco_completo:'Endereço de demonstração',horario_funcionamento:'08h–18h',is_matriz:true}];
  if(p.endsWith('/crm/tags/grupos'))return empty?[]:[{id:'group-1',nome:'Jornada sintética',cor:'#235568'}];
  if(p.endsWith('/conexoes/meta/config'))return {configured:false,enabled:false};
@@ -106,6 +106,7 @@ async function exercise(page,route,{fixtureMode,viewport,output}){
  }
  if(route==='/painel/agenda'){
   await page.getByText('Ana sintética',{exact:true}).waitFor();
+  await page.getByText('30 minutos',{exact:true}).waitFor();
   assert.equal(/NaN|Invalid Date/i.test(await page.locator('#tenant-content').innerText()),false);
   checks.push('agenda-valid-appointment-name-start-end-rendered');
  }
