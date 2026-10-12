@@ -5,6 +5,7 @@ import os
 import uuid
 import logging
 import json
+import time
 from datetime import datetime
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -70,6 +71,7 @@ class AtendimentoAgent:
 
     async def run(self, agent_input: AtendimentoAgentInput) -> AtendimentoAgentOutput:
         state = agent_input.state
+        state.metadata.pop("a07_composition", None)  # Never reuse client-supplied composition metadata.
         message = self._latest_message(agent_input.messages, state)
         if message and message.text:
             state.mensagem_atual = message.text
@@ -261,12 +263,33 @@ class AtendimentoAgent:
             else build_atendimento_system_prompt(tenant_config, memory=prompt_memory)
         )
         llm_messages = self._build_llm_messages(state, message)
+        # A07 is additive and closed by default. The legacy branch does not query
+        # stages, classify, call JEV or write an A07 trace.
+        from app.services.a07_flags import rollout
+        from app.services import a07_runtime
+        modular_trace = None
+        rollout_state = rollout(state.empresa_id, state.canal)
+        if rollout_state["mode"] == "MODULAR" and not state.first_agent_response:
+            system_prompt, modular_trace = await a07_runtime.prepare_runtime(
+                state, system_prompt, messages=llm_messages, tools_context=tools_context,
+            )
+        observe_modular_usage = bool(modular_trace and modular_trace.get("mode") == "MODULAR" and isinstance(llm_provider, OpenAIAgentLLM))
+        if observe_modular_usage:
+            llm_provider.enable_usage_observation()
+        generation_started = time.monotonic()
         try:
-            draft = await llm_provider.generate(
+            generation = llm_provider.generate(
                 system_prompt=system_prompt,
                 messages=llm_messages,
                 tools_context=tools_context,
             )
+            if modular_trace and modular_trace.get("mode") == "MODULAR":
+                draft = await asyncio.wait_for(generation, modular_trace["deadline_remaining"])
+            else:
+                draft = await generation
+        except asyncio.TimeoutError as exc:
+            operational_error = "a07_generation_timeout" if modular_trace and modular_trace.get("mode") == "MODULAR" else str(sanitize_for_log(str(exc)))[:300]
+            reason_code = "tenant_llm_provider_error"
         except TenantLLMUnavailable as exc:
             operational_error = str(exc)
             reason_code = "tenant_llm_unavailable"
@@ -277,11 +300,22 @@ class AtendimentoAgent:
             operational_error = None
             reason_code = None
 
+        finally:
+            if observe_modular_usage:
+                llm_provider.disable_usage_observation()
+        generation_latency_ms = round((time.monotonic() - generation_started) * 1000)
+        if not reason_code and modular_trace and modular_trace.get("mode") == "MODULAR":
+            a07_runtime.capture_generation_usage(modular_trace, llm_provider)
         if not reason_code and not str(draft or "").strip():
             operational_error = "OpenAI returned empty response"
             reason_code = "tenant_llm_empty_response"
 
         if reason_code:
+            if modular_trace:
+                await a07_runtime.complete_runtime(state, modular_trace,
+                    generation_error="generation_timeout" if operational_error == "a07_generation_timeout" else "generation_error",
+                    latency_ms=generation_latency_ms)
+                state.metadata["a07_composition"] = a07_runtime.metadata(modular_trace)
             guard_result = GuardResult(
                 allowed=False,
                 text="",
@@ -308,6 +342,8 @@ class AtendimentoAgent:
             )
 
         if state.first_agent_response:
+            if rollout_state["requested_mode"] == "MODULAR":
+                state.metadata["a07_composition"] = {"composition_version": "a07.compose.v1", "mode": "LEGACY", "fallback_reason": "first_turn_legacy", "selected_modules": []}
             first_turn_decision = self._parse_first_turn_decision(draft, tenant_config)
             if first_turn_decision is None:
                 first_turn_decision = FirstTurnAgentDecision(needs_extension=False, extension="")
@@ -383,6 +419,9 @@ class AtendimentoAgent:
             )
 
         if self._has_fiscal_errors(fiscal_findings):
+            if modular_trace:
+                await a07_runtime.complete_runtime(state, modular_trace, guard_allowed=False)
+                state.metadata["a07_composition"] = a07_runtime.metadata(modular_trace)
             guard_result = GuardResult(
                 allowed=False,
                 text="",
@@ -416,6 +455,10 @@ class AtendimentoAgent:
         formatted = format_for_whatsapp(draft, state)
         guard_result = self.guard.validate(formatted)
         response_text = guard_result.text if guard_result.allowed else guard_result.text
+        if modular_trace:
+            await a07_runtime.complete_runtime(state, modular_trace, guard_allowed=guard_result.allowed,
+                latency_ms=generation_latency_ms)
+            state.metadata["a07_composition"] = a07_runtime.metadata(modular_trace)
         self._update_state_memory(state, tool_results, message)
 
         return AtendimentoAgentOutput(
@@ -732,6 +775,7 @@ class AtendimentoAgent:
         blocked_reason: str | None = None,
     ) -> dict[str, Any]:
         return {
+            **({"a07_composition": state.metadata["a07_composition"]} if "a07_composition" in state.metadata else {}),
             "agent": "AtendimentoAgent",
             "dispatch": "disabled_in_new_architecture",
             "tenant_config": {

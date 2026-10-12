@@ -244,6 +244,8 @@ app.include_router(meta_templates.router)
 app.include_router(traffic_meta.router, prefix="/api")
 app.include_router(attribution.router)
 app.include_router(analytics.router)
+from app.api.routers import atendimento_modular
+app.include_router(atendimento_modular.router)
 app.include_router(jev.router)
 app.include_router(jev_admin.router)
 

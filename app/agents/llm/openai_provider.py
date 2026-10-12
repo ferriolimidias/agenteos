@@ -15,6 +15,16 @@ class OpenAIAgentLLM(AgentLLM):
         self._api_key = str(api_key or "").strip()
         self._model = str(model or "").strip() or "gpt-4o-mini"
         self._tenant_id = str(tenant_id or "").strip() or None
+        self._observe_usage = False
+        self.last_usage_observation = None
+
+    def enable_usage_observation(self) -> None:
+        """A07 opt-in only; leaves request arguments and return value unchanged."""
+        self._observe_usage = True
+        self.last_usage_observation = None
+
+    def disable_usage_observation(self) -> None:
+        self._observe_usage = False
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "OpenAIAgentLLM":
@@ -91,6 +101,17 @@ class OpenAIAgentLLM(AgentLLM):
                 sanitize_for_log(str(exc))[:240],
             )
             raise
+        if self._observe_usage:
+            usage = getattr(response, "usage", None)
+            def observed_count(name):
+                value = getattr(usage, name, None) if usage is not None else None
+                return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+            self.last_usage_observation = {
+                "input_tokens": observed_count("prompt_tokens"),
+                "output_tokens": observed_count("completion_tokens"),
+                "cost_usd": None,  # No measured billing amount or versioned tariff here.
+                "latency_ms": int((time.monotonic() - started) * 1000),
+            }
         choice = response.choices[0] if getattr(response, "choices", None) else None
         if not choice:
             logger.warning(
