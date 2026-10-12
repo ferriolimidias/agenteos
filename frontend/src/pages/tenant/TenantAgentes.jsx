@@ -4,6 +4,7 @@ import { Bot, CheckCircle2, ClipboardList, Headphones, Image, Send, Sparkles } f
 import api from "../../services/api";
 import { ActionButton, EmptyState, FeatureCard, InfoBanner, PageHeader, RestrictedNotice, SectionCard, StatusBadge } from "../../components/ui";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
+import ModularAttendancePreview from "../../components/ModularAttendancePreview";
 
 const TIPOS_ALTERACAO = [
   "Ajuste no comportamento do agente",
@@ -228,6 +229,8 @@ export default function TenantAgentes() {
           </SectionCard>
         </>
       )}
+
+      <ModularAttendancePreview />
 
       <SectionCard title="Solicitar alteração" description="Registre uma solicitação para revisão pela equipe AgenteOS. Nada é enviado automaticamente para clientes.">
         {solicitacaoRegistrada ? (
