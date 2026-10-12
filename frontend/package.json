@@ -23,7 +23,9 @@
     "test:panel-smoke": "node scripts/smoke-panel.cjs",
     "test:sender-operations": "node --test src/utils/conversionOperations.test.js",
     "test:journey": "node --test src/utils/commercialJourney.test.js",
-    "test:funnel": "node --test src/utils/commercialFunnel.test.js"
+    "test:funnel": "node --test src/utils/commercialFunnel.test.js",
+    "test:jev": "node --test src/utils/jevDiagnostics.test.js",
+    "test:jev-smoke": "node scripts/smoke-jev-diagnostics.cjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

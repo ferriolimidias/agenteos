@@ -8,8 +8,10 @@ const SuperAdminLayout = lazy(() => import("./layouts/SuperAdminLayout"));
 const TenantLayout = lazy(() => import("./layouts/TenantLayout"));
 const Empresas = lazy(() => import("./pages/super-admin/Empresas"));
 const ConfiguracoesGlobais = lazy(() => import("./pages/super-admin/ConfiguracoesGlobais"));
+const JevIntegration = lazy(() => import("./pages/super-admin/JevIntegration"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
 const FunnelDashboard = lazy(() => import("./pages/tenant/FunnelDashboard"));
+const JevDiagnostics = lazy(() => import("./pages/tenant/JevDiagnostics"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
 const TenantAgentes = lazy(() => import("./pages/tenant/TenantAgentes"));
 const TenantFollowUps = lazy(() => import("./pages/tenant/TenantFollowUps"));
@@ -82,12 +84,14 @@ function App() {
           <Route path="orquestrador" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="empresas/:empresaId" element={<EmpresaDetalhes />} />
           <Route path="configuracoes" element={<ConfiguracoesGlobais />} />
+          <Route path="configuracoes/integracoes/jev" element={<JevIntegration />} />
         </Route>
 
         {/* Rota do Cliente (Tenant) */}
         <Route path="/painel" element={<TenantLayout />}>
           <Route index element={<TenantDashboard />} />
           <Route path="funil" element={<FunnelDashboard />} />
+          <Route path="inteligencia" element={<JevDiagnostics />} />
           <Route path="agentes" element={<TenantAgentes />} />
           <Route path="followups" element={<TenantFollowUps />} />
           <Route path="crm" element={<Crm />} />

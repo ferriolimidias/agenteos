@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Save, Settings } from "lucide-react";
 import api from "../../services/api";
 import { ActionButton, InfoBanner, LoadingState, PageHeader, SectionCard } from "../../components/ui";
@@ -106,6 +107,7 @@ export default function ConfiguracoesGlobais() {
         icon={Settings}
         eyebrow="Super Admin"
       />
+      <SectionCard title="Integrações"><Link to="/admin/configuracoes/integracoes/jev" className="text-sm font-semibold text-indigo-700 underline">Configurar JEV por empresa · SHADOW</Link></SectionCard>
 
         {loading && (
           <LoadingState label="Carregando configurações..." />

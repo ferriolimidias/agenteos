@@ -104,6 +104,7 @@ async def run_migrations():
             Path(__file__).resolve().parent / "db/migrations/2026_10_09_002_meta_conversion_shadow.sql",
             Path(__file__).resolve().parent / "db/migrations/2026_10_09_003_canonical_conversion_outbox.sql",
             Path(__file__).resolve().parent / "db/migrations/2026_10_09_004_legacy_conversion_delivery_evidence.sql",
+            Path(__file__).resolve().parent / "db/migrations/2026_10_12_001_jev_tenant_config.sql",
         )
         for migration in migrations:
             await _apply_registered_migration(conn, migration)

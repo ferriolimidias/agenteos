@@ -31,6 +31,7 @@ from app.api.routers import meta_templates
 from app.api.routers import traffic_meta
 from app.api.routers import attribution
 from app.api.routers import analytics
+from app.api.routers import jev, jev_admin
 from app.api.routers import websockets
 from app.api.routers import public_anamnese
 from app.api.routers import leoft_student_app
@@ -243,6 +244,8 @@ app.include_router(meta_templates.router)
 app.include_router(traffic_meta.router, prefix="/api")
 app.include_router(attribution.router)
 app.include_router(analytics.router)
+app.include_router(jev.router)
+app.include_router(jev_admin.router)
 
 print("--- INICIANDO MAPEAMENTO DE ROTAS ---")
 for route in app.routes:

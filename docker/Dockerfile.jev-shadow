@@ -1,0 +1,12 @@
+# A06 incremental SHADOW/configuration release over the approved A05 runtime.
+ARG BACKEND_RUNTIME_BASE=agenteos-backend:a05-cohort-funnel-20261011-01
+FROM ${BACKEND_RUNTIME_BASE}
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT \
+      org.agenteos.change="a06-jev-shadow" \
+      org.agenteos.runtime-base="a05-cohort-funnel-20261011-01"
+COPY app/api/main.py /app/app/api/main.py
+COPY app/api/routers/jev.py app/api/routers/jev_admin.py /app/app/api/routers/
+COPY app/services/jev_*.py /app/app/services/
+COPY db/migrations/2026_10_12_001_jev_tenant_config.sql /app/db/migrations/
+COPY run_migrations.py /app/run_migrations.py
