@@ -1,3 +1,5 @@
+import "../../styles/ux05-settings.css";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BotOff, Layers3, Palette, Pencil, Plus, RefreshCw, Tag, Trash2, X } from "lucide-react";
 
@@ -300,13 +302,13 @@ export default function GestaoTags() {
     const reviewTag = reviewerOverview?.tag_teste || {};
     const reviewContact = reviewerOverview?.contato_teste || {};
     return (
-      <div className="space-y-6">
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-5">
+      <div className="fm-settings fm-tags space-y-6">
+        <div className="fm-settings-reviewer-heading rounded-xl border border-blue-200 bg-blue-50 p-5">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">Conta de análise da Meta</p>
           <h1 className="mt-2 flex items-center gap-2 text-2xl font-semibold"><Tag className="text-blue-600" size={25} />Gestão de Tags</h1>
           <p className="mt-2 text-sm text-slate-600">Acesso limitado à demonstração da integração de conversões do WhatsApp.</p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="fm-settings-panel rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Tag permitida para demonstração</h2>
           <p className="mt-2 text-sm">{reviewTag.nome || testTag?.nome || "Tag de teste indisponível"}</p>
           <p className="text-sm text-slate-600">Evento: {reviewTag.configuracao?.event_name || testTag?.meta_conversion_config?.event_name || "LeadSubmitted"}</p>
@@ -321,14 +323,14 @@ export default function GestaoTags() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div className="fm-settings fm-tags space-y-6">
+      <div className="fm-settings-header fm-page-header flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
+          <h1 className="fm-page-title flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
             <Tag className="text-blue-600" size={30} />
             Gestão de Tags
           </h1>
-          <p className="mt-1 text-gray-500">
+          <p className="fm-page-description mt-1 text-gray-500">
             Cadastre grupos e tags oficiais do CRM para organizar departamentos, campanhas e as futuras abas do Inbox.
           </p>
         </div>
@@ -361,7 +363,7 @@ export default function GestaoTags() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-blue-100 bg-blue-50/50 p-6 shadow-sm" aria-labelledby="tags-ia-title">
+      <section className="fm-settings-allowlist rounded-2xl border border-blue-100 bg-blue-50/50 p-6 shadow-sm" aria-labelledby="tags-ia-title">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 id="tags-ia-title" className="text-lg font-semibold text-gray-900">Tags disponíveis para a IA</h2>
@@ -409,7 +411,7 @@ export default function GestaoTags() {
         </div>
       </section>
 
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="fm-settings-panel rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-5">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -447,8 +449,8 @@ export default function GestaoTags() {
               </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-gray-200">
-              <table className="min-w-full divide-y divide-gray-200">
+            <div className="fm-table-scroll overflow-x-auto rounded-2xl border border-gray-200" role="region" aria-label="Grupos de tags" tabIndex={0}>
+              <table className="fm-table min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Nome</th>
@@ -504,7 +506,7 @@ export default function GestaoTags() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="fm-settings-panel rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-5">
           <h2 className="text-lg font-semibold text-gray-900">Tags Oficiais</h2>
           <p className="mt-1 text-sm text-gray-500">
@@ -527,8 +529,8 @@ export default function GestaoTags() {
               </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-gray-200">
-              <table className="min-w-full divide-y divide-gray-200">
+            <div className="fm-table-scroll overflow-x-auto rounded-2xl border border-gray-200" role="region" aria-label="Tags oficiais" tabIndex={0}>
+              <table className="fm-table min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Tag</th>
@@ -619,28 +621,28 @@ export default function GestaoTags() {
       </div>
 
       {showGroupModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div role="dialog" aria-modal="true" aria-labelledby="settings-gestaotags-dialog-1" className="fm-settings-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fm-settings-dialog flex max-h-[90vh] w-full max-w-xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="fm-settings-dialog-heading flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 id="settings-gestaotags-dialog-1" className="text-xl font-bold text-gray-900">
                   {editingGroup ? "Editar grupo" : "Novo grupo"}
                 </h2>
                 <p className="text-sm text-gray-500">
                   Configure o departamento que organizará as tags e as futuras abas do Inbox.
                 </p>
               </div>
-              <button type="button" onClick={closeGroupModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+              <button aria-label="Fechar editor" type="button" onClick={closeGroupModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleGroupSubmit} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <form aria-busy={saving} onSubmit={handleGroupSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="fm-settings-dialog-body flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_140px]">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do grupo</label>
-                    <input
+                    <label htmlFor="settings-gestaotags-groupFormData-nome" className="mb-1 block text-sm font-medium text-gray-700">Nome do grupo</label>
+                    <input id="settings-gestaotags-groupFormData-nome"
                       required
                       value={groupFormData.nome}
                       onChange={(e) => setGroupFormData((prev) => ({ ...prev, nome: e.target.value }))}
@@ -650,8 +652,8 @@ export default function GestaoTags() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
-                    <input
+                    <label htmlFor="settings-gestaotags-groupFormData-cor" className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
+                    <input id="settings-gestaotags-groupFormData-cor"
                       type="color"
                       value={groupFormData.cor}
                       onChange={(e) => setGroupFormData((prev) => ({ ...prev, cor: e.target.value }))}
@@ -660,8 +662,8 @@ export default function GestaoTags() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Ordem</label>
-                    <input
+                    <label htmlFor="settings-gestaotags-groupFormData-ordem" className="mb-1 block text-sm font-medium text-gray-700">Ordem</label>
+                    <input id="settings-gestaotags-groupFormData-ordem"
                       type="number"
                       min="0"
                       value={groupFormData.ordem}
@@ -671,7 +673,7 @@ export default function GestaoTags() {
                   </div>
                 </div>
               </div>
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+              <div className="fm-settings-dialog-actions flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={closeGroupModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>
@@ -689,29 +691,29 @@ export default function GestaoTags() {
       ) : null}
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div role="dialog" aria-modal="true" aria-labelledby="settings-gestaotags-dialog-2" className="fm-settings-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fm-settings-dialog flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="fm-settings-dialog-heading flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 id="settings-gestaotags-dialog-2" className="text-xl font-bold text-gray-900">
                   {editingTag ? "Editar tag oficial" : "Nova tag oficial"}
                 </h2>
                 <p className="text-sm text-gray-500">
                   Configure a cor visual da tag, vincule-a ao grupo correto e defina a regra de classificação da IA.
                 </p>
               </div>
-              <button type="button" onClick={closeModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+              <button aria-label="Fechar editor" type="button" onClick={closeModal} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <form aria-busy={saving} onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="fm-settings-dialog-body flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="space-y-5">
                   <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">Nome da tag</label>
-                      <input
+                      <label htmlFor="settings-gestaotags-formData-nome" className="mb-1 block text-sm font-medium text-gray-700">Nome da tag</label>
+                      <input id="settings-gestaotags-formData-nome"
                         required
                         value={formData.nome}
                         onChange={(e) => setFormData((prev) => ({ ...prev, nome: e.target.value }))}
@@ -721,8 +723,8 @@ export default function GestaoTags() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
-                      <input
+                      <label htmlFor="settings-gestaotags-formData-cor" className="mb-1 block text-sm font-medium text-gray-700">Cor</label>
+                      <input id="settings-gestaotags-formData-cor"
                         type="color"
                         value={formData.cor}
                         onChange={(e) => setFormData((prev) => ({ ...prev, cor: e.target.value }))}
@@ -732,8 +734,8 @@ export default function GestaoTags() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Grupo</label>
-                    <select
+                    <label htmlFor="settings-gestaotags-formData-grupo-id" className="mb-1 block text-sm font-medium text-gray-700">Grupo</label>
+                    <select id="settings-gestaotags-formData-grupo-id"
                       value={formData.grupo_id}
                       onChange={(e) => setFormData((prev) => ({ ...prev, grupo_id: e.target.value }))}
                       className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
@@ -748,8 +750,8 @@ export default function GestaoTags() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Instrução para a IA</label>
-                    <textarea
+                    <label htmlFor="settings-gestaotags-formData-instrucao-ia" className="mb-1 block text-sm font-medium text-gray-700">Instrução para a IA</label>
+                    <textarea id="settings-gestaotags-formData-instrucao-ia"
                       rows={6}
                       value={formData.instrucao_ia}
                       onChange={(e) => setFormData((prev) => ({ ...prev, instrucao_ia: e.target.value }))}
@@ -769,6 +771,7 @@ export default function GestaoTags() {
                       <button
                         type="button"
                         role="switch"
+                        aria-label="Disparar Conversão de Ads"
                         aria-checked={formData.disparar_conversao_ads}
                         onClick={() =>
                           setFormData((prev) => ({
@@ -897,6 +900,7 @@ export default function GestaoTags() {
                       <button
                         type="button"
                         role="switch"
+                        aria-label="Ação de Fechamento"
                         aria-checked={formData.acao_fechamento}
                         onClick={() =>
                           setFormData((prev) => ({
@@ -930,6 +934,7 @@ export default function GestaoTags() {
                       <button
                         type="button"
                         role="switch"
+                        aria-label="Pausa Permanente (Travar IA)"
                         aria-checked={formData.pausa_permanente}
                         onClick={() =>
                           setFormData((prev) => ({
@@ -970,6 +975,7 @@ export default function GestaoTags() {
                       <button
                         type="button"
                         role="switch"
+                        aria-label="Pausar bot ao aplicar esta tag (Transferir para Humano)"
                         aria-checked={formData.acao_transferir_humano}
                         onClick={() =>
                           setFormData((prev) => ({
@@ -993,10 +999,10 @@ export default function GestaoTags() {
 
                   {!formData.pausa_permanente ? (
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                    <label htmlFor="settings-gestaotags-formData-mensagem-transferencia" className="mb-1 block text-sm font-medium text-gray-700">
                       Mensagem Automática de Transferência
                     </label>
-                    <textarea
+                    <textarea id="settings-gestaotags-formData-mensagem-transferencia"
                       rows={4}
                       value={formData.mensagem_transferencia}
                       onChange={(e) => setFormData((prev) => ({ ...prev, mensagem_transferencia: e.target.value }))}
@@ -1010,7 +1016,7 @@ export default function GestaoTags() {
                   ) : null}
                 </div>
               </div>
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+              <div className="fm-settings-dialog-actions flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button type="button" onClick={closeModal} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">
                   Cancelar
                 </button>

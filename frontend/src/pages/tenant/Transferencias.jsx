@@ -1,3 +1,5 @@
+import "../../styles/ux05-settings.css";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRightLeft,
@@ -172,9 +174,9 @@ export default function Transferencias() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="fm-settings fm-transfers space-y-6">
       {toast ? (
-        <div className="fixed right-6 top-6 z-[70]">
+        <div className="fm-settings-toast fixed right-6 top-6 z-[70]" role="status" aria-live="polite">
           <div
             className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
               toast.type === "success"
@@ -199,6 +201,7 @@ export default function Transferencias() {
               <button
                 type="button"
                 onClick={() => setToast(null)}
+                aria-label="Fechar aviso de transferência"
                 className="rounded-lg p-1 opacity-70 transition-opacity hover:opacity-100"
               >
                 <X size={14} />
@@ -208,13 +211,13 @@ export default function Transferencias() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="fm-settings-header fm-page-header flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
+          <h1 className="fm-page-title flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
             <ArrowRightLeft className="text-blue-600" size={30} />
             Transferências
           </h1>
-          <p className="mt-1 text-gray-500">
+          <p className="fm-page-description mt-1 text-gray-500">
             Configure destinos de transbordo e acompanhe o histórico auditável das transferências.
           </p>
         </div>
@@ -239,12 +242,13 @@ export default function Transferencias() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-100 px-6 pt-4">
+      <div className="fm-settings-panel rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="fm-settings-tabs border-b border-gray-100 px-6 pt-4" role="group" aria-label="Áreas de transferências">
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => setActiveTab("destinos")}
+              aria-pressed={activeTab === "destinos"}
               className={`rounded-t-xl px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === "destinos"
                   ? "border border-b-white border-blue-200 bg-blue-50 text-blue-700"
@@ -256,6 +260,7 @@ export default function Transferencias() {
             <button
               type="button"
               onClick={() => setActiveTab("historico")}
+              aria-pressed={activeTab === "historico"}
               className={`rounded-t-xl px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === "historico"
                   ? "border border-b-white border-blue-200 bg-blue-50 text-blue-700"
@@ -286,15 +291,15 @@ export default function Transferencias() {
               ) : (
                 <div className="grid gap-4 xl:grid-cols-2">
                   {destinos.map((destino) => (
-                    <div key={destino.id} className="rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
-                      <div className="mb-4 flex items-start justify-between gap-4">
+                    <div key={destino.id} className="fm-settings-record rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
+                      <div className="fm-settings-record-heading mb-4 flex items-start justify-between gap-4">
                         <div>
                           <h3 className="text-lg font-semibold text-gray-900">{destino.nome_destino}</h3>
                           <p className="mt-1 text-xs text-gray-500">
                             Criado em {formatDate(destino.criado_em)}
                           </p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="fm-settings-actions flex items-center gap-2">
                           <button
                             type="button"
                             onClick={() => handleTestarDestino(destino)}
@@ -381,8 +386,8 @@ export default function Transferencias() {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-2xl border border-gray-200">
-                  <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
+                <div className="fm-table-scroll overflow-x-auto rounded-2xl border border-gray-200" role="region" aria-label="Histórico de transferências" tabIndex={0}>
+                  <table className="fm-table min-w-full divide-y divide-gray-200 text-left text-sm">
                     <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                       <tr>
                         <th className="px-4 py-3 font-semibold">Data</th>
@@ -420,18 +425,18 @@ export default function Transferencias() {
       </div>
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div role="dialog" aria-modal="true" aria-labelledby="settings-transferencias-dialog-1" className="fm-settings-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fm-settings-dialog flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="fm-settings-dialog-heading flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 id="settings-transferencias-dialog-1" className="text-xl font-bold text-gray-900">
                   {editingDestino ? "Editar destino" : "Novo destino de transferência"}
                 </h2>
                 <p className="text-sm text-gray-500">
                   Cadastre os contatos que podem assumir conversas transferidas pela IA.
                 </p>
               </div>
-              <button
+              <button aria-label="Fechar editor"
                 type="button"
                 onClick={closeModal}
                 className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
@@ -440,12 +445,12 @@ export default function Transferencias() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <form aria-busy={saving} onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="fm-settings-dialog-body flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="space-y-5">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome do destino</label>
-                    <input
+                    <label htmlFor="settings-transferencias-formData-nome-destino" className="mb-1 block text-sm font-medium text-gray-700">Nome do destino</label>
+                    <input id="settings-transferencias-formData-nome-destino"
                       required
                       value={formData.nome_destino}
                       onChange={(e) => setFormData((prev) => ({ ...prev, nome_destino: e.target.value }))}
@@ -455,10 +460,10 @@ export default function Transferencias() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                    <label htmlFor="settings-transferencias-formData-contatos-destino" className="mb-1 block text-sm font-medium text-gray-700">
                       Números de WhatsApp de destino
                     </label>
-                    <textarea
+                    <textarea id="settings-transferencias-formData-contatos-destino"
                       required
                       rows={4}
                       value={formData.contatos_destino}
@@ -472,10 +477,10 @@ export default function Transferencias() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                    <label htmlFor="settings-transferencias-formData-instrucoes-ativacao" className="mb-1 block text-sm font-medium text-gray-700">
                       Instruções de ativação
                     </label>
-                    <textarea
+                    <textarea id="settings-transferencias-formData-instrucoes-ativacao"
                       rows={6}
                       value={formData.instrucoes_ativacao}
                       onChange={(e) => setFormData((prev) => ({ ...prev, instrucoes_ativacao: e.target.value }))}
@@ -485,7 +490,7 @@ export default function Transferencias() {
                   </div>
                 </div>
               </div>
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+              <div className="fm-settings-dialog-actions flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button
                   type="button"
                   onClick={closeModal}

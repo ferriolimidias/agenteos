@@ -1,3 +1,5 @@
+import "../../styles/ux05-settings.css";
+
 import { ArrowRight, LockKeyhole } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ChecklistCard, PageHeader, RestrictedNotice } from "../../components/ui";
@@ -7,7 +9,7 @@ export default function AcessoRestritoOperacional({
   description = "Esta área envolve configurações técnicas ou credenciais sensíveis. No painel cliente, ela fica disponível apenas como solicitação operacional.",
 }) {
   return (
-    <div className="space-y-6">
+    <div className="fm-settings fm-restricted space-y-6">
       <PageHeader
         title={title}
         description={description}

@@ -1,3 +1,5 @@
+import "../../styles/ux05-settings.css";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
@@ -132,14 +134,14 @@ export default function Unidades() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div className="fm-settings fm-units space-y-6">
+      <div className="fm-settings-header fm-page-header flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
+          <h1 className="fm-page-title flex items-center gap-3 text-3xl font-bold tracking-tight text-gray-900">
             <Building2 className="text-blue-600" size={30} />
             Endereços / Filiais
           </h1>
-          <p className="mt-1 text-gray-500">
+          <p className="fm-page-description mt-1 text-gray-500">
             Gerencie matriz e filiais para o atendimento responder com dados atualizados.
           </p>
         </div>
@@ -163,7 +165,7 @@ export default function Unidades() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="fm-settings-panel rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-5">
           <h2 className="text-lg font-semibold text-gray-900">Unidades Cadastradas</h2>
           <p className="mt-1 text-sm text-gray-500">
@@ -186,8 +188,8 @@ export default function Unidades() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {unidadesOrdenadas.map((unidade) => (
-                <div key={unidade.id} className="rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
-                  <div className="mb-3 flex items-start justify-between gap-4">
+                <div key={unidade.id} className="fm-settings-record rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
+                  <div className="fm-settings-record-heading mb-3 flex items-start justify-between gap-4">
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900">
                         {unidade.nome_unidade}{" "}
@@ -199,7 +201,7 @@ export default function Unidades() {
                       </h3>
                       <p className="mt-1 text-sm text-gray-600">{unidade.horario_funcionamento || "Horário não informado"}</p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="fm-settings-actions flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => openEditModal(unidade)}
@@ -245,18 +247,18 @@ export default function Unidades() {
       </div>
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
+        <div role="dialog" aria-modal="true" aria-labelledby="settings-unidades-dialog-1" className="fm-settings-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fm-settings-dialog flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="fm-settings-dialog-heading flex shrink-0 items-center justify-between border-b border-gray-100 p-4 md:p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 id="settings-unidades-dialog-1" className="text-xl font-bold text-gray-900">
                   {editingUnidade ? "Editar Unidade" : "Nova Unidade"}
                 </h2>
                 <p className="text-sm text-gray-500">
                   Preencha os dados de localização usados no atendimento automático.
                 </p>
               </div>
-              <button
+              <button aria-label="Fechar editor"
                 type="button"
                 onClick={closeModal}
                 className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
@@ -265,12 +267,12 @@ export default function Unidades() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <form aria-busy={saving} onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+              <div className="fm-settings-dialog-body flex-1 overflow-y-auto p-4 md:p-6">
                 <div className="space-y-5">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Nome da unidade</label>
-                    <input
+                    <label htmlFor="settings-unidades-formData-nome-unidade" className="mb-1 block text-sm font-medium text-gray-700">Nome da unidade</label>
+                    <input id="settings-unidades-formData-nome-unidade"
                       required
                       value={formData.nome_unidade}
                       onChange={(e) => setFormData((prev) => ({ ...prev, nome_unidade: e.target.value }))}
@@ -280,8 +282,8 @@ export default function Unidades() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Endereço completo</label>
-                    <textarea
+                    <label htmlFor="settings-unidades-formData-endereco-completo" className="mb-1 block text-sm font-medium text-gray-700">Endereço completo</label>
+                    <textarea id="settings-unidades-formData-endereco-completo"
                       required
                       rows={4}
                       value={formData.endereco_completo}
@@ -293,8 +295,8 @@ export default function Unidades() {
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">Link Google Maps</label>
-                      <input
+                      <label htmlFor="settings-unidades-formData-link-google-maps" className="mb-1 block text-sm font-medium text-gray-700">Link Google Maps</label>
+                      <input id="settings-unidades-formData-link-google-maps"
                         value={formData.link_google_maps}
                         onChange={(e) => setFormData((prev) => ({ ...prev, link_google_maps: e.target.value }))}
                         className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
@@ -302,8 +304,8 @@ export default function Unidades() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">Horário de funcionamento</label>
-                      <input
+                      <label htmlFor="settings-unidades-formData-horario-funcionamento" className="mb-1 block text-sm font-medium text-gray-700">Horário de funcionamento</label>
+                      <input id="settings-unidades-formData-horario-funcionamento"
                         value={formData.horario_funcionamento}
                         onChange={(e) => setFormData((prev) => ({ ...prev, horario_funcionamento: e.target.value }))}
                         className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-800 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
@@ -324,7 +326,7 @@ export default function Unidades() {
                 </div>
               </div>
 
-              <div className="flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
+              <div className="fm-settings-dialog-actions flex shrink-0 justify-end gap-3 rounded-b-lg border-t border-gray-100 bg-gray-50 p-4 md:p-6">
                 <button
                   type="button"
                   onClick={closeModal}

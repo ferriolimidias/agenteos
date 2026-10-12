@@ -1,0 +1,117 @@
+/* UX05D: tenant and reviewer settings use the existing Ferrioli design tokens. */
+.fm-settings { min-width: 0; color: var(--fm-text); }
+.fm-settings :where(section, article, aside, form, fieldset, .grid, .flex > div) { min-width: 0; }
+.fm-settings :where(h1, h2, h3, p, label, td) { overflow-wrap: anywhere; }
+.fm-settings :where(.text-gray-900, .text-gray-800, .text-gray-700, .text-slate-950, .text-slate-900, .text-slate-800, .text-slate-700) { color: var(--fm-text); }
+.fm-settings :where(.text-gray-600, .text-gray-500, .text-gray-400, .text-slate-600, .text-slate-500, .text-slate-400) { color: var(--fm-muted); }
+.fm-settings :where(.border-gray-100, .border-gray-200, .border-gray-300, .border-slate-200, .border-slate-300) { border-color: var(--fm-border); }
+.fm-settings :where(.bg-gray-50, .bg-gray-50\/70, .bg-gray-100, .bg-slate-50) { background-color: var(--fm-surface); }
+.fm-settings :where(.bg-white) { background-color: var(--fm-raised); }
+.fm-settings :where(.bg-blue-50, .bg-blue-50\/50, .bg-blue-100) { background-color: var(--fm-primary-soft); }
+.fm-settings :where(.border-blue-100, .border-blue-200) { border-color: var(--fm-border); }
+.fm-settings :where(.text-blue-600, .text-blue-700, .text-blue-800, .text-blue-900, .text-blue-950) { color: var(--fm-primary); }
+.fm-settings :where(.bg-blue-600, .bg-blue-700, .bg-slate-900) { background-color: var(--fm-primary); }
+.fm-settings :where(.bg-blue-600, .bg-blue-700, .bg-slate-900):hover:not(:disabled) { background-color: var(--fm-primary-hover); }
+.fm-settings :where(.bg-blue-600, .bg-blue-700, .bg-slate-900) { color: var(--fm-sidebar-text); }
+.fm-settings :where(.text-red-600, .text-red-700, .text-red-800) { color: var(--fm-status-danger); }
+.fm-settings :where(.border-red-200) { border-color: var(--fm-status-danger); }
+.fm-settings :where(.bg-red-50, .bg-red-100) { background-color: var(--fm-status-danger-soft); }
+.fm-settings :where(.text-emerald-600, .text-emerald-700, .text-emerald-800) { color: var(--fm-status-success); }
+.fm-settings :where(.bg-emerald-50, .bg-emerald-100) { background-color: var(--fm-status-success-soft); }
+.fm-settings :where(.bg-emerald-600) { background-color: var(--fm-status-success); }
+.fm-settings :where(.bg-emerald-600):hover:not(:disabled) { background-color: var(--fm-primary-hover); }
+.fm-settings :where(.border-emerald-200) { border-color: var(--fm-status-success); }
+.fm-settings :where(.text-amber-700, .text-amber-900) { color: var(--fm-status-warning); }
+.fm-settings :where(.bg-amber-50, .bg-amber-100) { background-color: var(--fm-status-warning-soft); }
+.fm-settings :where(.border-amber-200) { border-color: var(--fm-status-warning); }
+.fm-settings :where(.bg-amber-600) { background-color: var(--fm-status-warning); }
+.fm-settings-header .fm-page-title { font-size: var(--fm-text-xl); font-weight: 650; line-height: 1.25; }
+.fm-settings-header .fm-page-title > svg { color: var(--fm-primary); flex-shrink: 0; }
+.fm-settings-header > div:last-child { flex-wrap: wrap; }
+.fm-settings-reviewer-heading { border-left: 3px solid var(--fm-primary); background: var(--fm-primary-soft); }
+.fm-settings-reviewer-heading h1 { color: var(--fm-text); letter-spacing: -0.025em; }
+.fm-settings-panel { border-radius: var(--fm-radius-lg); border-color: var(--fm-border); box-shadow: var(--fm-shadow-card); }
+.fm-settings-panel > .border-b { background: var(--fm-surface); border-color: var(--fm-border); border-radius: var(--fm-radius-lg) var(--fm-radius-lg) 0 0; }
+.fm-settings-panel > .border-b h2 { font-size: var(--fm-text-base); }
+.fm-settings-panel > .p-6 { padding: var(--fm-space-5); }
+.fm-settings-allowlist { border-radius: var(--fm-radius-lg); border-left: 3px solid var(--fm-primary); padding: var(--fm-space-5); background: var(--fm-primary-soft); }
+.fm-settings-record { border-color: var(--fm-border); border-radius: var(--fm-radius-md); padding: var(--fm-space-4); background: var(--fm-surface); }
+.fm-settings-record-heading { flex-wrap: wrap; padding-bottom: var(--fm-space-3); border-bottom: 1px solid var(--fm-border); }
+.fm-settings-record-heading > div:first-child { flex: 1 1 12rem; }
+.fm-settings-actions { flex-wrap: wrap; gap: var(--fm-space-2); }
+.fm-settings :where(button) { min-height: 2.5rem; line-height: 1.4; }
+.fm-settings :where(button:not([role="switch"])):not(:disabled):hover { box-shadow: 0 0 0 1px var(--fm-border-strong); }
+.fm-settings :where(button:disabled) { cursor: not-allowed; }
+.fm-settings :where(button, a, input, select, textarea, .fm-table-scroll):focus-visible { outline: 3px solid var(--fm-focus); outline-offset: 3px; }
+.fm-settings :where(button[role="switch"]) { flex-shrink: 0; min-height: 2.75rem; width: 3rem; }
+.fm-settings :where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--fm-primary); flex-shrink: 0; }
+.fm-settings :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.625rem;
+  border-color: var(--fm-border-strong);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-raised);
+  color: var(--fm-text);
+  font-size: var(--fm-text-sm);
+  line-height: 1.5;
+}
+.fm-settings :where(input, textarea)::placeholder { color: var(--fm-muted); }
+.fm-settings :where(input:disabled, select:disabled, textarea:disabled) { background: var(--fm-inset); }
+.fm-settings :where(input[type="color"]) { min-height: 2.875rem; cursor: pointer; }
+.fm-settings :where(textarea) { resize: vertical; }
+.fm-settings :where(label) { line-height: 1.5; }
+.fm-settings-field { display: flex; flex-direction: column; gap: var(--fm-space-2); min-width: 0; color: var(--fm-text); font-size: var(--fm-text-sm); }
+.fm-settings-field > span { font-weight: 600; }
+.fm-settings-field > select { width: 100%; }
+.fm-settings .fm-table-scroll { max-width: 100%; scrollbar-gutter: stable; overscroll-behavior-x: contain; }
+.fm-settings .fm-table { min-width: 640px; }
+.fm-settings .fm-table th { white-space: nowrap; }
+.fm-settings .fm-table td { vertical-align: top; }
+.fm-tags .fm-table-scroll[aria-label="Grupos de tags"] .fm-table { min-width: 520px; }
+.fm-tags .fm-table-scroll[aria-label="Tags oficiais"] .fm-table { min-width: 860px; }
+.fm-tags .fm-table-scroll[aria-label="Tags oficiais"] td:nth-child(4) { min-width: 13rem; max-width: 24rem; }
+.fm-tags .fm-table td:last-child > div { flex-wrap: wrap; }
+.fm-settings-tabs { padding: var(--fm-space-2); }
+.fm-settings-tabs > div { gap: var(--fm-space-2); flex-wrap: wrap; }
+.fm-settings-tabs button { border: 1px solid transparent; border-radius: var(--fm-radius-sm); }
+.fm-settings-tabs button[aria-pressed="true"] { color: var(--fm-primary); background: var(--fm-raised); border-color: var(--fm-border); box-shadow: var(--fm-shadow-card); }
+.fm-settings-toast { max-width: calc(100vw - 2rem); overflow-wrap: anywhere; }
+.fm-settings-toast > div { min-width: 0; }
+.fm-connection-qr { min-height: 240px; }
+.fm-connection-qr img { max-width: 100%; height: auto; aspect-ratio: 1; object-fit: contain; }
+.fm-connections .fm-settings-panel > .flex:first-child { flex-wrap: wrap; }
+.fm-connections .fm-settings-panel > .flex:first-child > div { flex: 1 1 12rem; }
+.fm-connections .fm-settings-panel:has(.fm-connection-qr), .fm-connections .fm-settings-panel:has(button[aria-label="Conectar meu WhatsApp Business ao AgentOS"]) { border-top: 3px solid var(--fm-primary); }
+.fm-connections .fm-settings-panel .grid:has(> .fm-settings-field) { align-items: end; }
+.fm-settings-overlay { padding: var(--fm-space-4); background: rgb(25 45 53 / 58%); }
+.fm-settings-dialog { max-height: calc(100dvh - 2rem); overflow: hidden; border: 1px solid var(--fm-border); border-radius: var(--fm-radius-lg); box-shadow: var(--fm-shadow-raised); }
+.fm-settings-dialog > form { min-height: 0; }
+.fm-settings-dialog-heading { gap: var(--fm-space-4); align-items: flex-start; background: var(--fm-surface); border-bottom-color: var(--fm-border); padding: var(--fm-space-5); }
+.fm-settings-dialog-heading > div { min-width: 0; }
+.fm-settings-dialog-heading > button { flex-shrink: 0; min-width: 2.5rem; }
+.fm-settings-dialog-heading h2 { font-size: var(--fm-text-lg); font-weight: 650; }
+.fm-settings-dialog-body { min-height: 0; padding: var(--fm-space-5); overscroll-behavior: contain; scroll-padding: var(--fm-space-5); }
+.fm-settings-dialog-actions { padding: var(--fm-space-4) var(--fm-space-5); background: var(--fm-surface); border-top-color: var(--fm-border); }
+.fm-restricted .fm-banner a { color: var(--fm-primary); border-color: var(--fm-border-strong); background: var(--fm-raised); min-height: 2.5rem; }
+.fm-restricted .fm-banner a:hover { color: var(--fm-primary-hover); background: var(--fm-primary-soft); }
+@media (max-width: 767px) {
+  .fm-settings-header .fm-page-title { font-size: 1.5rem; }
+  .fm-settings-panel, .fm-settings-allowlist { padding: var(--fm-space-4); }
+  .fm-settings-panel:has(> .border-b) { padding: 0; }
+  .fm-settings-panel > .border-b, .fm-settings-panel > .p-6 { padding: var(--fm-space-4); }
+  .fm-settings-panel > .border-b > .flex { flex-wrap: wrap; }
+  .fm-settings :where(button) { min-height: 2.75rem; }
+  .fm-settings :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { font-size: 1rem; }
+  .fm-settings-record-heading { gap: var(--fm-space-3); }
+  .fm-settings-record-heading > .fm-settings-actions { width: 100%; }
+  .fm-settings-record-heading > .fm-settings-actions > button { flex: 1 1 auto; }
+  .fm-settings-toast { right: var(--fm-space-4); top: var(--fm-space-4); }
+  .fm-connection-qr { min-height: 200px; }
+  .fm-settings-overlay { padding: var(--fm-space-2); }
+  .fm-settings-dialog { max-height: calc(100dvh - 1rem); }
+  .fm-settings-dialog-heading, .fm-settings-dialog-body { padding: var(--fm-space-4); }
+  .fm-settings-dialog-actions { flex-wrap: wrap; gap: var(--fm-space-2); padding: var(--fm-space-3) var(--fm-space-4); }
+  .fm-settings-dialog-actions > button { flex: 1 1 auto; }
+  .fm-restricted .fm-banner a { min-height: 2.75rem; }
+}
