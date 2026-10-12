@@ -1,3 +1,4 @@
+import "../../styles/ux05-analytics.css";
 import { useEffect, useMemo, useState } from "react";
 import { BarChart3, CheckCircle2, Eye, Loader2, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import api from "../../services/api";
@@ -217,7 +218,7 @@ function whatsappLabel(item) {
 
 function AssetLine({ title, detected, value, detail }) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+    <div className="ux05-asset-card flex items-start justify-between gap-4 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
       <div>
         <p className="text-sm font-semibold text-slate-900">{title}</p>
         <p className="mt-1 text-sm text-slate-500">{value || "Não detectado"}</p>
@@ -269,7 +270,7 @@ const fallbackSourceOptions = [
 
 function JsonPreview({ value }) {
   return (
-    <pre className="max-h-[520px] overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+    <pre className="ux05-json-preview max-h-[520px] overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100">
       {JSON.stringify(value || {}, null, 2)}
     </pre>
   );
@@ -973,7 +974,7 @@ export default function TrafficMeta() {
   const marketingReady = ["READY", "READY_TENANT_OAUTH", "READY_ADMIN_MANAGED_READ"].includes(credentials?.marketing_readiness_status);
 
   return (
-    <div className="space-y-6">
+    <div className="ux05-analytics ux05-meta space-y-6">
       <PageHeader
         title="Tráfego / Meta Ads"
         description="Configure a conta de anúncios utilizada por esta empresa e acompanhe os ativos Meta vinculados."
@@ -983,8 +984,8 @@ export default function TrafficMeta() {
 
       {error ? <InfoBanner tone="warning">{error}</InfoBanner> : null}
 
-      <SectionCard title="Status da integração" icon={ShieldCheck}>
-        <div className="grid gap-4 lg:grid-cols-4">
+      <SectionCard title="Status da integração" icon={ShieldCheck} className="ux05-integration-overview">
+        <div className="ux05-meta-status grid gap-4 lg:grid-cols-4">
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span className="font-medium text-slate-700">Marketing API</span>
@@ -1043,8 +1044,8 @@ export default function TrafficMeta() {
             <StatusBadge tone={conversionHistory.length ? "active" : "default"}>{conversionHistory.length ? `${conversionHistory.length} evento(s)` : "Sem registros"}</StatusBadge>
           </div>
           {conversionHistory.length ? (
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-left text-sm">
+            <div className="fm-table-scroll mt-4" tabIndex={0} role="region" aria-label="Histórico de conversões Meta">
+              <table className="fm-table min-w-full divide-y divide-slate-100 text-left text-sm">
                 <thead>
                   <tr className="text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-3 py-2 font-semibold">Evento</th>
@@ -1113,7 +1114,7 @@ export default function TrafficMeta() {
               <label className="space-y-1 text-sm font-medium text-slate-700">
                 ID da conta de anúncios
                 <input
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
                   placeholder="act_123456789 ou 123456789"
                   value={form.ad_account_id}
                   onChange={(e) => {
@@ -1159,11 +1160,11 @@ export default function TrafficMeta() {
           <AssetLine title="Business" detected={Boolean(assets?.ad_account?.business_id || config.business_id)} value={assets?.ad_account?.business_name || config.business_id} detail={assets?.ad_account?.business_id_masked || config.business_id} />
           <AssetLine title="Conta de anúncios" detected={Boolean(config.ad_account_id)} value={savedAdAccount?.name || assets?.ad_account?.name || maskTail(config.ad_account_id)} detail={maskTail(config.ad_account_id)} />
         </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-4">
+        <div className="ux05-meta-asset-fields mt-4 grid gap-4 lg:grid-cols-4">
           <label className="space-y-1 text-sm font-medium text-slate-700">
             Página Facebook
             <select
-              className="w-full rounded-lg border border-slate-200 px-3 py-2"
+              className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
               value={assetForm.page_id}
               onChange={(e) => {
                 setAssetForm((current) => ({ ...current, page_id: e.target.value, whatsapp_connection_id: "" }));
@@ -1185,7 +1186,7 @@ export default function TrafficMeta() {
               <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">{whatsappLabel(compatibleWhatsapps[0])} ✓</p>
             ) : (
               <select
-                className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
                 value={assetForm.whatsapp_connection_id}
                 onChange={(e) => setAssetForm((current) => ({ ...current, whatsapp_connection_id: e.target.value }))}
               >
@@ -1197,7 +1198,7 @@ export default function TrafficMeta() {
           <label className="space-y-1 text-sm font-medium text-slate-700">
             Dataset / Event Source
             <input
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+              className="fm-field w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
               value={datasetAsset.value}
               readOnly
             />
@@ -1218,7 +1219,7 @@ export default function TrafficMeta() {
         icon={ShieldCheck}
         actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadStatus}>Atualizar</ActionButton>}
       >
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="ux05-meta-readiness grid gap-4 lg:grid-cols-3">
           <div className="space-y-3 rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span className="font-semibold text-slate-900">Status</span>
@@ -1293,7 +1294,7 @@ export default function TrafficMeta() {
               {conversions?.conversion_engine?.mapping_count ? `${conversions.conversion_engine.mapping_count} mapping(s)` : "Ainda não configurado"}
             </StatusBadge>
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-5">
+          <div className="ux05-meta-events mt-4 grid gap-3 lg:grid-cols-5">
             {(conversions?.conversion_engine?.five_event_funnel || [
               { event_name: "LeadSubmitted" },
               { event_name: "QualifiedLead" },
@@ -1364,7 +1365,7 @@ export default function TrafficMeta() {
                     <label className="space-y-1 text-sm font-medium text-slate-700">
                       Objetivo comercial
                       <select
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                        className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
                         value={campaignForm.conversion_goal_key}
                         onChange={(e) => setCampaignForm({ ...campaignForm, conversion_goal_key: e.target.value })}
                       >
@@ -1383,9 +1384,9 @@ export default function TrafficMeta() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="space-y-1 text-sm font-medium text-slate-700">
                     Orçamento diário
-                    <input className="w-full rounded-lg border border-slate-200 px-3 py-2" placeholder="R$ 30,00" value={campaignForm.daily_budget_brl} onChange={(e) => setCampaignForm({ ...campaignForm, daily_budget_brl: e.target.value })} />
+                    <input className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" placeholder="R$ 30,00" value={campaignForm.daily_budget_brl} onChange={(e) => setCampaignForm({ ...campaignForm, daily_budget_brl: e.target.value })} />
                   </label>
-                  <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-950">
+                  <div className="ux05-generated-name rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-950">
                     <p className="font-semibold">Nome gerado automaticamente</p>
                     <p className="mt-1 text-xs text-indigo-800">O AgentOS define o nome padronizado no backend.</p>
                   </div>
@@ -1398,9 +1399,9 @@ export default function TrafficMeta() {
                   </div>
                   {campaignForm.location_type === "radius" ? (
                     <div className="mt-4 space-y-3">
-                      <div className="flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Digite CEP, endereço ou local" value={campaignForm.location_input} onChange={(e) => setCampaignForm({ ...campaignForm, location_input: e.target.value })} /><ActionButton type="button" variant="secondary" onClick={resolvePin} disabled={resolvingPin}>{resolvingPin ? "Localizando..." : "Localizar pino"}</ActionButton></div>
+                      <div className="ux05-pin-search flex gap-2"><input className="fm-field min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Digite CEP, endereço ou local" value={campaignForm.location_input} onChange={(e) => setCampaignForm({ ...campaignForm, location_input: e.target.value })} /><ActionButton type="button" variant="secondary" onClick={resolvePin} disabled={resolvingPin}>{resolvingPin ? "Localizando..." : "Localizar pino"}</ActionButton></div>
                       {campaignForm.location_display_name ? <p className="text-sm text-emerald-800">📍 {campaignForm.location_display_name}</p> : null}
-                      <label className="block max-w-xs text-sm font-medium text-slate-700">Raio em km<input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Ex.: 20" value={campaignForm.radius_km} onChange={(e) => setCampaignForm({ ...campaignForm, radius_km: e.target.value })} /></label>
+                      <label className="block max-w-xs text-sm font-medium text-slate-700">Raio em km<input className="fm-field mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Ex.: 20" value={campaignForm.radius_km} onChange={(e) => setCampaignForm({ ...campaignForm, radius_km: e.target.value })} /></label>
                     </div>
                   ) : null}
                 </div>
@@ -1409,7 +1410,7 @@ export default function TrafficMeta() {
                   <label className="space-y-1 text-sm font-medium text-slate-700">
                     Página Meta
                     {assetPages.length === 1 ? <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">{assetPages[0].name || "Página Meta"} ✓</p> : (
-                      <select className="w-full rounded-lg border border-slate-200 px-3 py-2" value={campaignForm.page_id} onChange={(e) => setCampaignForm({ ...campaignForm, page_id: e.target.value, whatsapp_connection_id: "" })}>
+                      <select className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" value={campaignForm.page_id} onChange={(e) => setCampaignForm({ ...campaignForm, page_id: e.target.value, whatsapp_connection_id: "" })}>
                         <option value="">Selecione pelo nome</option>
                         {assetPages.map((page) => <option key={page.id} value={page.id}>{page.name || "Página sem nome"}</option>)}
                       </select>
@@ -1423,7 +1424,7 @@ export default function TrafficMeta() {
                       <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">{whatsappLabel(compatibleWhatsapps[0])} ✓</p>
                     ) : (
                       <select
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                        className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
                         value={campaignForm.whatsapp_connection_id}
                         onChange={(e) => setCampaignForm({ ...campaignForm, whatsapp_connection_id: e.target.value })}
                       >
@@ -1440,7 +1441,7 @@ export default function TrafficMeta() {
                   <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Imagens do anúncio</h3><span className="text-xs text-slate-500">{campaignForm.ads.filter(analysisReady).length} de {campaignForm.ads.length} concluídas · análise automática</span></div>
                   <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">
                     {campaignForm.ads.length ? "Adicionar imagens" : "Selecionar imagens"}
-                    <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
+                    <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="fm-field mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
                     <span className="mt-1 block text-xs font-normal text-slate-500">JPEG ou PNG. A IA analisa cada imagem; duplicatas e arquivos inválidos são ignorados.</span>
                   </label>
                   {campaignForm.ads.map((ad, index) => (
@@ -1452,10 +1453,10 @@ export default function TrafficMeta() {
                       </div>
                       {ad.analysis_error ? <div className="flex items-center justify-between gap-3"><InfoBanner tone="warning">{ad.analysis_error}</InfoBanner><ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => retryImageAnalysis(index)}>Tentar novamente</ActionButton></div> : null}
                       <div className="grid gap-3 md:grid-cols-2">
-                        <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                        <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
                         <div className="space-y-3">
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                          <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                          <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
                         </div>
                       </div>
                       <p className="text-xs text-slate-500">CTA: WhatsApp / enviar mensagem · a copy continua editável.</p>
@@ -1507,9 +1508,9 @@ export default function TrafficMeta() {
         )}
       </SectionCard>
 
-      <SectionCard title="Campanhas existentes" actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadCampaigns}>Atualizar</ActionButton>}>
+      <SectionCard className="ux05-existing-campaigns" title="Campanhas existentes" actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadCampaigns}>Atualizar</ActionButton>}>
           <div className="space-y-3">
-            <select className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" value={selectedCampaignId} onChange={(e) => selectExistingCampaign(e.target.value)}>
+            <select className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" value={selectedCampaignId} onChange={(e) => selectExistingCampaign(e.target.value)}>
               <option value="">Selecione uma campanha</option>
               {campaigns.map((campaign) => (
                 <option key={campaign.id} value={campaign.id}>{campaign.name || campaign.id}</option>

@@ -1,3 +1,4 @@
+import "../../styles/ux05-analytics.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -331,24 +332,24 @@ export default function TenantDashboard() {
   }
 
   return (
-    <div className="fm-tenant-dashboard space-y-6">
+    <div className="ux05-analytics fm-tenant-dashboard space-y-6">
       <PageHeader
         title="Dashboard"
         description="Visão rápida da operação do tenant: atendimento, leads, mensagens e saúde da IA."
         icon={Activity}
         eyebrow="Painel cliente"
+        actions={<Link to="/painel/funil" className="fm-dashboard-funnel-link">Abrir Funil e gargalos comerciais</Link>}
       />
 
-      <Link to="/painel/funil" className="fm-dashboard-funnel-link">Abrir Funil e gargalos comerciais</Link>
 
       {loading ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="ux05-dashboard-overview grid grid-cols-1 gap-4 md:grid-cols-3">
           <CardSkeleton />
           <CardSkeleton />
           <CardSkeleton />
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="ux05-dashboard-overview grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="Canal WhatsApp"
             value={
@@ -379,7 +380,7 @@ export default function TenantDashboard() {
         </div>
       )}
 
-      <SectionCard title="Alertas operacionais" description="Notificações de saldo e disponibilidade da IA." icon={KeyRound}>
+      <SectionCard title="Alertas operacionais" description="Notificações de saldo e disponibilidade da IA." icon={KeyRound} className="ux05-dashboard-alerts">
         <div className="mb-3">
           <h2 className="text-sm font-semibold text-slate-900">Telefone para alertas de crédito</h2>
           <p className="mt-1 text-sm text-slate-500">
@@ -394,8 +395,8 @@ export default function TenantDashboard() {
         </div>
       </SectionCard>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <SectionCard title="Atividade de mensagens (7 dias)" icon={Activity} className="xl:col-span-2">
+      <div className="ux05-dashboard-activity grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <SectionCard title="Atividade de mensagens (7 dias)" icon={Activity} className="ux05-dashboard-chart xl:col-span-2">
           <div className="h-64">
             {loading ? (
               <div className="h-full animate-pulse rounded bg-slate-100" />
@@ -423,7 +424,7 @@ export default function TenantDashboard() {
 
         <SectionCard title="Atividade recente">
           <div className="fm-dashboard-recent-table" tabIndex={0} role="region" aria-label="Atividade recente">
-            <table className="w-full text-left text-xs">
+            <table className="fm-table w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
                   <th className="px-3 py-2 font-medium">Nome</th>

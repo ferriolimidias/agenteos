@@ -55,3 +55,25 @@
   .funnel-dashboard .funnel-btn { min-height:44px; }
   .funnel-dashboard .funnel-filters input,.funnel-dashboard .funnel-filters select { font-size:1rem; }
 }
+
+/* UX05A: cohort controls and observed results retain distinct hierarchy. */
+.funnel-dashboard .ux05-funnel-filter-panel .funnel-filters { gap: var(--fm-space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+.funnel-dashboard .ux05-funnel-filter-panel label { font-size: .8125rem; font-weight: 600; }
+.funnel-dashboard .ux05-funnel-filter-panel .funnel-toolbar { padding-top: var(--fm-space-4); border-top: 1px solid var(--fm-border); }
+.funnel-dashboard .ux05-observation-window { background: var(--fm-surface); border-left: 3px solid var(--fm-bronze); }
+.funnel-dashboard .funnel-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+.funnel-dashboard .funnel-metric { display: flex; flex-direction: column; gap: var(--fm-space-2); }
+.funnel-dashboard .funnel-metric strong { font-variant-numeric: tabular-nums; }
+.funnel-dashboard .funnel-metric .funnel-btn { align-self: start; }
+.funnel-dashboard .funnel-metric .funnel-muted { font-size: .8125rem; }
+.funnel-dashboard .funnel-bar-row { padding: var(--fm-space-3); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); background: var(--fm-surface); }
+.funnel-dashboard .funnel-scroll table { min-width: 42rem; }
+.funnel-dashboard [data-testid="funnel-drill"] .funnel-scroll table { min-width: 60rem; }
+.funnel-dashboard .funnel-series { scrollbar-gutter: stable; padding: var(--fm-space-4) 0; }
+.funnel-dashboard .funnel-evidence { line-height: 1.65; }
+@media (max-width: 639px) {
+  .funnel-dashboard .ux05-funnel-filter-panel .funnel-filters { grid-template-columns: minmax(0, 1fr); }
+  .funnel-dashboard .funnel-toolbar > .flex { flex-wrap: wrap; }
+  .funnel-dashboard .funnel-heading .fm-actions { align-items: stretch; }
+  .funnel-dashboard .funnel-heading .funnel-btn { flex: 1 1 100%; }
+}
