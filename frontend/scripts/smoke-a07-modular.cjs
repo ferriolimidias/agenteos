@@ -6,7 +6,7 @@ const origin=new URL(process.env.A07_ORIGIN||'http://127.0.0.1:18880').origin,ou
 assert.ok(out,'Explicit evidence directory required');assert.match(sha||'',/^[a-f0-9]{40}$/);fs.mkdirSync(out,{recursive:true});
 const clone=x=>JSON.parse(JSON.stringify(x));
 async function run(browser,v){
- const r={viewport:v.name,status:'RUNNING',checks:[],errors:[],unexpected:[],requests:[]},state={tenant:F.TENANT,failure:null,hold:false,releases:[],providerError:false,loadFailure:false};
+ const r={viewport:v.name,status:'RUNNING',checks:[],errors:[],unexpected:[],requests:[]},state={tenant:F.TENANT,failure:null,hold:false,releases:[],providerError:false,loadFailure:false,configured:false};
  const context=await browser.newContext({viewport:{width:v.width,height:v.height},locale:'pt-BR',serviceWorkers:'block',reducedMotion:'reduce'});let closing=false;
  await context.routeWebSocket('**/*',socket=>socket.close());
  await context.route('**/*',async route=>{
@@ -16,7 +16,7 @@ async function run(browser,v){
   const match=endpoint.match(/^\/api\/empresas\/([^/]+)\/atendimento-modular\/(status|examples|preview)$/);
   if(match){
    const tenant=match[1],suffix=match[2];
-   if(method==='GET'&&['status','examples'].includes(suffix)){if(state.loadFailure)return route.fulfill({status:503,json:{detail:'PRIVATE_LOAD_DETAIL'}});return route.fulfill({json:suffix==='status'?clone(F.status):{items:clone(F.examples)}});}
+   if(method==='GET'&&['status','examples'].includes(suffix)){if(state.loadFailure)return route.fulfill({status:503,json:{detail:'PRIVATE_LOAD_DETAIL'}});const status=clone(F.status);status.provider.jev_configured=state.configured;status.provider.status=state.configured?'configured':'not_configured';return route.fulfill({json:suffix==='status'?status:{items:clone(F.examples)}});}
    if(method==='POST'&&suffix==='preview'){
     const body=req.postDataJSON();assert.deepEqual(Object.keys(body).sort(),[body.example_id?'example_id':'message','context_mode','channel','use_jev'].sort());
     assert.equal(Boolean(body.example_id)===Boolean(body.message),false);if(body.message)assert.equal(body.use_jev,false);
@@ -44,8 +44,8 @@ async function run(browser,v){
  const select=async(id,mode='complete')=>{await area().getByLabel('Entrada da simulação').selectOption('example');await area().getByLabel('Exemplo',{exact:true}).selectOption(id);await area().getByLabel('Contexto sintético').selectOption(mode);};
  try{
   await page.goto(origin+'/painel/agentes',{waitUntil:'networkidle'});
-  if(process.env.A07_PHASE==='before'){await expect(page.getByRole('heading',{name:'Agente de Atendimento',exact:true})).toBeVisible();assert.equal(await area().count(),0);check('baseline-controls-present-preview-absent');r.status='PASS';return r;}
-  await expect(area().getByText('Produção: LEGACY',{exact:true})).toBeVisible();assert.equal(await area().getByRole('button',{name:/Consultar JEV/}).count(),0);check('legacy-readonly-no-production-or-provider-toggle');
+  if(process.env.A07_PHASE==='before'){await expect(page.getByRole('heading',{name:'Agente de Atendimento',exact:true})).toBeVisible();assert.equal(await area().count(),0);await page.screenshot({path:path.join(out,v.name+'-before.png')});check('baseline-controls-present-preview-absent');r.status='PASS';return r;}
+  await expect(area().getByText('Produção: LEGACY',{exact:true})).toBeVisible();await expect(area().getByText('JEV não configurado',{exact:true})).toBeVisible();assert.equal(await area().getByRole('button',{name:/Consultar JEV/}).count(),0);check('legacy-readonly-no-production-or-provider-toggle');
   await select('multi_price_trust_availability');await submit();for(const text of ['Preços e condições','Confiança e garantias','Disponibilidade'])await expect(result().getByLabel('Módulos selecionados').getByText(new RegExp(text))).toBeVisible();
   await expect(result().getByText('Etapa principal: Consideração · sintética',{exact:true})).toBeVisible();await expect(result().getByText('Seleção local determinística; JEV não utilizado',{exact:true})).toBeVisible();assert.ok(await result().getByText('Não medido',{exact:true}).count()>=6);await expect(result().getByText('Resposta legada simulada',{exact:true})).toBeVisible();check('three-modules-single-response-stage-version-local-unknownmetrics');
   await page.screenshot({path:path.join(out,v.name+'-complete.png')});
@@ -54,7 +54,7 @@ async function run(browser,v){
   await select('conflicting','conflicting');await submit();await expect(result().getByText(/fatos conflitantes/)).toBeVisible();await expect(result().getByText(/Fallback seguro/)).toBeVisible();check('conflict-fallback');
   await select('human_handoff');await submit();await expect(result().getByLabel('Módulos selecionados').getByText(/Transferência humana/)).toBeVisible();assert.equal(await result().getByLabel('Módulos selecionados').getByText(/Oferta e fechamento/).count(),0);check('human-priority');
   await select('injection','incomplete');await submit();await expect(result().getByText(/política de segurança limitou/)).toBeVisible();assert.ok(!(await result().innerText()).includes('PRIVATE'));check('injection-safety');
-  await select('schedule_multi');await expect(area().getByRole('button',{name:/Consultar JEV/})).toBeVisible();await area().getByRole('button',{name:/Consultar JEV/}).click();await expect(result().getByText(/JEV: decisão externa observada em exemplo sintético/)).toBeVisible();assert.equal(r.requests.at(-1).body.use_jev,true);check('explicit-eligible-provider-mocked');
+  state.configured=true;await page.evaluate(()=>{localStorage.setItem('token','synthetic-configured-session');document.dispatchEvent(new Event('visibilitychange'));});await expect(area().getByText('JEV configurado',{exact:true})).toBeVisible();await select('schedule_multi');await expect(area().getByRole('button',{name:/Consultar JEV/})).toBeVisible();await area().getByRole('button',{name:/Consultar JEV/}).click();await expect(result().getByText(/JEV: decisão externa observada em exemplo sintético/)).toBeVisible();assert.equal(r.requests.at(-1).body.use_jev,true);check('explicit-eligible-provider-mocked');
   state.providerError=true;await area().getByRole('button',{name:/Consultar JEV/}).click();await expect(result().getByText(/Fallback seguro/)).toBeVisible();await expect(result().getByText(/JEV não utilizado/)).toBeVisible();state.providerError=false;check('provider-error-local-fallback-mocked');
   await area().getByLabel('Entrada da simulação').selectOption('custom');await area().getByLabel('Mensagem personalizada',{exact:true}).fill('Quanto custa, tem garantia e quando começa?');assert.equal(await area().getByRole('button',{name:/Consultar JEV/}).count(),0);
   for(const failure of [400,403,422,500,503,'network','timeout']){state.failure=failure;await button().click();await expect(area().getByRole('alert')).toBeFocused({timeout:18000});await expect(area().getByLabel('Mensagem personalizada',{exact:true})).toHaveValue('Quanto custa, tem garantia e quando começa?');assert.ok(!(await area().innerText()).includes('PRIVATE_PROVIDER_SQL_DETAIL'));await expect(button()).toBeEnabled();release();check('error-'+failure+'-draft-focus-retry');}
