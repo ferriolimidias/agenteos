@@ -1,0 +1,35 @@
+.fm-admin-nav-child { margin-left: var(--fm-space-4); }
+.fm-admin-breadcrumbs { margin-bottom: var(--fm-space-5); color: var(--fm-muted); font-size: var(--fm-text-sm); }
+.fm-admin-breadcrumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fm-space-2); }
+.fm-admin-breadcrumbs li { display: inline-flex; align-items: center; gap: var(--fm-space-2); min-width: 0; }
+.fm-admin-breadcrumbs li + li::before { content: "/"; color: var(--fm-muted); }
+.fm-admin-breadcrumbs a, .fm-admin-link { color: var(--fm-primary); text-decoration: underline; text-underline-offset: 3px; }
+.fm-admin-breadcrumbs a { display: inline-flex; align-items: center; min-height: 2rem; }
+.fm-admin-breadcrumbs [aria-current] { overflow-wrap: anywhere; }
+.fm-admin-page { display: grid; gap: var(--fm-space-6); min-width: 0; }
+.fm-admin-settings { max-width: 64rem; }
+.fm-admin-field { display: grid; gap: var(--fm-space-2); margin-bottom: var(--fm-space-5); min-width: 0; }
+.fm-admin-field > label, .fm-admin-field-label { color: var(--fm-text); font-weight: 600; font-size: var(--fm-text-sm); }
+.fm-admin-field .fm-helper { margin: 0; }
+.fm-admin-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.fm-admin-fieldset:disabled { opacity: 0.7; }
+.fm-admin-color-field { display: flex; gap: var(--fm-space-3); align-items: center; }
+.fm-admin-color-field input[type=color] { flex: 0 0 3rem; width: 3rem; padding: var(--fm-space-1); }
+.fm-admin-preview { max-width: 10rem; max-height: 4rem; object-fit: contain; border: 1px solid var(--fm-border); border-radius: var(--fm-radius-sm); padding: var(--fm-space-1); background: var(--fm-raised); }
+.fm-admin-company-picker { display: grid; gap: var(--fm-space-3); margin-top: var(--fm-space-4); }
+.fm-admin-company-picker li { display: flex; justify-content: space-between; gap: var(--fm-space-4); align-items: center; border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); padding: var(--fm-space-4); background: var(--fm-surface); min-width: 0; }
+.fm-admin-company-picker li > div { min-width: 0; }
+.fm-admin-company-picker h2 { font-weight: 600; overflow-wrap: anywhere; }
+.fm-admin-company-picker a { flex-shrink: 0; }
+.fm-admin-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fm-space-3); }
+.fm-admin-jev .fm-section-body > .fm-banner, .fm-admin-jev .fm-section-body > .fm-state { margin-bottom: var(--fm-space-4); }
+.fm-admin-jev .jev-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--fm-space-4); }
+.fm-admin-jev .jev-checkbox { display: flex; align-items: flex-start; gap: var(--fm-space-2); color: var(--fm-text); font-size: var(--fm-text-sm); line-height: 1.6; margin-bottom: var(--fm-space-5); }
+.fm-admin-jev .jev-checkbox input { accent-color: var(--fm-primary); width: 1rem; height: 1rem; margin-top: 0.2rem; flex-shrink: 0; }
+.fm-admin-jev .jev-toolbar { display: flex; flex-wrap: wrap; gap: var(--fm-space-3); margin-bottom: var(--fm-space-4); }
+.fm-admin-jev .jev-credential-status { margin-bottom: var(--fm-space-3); overflow-wrap: anywhere; }
+@media (max-width: 639px) {
+  .fm-admin-company-picker li { flex-direction: column; align-items: stretch; }
+  .fm-admin-company-picker a { align-self: flex-start; }
+  .fm-admin-jev .jev-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

@@ -7,6 +7,7 @@ const Login = lazy(() => import("./pages/Login"));
 const SuperAdminLayout = lazy(() => import("./layouts/SuperAdminLayout"));
 const TenantLayout = lazy(() => import("./layouts/TenantLayout"));
 const Empresas = lazy(() => import("./pages/super-admin/Empresas"));
+const AdminAgentes = lazy(() => import("./pages/super-admin/AdminAgentes"));
 const ConfiguracoesGlobais = lazy(() => import("./pages/super-admin/ConfiguracoesGlobais"));
 const JevIntegration = lazy(() => import("./pages/super-admin/JevIntegration"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
@@ -80,6 +81,7 @@ function App() {
         {/* Rota do Super Admin */}
         <Route path="/admin" element={<SuperAdminLayout />}>
           <Route index element={<Empresas />} />
+          <Route path="agentes" element={<AdminAgentes />} />
           <Route path="agente" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="orquestrador" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="empresas/:empresaId" element={<EmpresaDetalhes />} />

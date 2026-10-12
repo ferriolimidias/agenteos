@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle,
   ArrowLeft,
   BrainCircuit,
   Building2,
   CalendarDays,
-  CheckCircle2,
   Columns3,
   CreditCard,
   Database,
@@ -23,12 +21,12 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  Trash2,
   UserCog,
-  UserRoundCheck,
-  Users,
-  X,
 } from "lucide-react";
+
+import { ActionButton, EmptyState, ErrorState, InfoBanner, LoadingState, MetricCard, PageHeader, SectionCard, StatusBadge, Tabs } from "../../components/ui";
+import AdminDialog from "../../components/admin/AdminDialog";
+import "./EmpresaDetalhes.css";
 
 import api from "../../services/api";
 import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
@@ -96,26 +94,27 @@ function formatWhatsappProvider(provider, fallback) {
 }
 
 function MiniBadge({ children, tone = "slate" }) {
-  const tones = {
-    slate: "border-slate-200 bg-slate-50 text-slate-600",
-    active: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    internal: "border-indigo-200 bg-indigo-50 text-indigo-700",
-    warning: "border-amber-200 bg-amber-50 text-amber-800",
-  };
-  return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tones[tone] || tones.slate}`}>
-      {children}
-    </span>
-  );
+  const tones = { slate: "default", active: "active", internal: "info", warning: "warning" };
+  return <StatusBadge tone={tones[tone] || "default"}>{children}</StatusBadge>;
 }
 
 export default function EmpresaDetalhes() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const companiesReturn = /^\/admin(?:\?|$)/.test(location.state?.companiesReturn || "") ? location.state.companiesReturn : "/admin";
   const { empresaId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [empresa, setEmpresa] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [tabAtiva, setTabAtiva] = useState("visao-geral");
+  const requestedTab = searchParams.get("tab");
+  const tabAtiva = TABS.some((tab) => tab.id === requestedTab) ? requestedTab : "visao-geral";
+  const [loadError, setLoadError] = useState("");
+  const [usuariosError, setUsuariosError] = useState("");
+  const [usuarioError, setUsuarioError] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [confirmarTeste, setConfirmarTeste] = useState(false);
+  const [statusUsuario, setStatusUsuario] = useState(null);
+  const [savingStatusUsuario, setSavingStatusUsuario] = useState(false);
   const [savingEmpresa, setSavingEmpresa] = useState(false);
   const [savingCredenciais, setSavingCredenciais] = useState(false);
   const [savingIaConfig, setSavingIaConfig] = useState(false);
@@ -132,11 +131,11 @@ export default function EmpresaDetalhes() {
   const [funnelBusy, setFunnelBusy] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [overview, setOverview] = useState({
-    whatsappStatus: "not_configured",
-    whatsappStatusLabel: "Não configurado",
-    whatsappProviderLabel: "Sem conexão configurada",
+    whatsappStatus: "unknown",
+    whatsappStatusLabel: "Não disponível",
+    whatsappProviderLabel: "Status não disponível",
     whatsappOnline: false,
-    totalInteracoes: 0,
+    totalInteracoes: null,
   });
   const [usuarios, setUsuarios] = useState([]);
   const [usuariosLoading, setUsuariosLoading] = useState(false);
@@ -154,21 +153,17 @@ export default function EmpresaDetalhes() {
     [empresa?.nome_empresa],
   );
 
-  useEffect(() => {
-    const requestedTab = searchParams.get("tab");
-    if (requestedTab && TABS.some((tab) => tab.id === requestedTab)) {
-      setTabAtiva(requestedTab);
-    }
-  }, [searchParams]);
-
   const alterarTab = (tabId) => {
-    setTabAtiva(tabId);
-    setSearchParams(tabId === "visao-geral" ? {} : { tab: tabId });
+    const next = new URLSearchParams(searchParams);
+    if (tabId === "visao-geral") next.delete("tab");
+    else next.set("tab", tabId);
+    setSearchParams(next, { state: location.state });
   };
 
   const carregarEmpresa = useCallback(async () => {
     if (!empresaId) return;
     setLoading(true);
+    setLoadError("");
     setTagsIaLoading(true);
     try {
       const res = await api.get("/empresas/");
@@ -205,6 +200,7 @@ export default function EmpresaDetalhes() {
     } catch (err) {
       console.error("Erro ao carregar empresa:", err);
       setEmpresa(null);
+      setLoadError("Não foi possível carregar os dados da empresa. Tente novamente.");
     } finally {
       setLoading(false);
       setTagsIaLoading(false);
@@ -216,7 +212,7 @@ export default function EmpresaDetalhes() {
     try {
       const { data } = await api.post(`/empresas/${empresaId}/monitor/funnel/preview`);
       setFunnelPreview(data);
-    } catch (err) { setToast("Falha ao gerar prévia do funil."); }
+    } catch { setToast("Falha ao gerar prévia do funil."); }
     finally { setFunnelBusy(false); }
   };
 
@@ -228,7 +224,7 @@ export default function EmpresaDetalhes() {
       setFunnelStatus({ spec: data.spec, stale: false });
       setToast("Funil e tags sincronizados.");
       await carregarEmpresa();
-    } catch (err) { setToast("Falha ao sincronizar funil e tags."); }
+    } catch { setToast("Falha ao sincronizar funil e tags."); }
     finally { setFunnelBusy(false); }
   };
 
@@ -263,6 +259,7 @@ export default function EmpresaDetalhes() {
     if (!empresaId) return [];
     try {
       setUsuariosLoading(true);
+      setUsuariosError("");
       const res = await api.get(`/admin/empresas/${empresaId}/usuarios`);
       const lista = Array.isArray(res.data) ? res.data : [];
       setUsuarios(lista);
@@ -270,7 +267,7 @@ export default function EmpresaDetalhes() {
     } catch (err) {
       console.error("Erro ao carregar usuários da empresa:", err);
       setUsuarios([]);
-      setToast("Falha ao carregar usuários da empresa.");
+      setUsuariosError("Não foi possível carregar os usuários da empresa.");
       return [];
     } finally {
       setUsuariosLoading(false);
@@ -290,22 +287,22 @@ export default function EmpresaDetalhes() {
       try {
         const [resDashboard, resWhatsapp] = await Promise.all([
           api.get(`/empresas/${empresaId}/dashboard/stats`).catch(() => null),
-          api.get(`/empresas/${empresaId}/whatsapp/status`).catch(() => ({ data: {} })),
+          api.get(`/empresas/${empresaId}/whatsapp/status`).catch(() => null),
         ]);
 
-        const whatsappStatus = String(resWhatsapp.data?.status || "not_configured").toLowerCase();
-        const whatsappOnline = Boolean(resWhatsapp.data?.online) || Boolean(resWhatsapp.data?.conectado);
-        const whatsappStatusLabel = formatWhatsappStatus(whatsappStatus, whatsappOnline);
-        const whatsappProviderLabel = formatWhatsappProvider(resWhatsapp.data?.provider, resWhatsapp.data?.provider_label);
+        const whatsappStatus = String(resWhatsapp?.data?.status || "unknown").toLowerCase();
+        const whatsappOnline = Boolean(resWhatsapp?.data?.online) || Boolean(resWhatsapp?.data?.conectado);
+        const whatsappStatusLabel = resWhatsapp?.data?.status ? formatWhatsappStatus(whatsappStatus, whatsappOnline) : "Não disponível";
+        const whatsappProviderLabel = resWhatsapp ? formatWhatsappProvider(resWhatsapp?.data?.provider, resWhatsapp?.data?.provider_label) : "Não foi possível consultar a conexão";
 
-        const totalInteracoesReais = Number(resDashboard?.data?.total_mensagens);
+        const totalInteracoesReais = resDashboard?.data?.total_mensagens == null ? NaN : Number(resDashboard.data.total_mensagens);
         setOverview((prev) => ({
           ...prev,
           whatsappStatus,
           whatsappStatusLabel,
           whatsappProviderLabel,
           whatsappOnline,
-          totalInteracoes: Number.isFinite(totalInteracoesReais) ? totalInteracoesReais : 0,
+          totalInteracoes: Number.isFinite(totalInteracoesReais) ? totalInteracoesReais : null,
         }));
       } catch (err) {
         console.error("Erro ao carregar visão geral:", err);
@@ -386,6 +383,7 @@ export default function EmpresaDetalhes() {
   };
 
   const abrirNovoUsuario = () => {
+    setUsuarioError("");
     setEditingUsuarioId(null);
     setSenhaExibida(null);
     setUsuarioForm({ ...USUARIO_DEFAULT, senha_temporaria: gerarSenhaTemporaria() });
@@ -393,6 +391,7 @@ export default function EmpresaDetalhes() {
   };
 
   const abrirEdicaoUsuario = (usuario) => {
+    setUsuarioError("");
     setEditingUsuarioId(usuario.id);
     setSenhaExibida(null);
     setUsuarioForm({
@@ -416,6 +415,7 @@ export default function EmpresaDetalhes() {
     };
     try {
       setSavingUsuario(true);
+      setUsuarioError("");
       if (editingUsuarioId) {
         await api.put(`/admin/empresas/${empresaId}/usuarios/${editingUsuarioId}`, payload);
         setShowUsuarioModal(false);
@@ -425,6 +425,7 @@ export default function EmpresaDetalhes() {
           ...payload,
           senha_temporaria: usuarioForm.senha_temporaria,
         });
+        setShowUsuarioModal(false);
         setSenhaExibida({
           nome: res.data?.usuario?.nome || payload.nome,
           email: res.data?.usuario?.email || payload.email,
@@ -435,7 +436,7 @@ export default function EmpresaDetalhes() {
       await carregarUsuarios();
     } catch (err) {
       console.error("Erro ao salvar usuário:", err);
-      setToast(err?.response?.data?.detail || "Falha ao salvar usuário.");
+      setUsuarioError(typeof err?.response?.data?.detail === "string" ? err.response.data.detail : "Falha ao salvar usuário. Revise os dados e tente novamente.");
     } finally {
       setSavingUsuario(false);
     }
@@ -455,6 +456,7 @@ export default function EmpresaDetalhes() {
   };
 
   const abrirResetSenha = (usuario) => {
+    setResetError("");
     setSenhaExibida(null);
     setResetUsuario(usuario);
     setResetSenhaTemporaria(gerarSenhaTemporaria());
@@ -465,6 +467,7 @@ export default function EmpresaDetalhes() {
     if (!empresaId || !resetUsuario?.id) return;
     try {
       setSavingResetSenha(true);
+      setResetError("");
       const res = await api.post(`/admin/empresas/${empresaId}/usuarios/${resetUsuario.id}/reset-senha`, {
         senha_temporaria: resetSenhaTemporaria,
       });
@@ -478,7 +481,7 @@ export default function EmpresaDetalhes() {
       setToast("Senha temporária redefinida.");
     } catch (err) {
       console.error("Erro ao resetar senha:", err);
-      setToast(err?.response?.data?.detail || "Falha ao resetar senha.");
+      setResetError(typeof err?.response?.data?.detail === "string" ? err.response.data.detail : "Falha ao resetar senha. Tente novamente.");
     } finally {
       setSavingResetSenha(false);
     }
@@ -501,131 +504,29 @@ export default function EmpresaDetalhes() {
     navigate(`/painel/simulador?${params.toString()}`);
   };
 
-  if (loading) {
-    return <div className="text-sm text-slate-500">Carregando dados da empresa...</div>;
-  }
-
-  if (!empresa) {
-    return (
-      <div className="rounded-xl border border-slate-200 bg-white p-6 text-slate-600">
-        Empresa não encontrada.
-      </div>
-    );
-  }
+  if (loading) return <LoadingState label="Carregando dados da empresa..." />;
+  if (loadError) return <ErrorState title="Falha ao carregar empresa" description={loadError} action={<ActionButton type="button" onClick={carregarEmpresa} icon={RefreshCw}>Tentar novamente</ActionButton>} />;
+  if (!empresa) return <EmptyState title="Empresa não encontrada" description="A empresa solicitada não está disponível nesta listagem." action={<Link to="/admin" className="fm-button fm-button-secondary">Voltar para empresas</Link>} />;
 
   return (
-    <div className="space-y-6 text-slate-950">
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <Link
-          to="/admin"
-          className="inline-flex items-center gap-2 text-xs text-slate-500 transition-colors hover:text-slate-950"
-        >
-          <ArrowLeft size={14} />
-          Voltar para Gestão de Clientes
-        </Link>
-        <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold text-slate-950">{empresaNome}</h1>
-            <p className="mt-1 text-sm text-slate-500">Gestão centralizada do tenant selecionado.</p>
-          </div>
-          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-            Ativo
-          </span>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
-        <div className="flex flex-wrap gap-2">
-          {TABS.map((tab) => {
-            const Icon = tab.icon;
-            return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => alterarTab(tab.id)}
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${
-                tabAtiva === tab.id
-                  ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                  : "border-slate-200 bg-white text-slate-500 hover:text-slate-950"
-              }`}
-            >
-              <Icon size={14} />
-              {tab.label}
-            </button>
-            );
-          })}
-        </div>
-      </div>
-
+    <div className="admin-company-details space-y-6">
+      <Link to={companiesReturn} className="admin-company-back"><ArrowLeft size={16} aria-hidden="true" /> Voltar para empresas</Link>
+      <PageHeader title={empresaNome} icon={Building2} eyebrow="Gestão de empresas" description="Gerencie acessos, agente, canais e configurações desta empresa." actions={<StatusBadge tone="info">Empresa selecionada</StatusBadge>} />
+      <Tabs items={TABS.map((tab) => ({ ...tab, panelId: `company-panel-${tab.id}` }))} value={tabAtiva} onChange={alterarTab} label="Seções da empresa" className="admin-company-tabs" />
+      <div role="tabpanel" id={`company-panel-${tabAtiva}`} aria-label={TABS.find((tab) => tab.id === tabAtiva)?.label} tabIndex={0} className="admin-company-panel">
       {tabAtiva === "visao-geral" && (
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div
-              className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${
-                overviewLoading
-                  ? ""
-                  : overview.whatsappOnline
-                  ? "shadow-[0_0_24px_rgba(34,197,94,0.15)]"
-                  : "shadow-[0_0_24px_rgba(239,68,68,0.16)]"
-              }`}
-            >
-              <p className="text-[11px] uppercase tracking-wide text-slate-500">Conexão WhatsApp</p>
-              {overviewLoading ? (
-                <div className="mt-3 h-6 w-28 animate-pulse rounded bg-slate-200" />
-              ) : (
-                <div className="mt-3 flex items-center gap-2">
-                  {overview.whatsappOnline ? (
-                    <CheckCircle2 size={16} className="text-emerald-600" />
-                  ) : (
-                    <AlertTriangle size={16} className="text-amber-600" />
-                  )}
-                  <span className="text-sm font-medium text-slate-950">
-                    {overview.whatsappStatusLabel}
-                  </span>
-                </div>
-              )}
-              <p className="mt-2 text-xs text-slate-500">{overview.whatsappProviderLabel}</p>
-              {!overviewLoading && !overview.whatsappOnline ? (
-                <button
-                  type="button"
-                  onClick={() => alterarTab("canais")}
-                  className="mt-3 inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-100"
-                >
-                  Reconectar
-                </button>
-              ) : null}
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-[11px] uppercase tracking-wide text-slate-500">Uso (simulado)</p>
-              {overviewLoading ? (
-                <div className="mt-3 h-6 w-24 animate-pulse rounded bg-slate-200" />
-              ) : (
-                <div className="mt-3 flex items-center gap-2">
-                  <MessageSquare size={16} className="text-cyan-600" />
-                  <span className="text-lg font-semibold text-slate-950">{overview.totalInteracoes}</span>
-                </div>
-              )}
-              <p className="mt-2 text-xs text-slate-500">Interações acumuladas (histórico real do tenant).</p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-[11px] uppercase tracking-wide text-slate-500">Acesso rápido</p>
-              <button
-                type="button"
-                onClick={irParaTesteAgente}
-                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
-              >
-                Testar Agente
-              </button>
-              <p className="mt-2 text-xs text-slate-500">
-                Abrirá com contexto da empresa para validação rápida do fluxo.
-              </p>
-            </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <MetricCard label="Conexão WhatsApp" value={overviewLoading ? "Consultando…" : overview.whatsappStatusLabel} helper={overviewLoading ? "Consultando a conexão da empresa." : overview.whatsappProviderLabel} icon={MessageSquare} tone={overview.whatsappOnline ? "success" : "warning"} />
+            <MetricCard label="Interações registradas" value={overviewLoading ? "Consultando…" : overview.totalInteracoes ?? "Não disponível"} helper="Histórico real de mensagens da empresa." icon={Database} />
+            <SectionCard title="Acesso rápido" description="Configure a empresa ou teste o atendimento no contexto do cliente.">
+              <div className="fm-actions">
+                <ActionButton type="button" onClick={() => setConfirmarTeste(true)} icon={BrainCircuit}>Testar Agente</ActionButton>
+                <ActionButton type="button" variant="secondary" onClick={() => alterarTab("canais")} icon={Link2}>Gerenciar canais</ActionButton>
+              </div>
+            </SectionCard>
           </div>
+          {!overviewLoading && (overview.whatsappStatus === "unknown" || overview.totalInteracoes === null) ? <InfoBanner tone="warning">Parte dos indicadores não pôde ser consultada. A informação indisponível não representa ausência de conexão ou de mensagens.</InfoBanner> : null}
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -653,44 +554,42 @@ export default function EmpresaDetalhes() {
                   Gestão de acesso administrada pelo Super Admin. Senhas temporárias aparecem apenas na criação ou reset.
                 </p>
               </div>
-              <button
+              <ActionButton
                 type="button"
                 onClick={abrirNovoUsuario}
-                className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
               >
                 <Plus size={14} />
                 Novo usuário
-              </button>
+              </ActionButton>
             </div>
           </div>
 
           {usuariosLoading ? (
-            <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
-              <RefreshCw size={16} className="animate-spin" />
-              Carregando usuários...
-            </div>
+            <LoadingState label="Carregando usuários..." />
+          ) : usuariosError ? (
+            <ErrorState title="Falha ao carregar usuários" description={usuariosError} action={<ActionButton type="button" onClick={carregarUsuarios} icon={RefreshCw}>Tentar novamente</ActionButton>} />
           ) : usuarios.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="text-sm font-semibold text-slate-900">Nenhum usuário vinculado a esta empresa.</p>
               <p className="mt-2 text-sm text-slate-500">Crie o primeiro admin do tenant pelo fluxo Super Admin.</p>
-              <button
+              <ActionButton
                 type="button"
                 onClick={abrirNovoUsuario}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
               >
                 <Plus size={14} />
                 Criar usuário
-              </button>
+              </ActionButton>
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto" role="region" aria-label="Usuários da empresa" tabIndex={0}>
                 <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                  <caption className="sr-only">Usuários e acessos de {empresaNome}</caption>
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Nome</th>
                       <th className="px-4 py-3 font-semibold">E-mail</th>
-                      <th className="px-4 py-3 font-semibold">Role</th>
+                      <th className="px-4 py-3 font-semibold">Perfil de acesso</th>
                       <th className="px-4 py-3 font-semibold">Status</th>
                       <th className="px-4 py-3 font-semibold">Último login</th>
                       <th className="px-4 py-3 text-right font-semibold">Ações</th>
@@ -712,30 +611,33 @@ export default function EmpresaDetalhes() {
                         <td className="px-4 py-3 text-slate-500">{formatarDataUsuario(usuario.ultimo_login)}</td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-1">
-                            <button
+                            <ActionButton
                               type="button"
                               onClick={() => abrirEdicaoUsuario(usuario)}
-                              className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                              variant="secondary"
                               title="Editar usuário"
+                              aria-label={`Editar usuário ${usuario.nome}`}
                             >
                               <Pencil size={15} />
-                            </button>
-                            <button
+                            </ActionButton>
+                            <ActionButton
                               type="button"
                               onClick={() => abrirResetSenha(usuario)}
-                              className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700"
+                              variant="secondary"
                               title="Resetar senha temporária"
+                              aria-label={`Resetar senha de ${usuario.nome}`}
                             >
                               <KeyRound size={15} />
-                            </button>
-                            <button
+                            </ActionButton>
+                            <ActionButton
                               type="button"
-                              onClick={() => alternarStatusUsuario(usuario)}
-                              className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-700"
+                              onClick={() => setStatusUsuario(usuario)}
+                              variant="secondary"
                               title={usuario.ativo ? "Desativar usuário" : "Ativar usuário"}
+                              aria-label={`${usuario.ativo ? "Desativar" : "Ativar"} usuário ${usuario.nome}`}
                             >
                               {usuario.ativo ? <PowerOff size={15} /> : <Power size={15} />}
-                            </button>
+                            </ActionButton>
                           </div>
                         </td>
                       </tr>
@@ -761,80 +663,78 @@ export default function EmpresaDetalhes() {
                 não são exibidos para edição no painel cliente.
               </p>
             </div>
-            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
-              Apenas Super Admin
-            </span>
+            <StatusBadge tone="warning">Apenas Super Admin</StatusBadge>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Nome do agente</label>
-              <input
+              <label htmlFor="company-field-1" className="mb-1 block text-xs text-slate-500">Nome do agente</label>
+              <input id="company-field-1"
                 value={iaConfig.nome_agente || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, nome_agente: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Mensagem de saudação</label>
-              <textarea
+              <label htmlFor="company-field-2" className="mb-1 block text-xs text-slate-500">Mensagem de saudação</label>
+              <textarea id="company-field-2"
                 rows={6}
                 value={iaConfig.mensagem_saudacao || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, mensagem_saudacao: e.target.value }))}
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={previewFunnel} disabled={funnelBusy} className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">
-                  <RefreshCw size={14} className={funnelBusy ? "animate-spin" : ""} /> Sincronizar funil e tags
-                </button>
+                <ActionButton type="button" onClick={previewFunnel} disabled={funnelBusy}>
+                  <RefreshCw size={14} /> Sincronizar funil e tags
+                </ActionButton>
                 {funnelStatus?.stale && <MiniBadge tone="warning">Funil desatualizado</MiniBadge>}
                 {funnelStatus?.spec && !funnelStatus?.stale && <MiniBadge tone="active">Funil sincronizado · {funnelStatus.spec.version}</MiniBadge>}
               </div>
               {funnelPreview && (
-                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 text-xs text-slate-600">
+                <div className="fm-feature-card mt-3">
                   <div className="mb-2 font-semibold text-slate-700">Prévia: {funnelPreview.stage_count} etapas · {funnelPreview.new_stage_count} novas</div>
                   <div className="grid gap-1 md:grid-cols-2">{(funnelPreview.spec?.stages || []).map((stage) => <div key={stage.key}>#{stage.order} {stage.display_name} → {stage.meta_event}</div>)}</div>
-                  <button type="button" onClick={syncFunnel} disabled={funnelBusy} className="mt-3 rounded-lg bg-indigo-600 px-3 py-2 font-semibold text-white disabled:opacity-50">Confirmar sincronização</button>
+                  <ActionButton type="button" onClick={syncFunnel} disabled={funnelBusy}>Confirmar sincronização</ActionButton>
                 </div>
               )}
             </div>
             <div className="lg:col-span-2">
-              <label className="mb-1 block text-xs text-slate-500">Personalidade / tom / persona</label>
-              <textarea
+              <label htmlFor="company-field-3" className="mb-1 block text-xs text-slate-500">Personalidade / tom / persona</label>
+              <textarea id="company-field-3"
                 rows={4}
                 value={iaConfig.ia_personalidade || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, ia_personalidade: e.target.value }))}
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div className="lg:col-span-2">
-              <label className="mb-1 block text-xs text-slate-500">Regras obrigatórias / regras de negócio</label>
-              <textarea
+              <label htmlFor="company-field-4" className="mb-1 block text-xs text-slate-500">Regras obrigatórias / regras de negócio</label>
+              <textarea id="company-field-4"
                 rows={5}
                 value={iaConfig.ia_regras_negocio || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, ia_regras_negocio: e.target.value }))}
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div className="lg:col-span-2">
-              <label className="mb-1 block text-xs text-slate-500">Monitor de conversão</label>
+              <label htmlFor="company-field-5" className="mb-1 block text-xs text-slate-500">Monitor de conversão</label>
               <p className="mb-2 text-xs text-slate-400">
                 Orienta a IA que acompanha a conversa e identifica avanços comerciais para aplicação das tags configuradas.
               </p>
-              <textarea
+              <textarea id="company-field-5"
                 rows={6}
                 value={iaConfig.conversion_monitor_prompt || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, conversion_monitor_prompt: e.target.value }))}
                 placeholder="Descreva como interpretar avanço comercial, evidências, sinais negativos e o momento de aplicar tags."
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Modelo principal</label>
-              <select
+              <label htmlFor="company-field-6" className="mb-1 block text-xs text-slate-500">Modelo principal</label>
+              <select id="company-field-6"
                 value={iaConfig.modelo_ia || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, modelo_ia: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               >
                 {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -842,54 +742,54 @@ export default function EmpresaDetalhes() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Limite de certeza</label>
-              <input
+              <label htmlFor="company-field-7" className="mb-1 block text-xs text-slate-500">Limite de certeza</label>
+              <input id="company-field-7"
                 type="number"
                 step="0.01"
                 min="0"
                 max="1"
                 value={iaConfig.limite_certeza}
                 onChange={(e) => setIaConfig((p) => ({ ...p, limite_certeza: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Limite de dúvida</label>
-              <input
+              <label htmlFor="company-field-8" className="mb-1 block text-xs text-slate-500">Limite de dúvida</label>
+              <input id="company-field-8"
                 type="number"
                 step="0.01"
                 min="0"
                 max="1"
                 value={iaConfig.limite_duvida}
                 onChange={(e) => setIaConfig((p) => ({ ...p, limite_duvida: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Máx. agentes no desempate</label>
-              <input
+              <label htmlFor="company-field-9" className="mb-1 block text-xs text-slate-500">Máx. agentes no desempate</label>
+              <input id="company-field-9"
                 type="number"
                 min="1"
                 value={iaConfig.max_agentes_desempate}
                 onChange={(e) => setIaConfig((p) => ({ ...p, max_agentes_desempate: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Telefone de notificação</label>
-              <input
+              <label htmlFor="company-field-10" className="mb-1 block text-xs text-slate-500">Telefone de notificação</label>
+              <input id="company-field-10"
                 value={iaConfig.telefone_notificacao || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, telefone_notificacao: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div className="lg:col-span-2">
-              <label className="mb-1 block text-xs text-slate-500">Informações adicionais</label>
-              <textarea
+              <label htmlFor="company-field-11" className="mb-1 block text-xs text-slate-500">Informações adicionais</label>
+              <textarea id="company-field-11"
                 rows={3}
                 value={iaConfig.informacoes_adicionais || ""}
                 onChange={(e) => setIaConfig((p) => ({ ...p, informacoes_adicionais: e.target.value }))}
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
@@ -910,7 +810,7 @@ export default function EmpresaDetalhes() {
             </label>
           </div>
 
-          <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4" aria-labelledby="tags-ia-title">
+          <section className="fm-feature-card" aria-labelledby="tags-ia-title">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h4 id="tags-ia-title" className="text-sm font-semibold text-slate-950">Tags disponíveis para a IA</h4>
@@ -918,9 +818,9 @@ export default function EmpresaDetalhes() {
                   Selecione quais tags o atendente de IA poderá consultar e aplicar. Essa configuração não altera as conversões vinculadas às tags.
                 </p>
               </div>
-              <span className="rounded-full border border-indigo-200 bg-white px-2.5 py-1 text-xs font-semibold text-indigo-700">
+              <StatusBadge tone="info">
                 {Array.isArray(iaConfig.tags_ia_habilitadas) ? iaConfig.tags_ia_habilitadas.length : 0} selecionada(s)
-              </span>
+              </StatusBadge>
             </div>
 
             {tagsIaLoading ? (
@@ -953,14 +853,13 @@ export default function EmpresaDetalhes() {
             )}
           </section>
 
-          <button
+          <ActionButton
             type="submit"
             disabled={savingIaConfig}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
           >
             <Save size={14} />
             {savingIaConfig ? "Salvando..." : "Salvar configuração do agente"}
-          </button>
+          </ActionButton>
         </form>
       )}
 
@@ -980,9 +879,9 @@ export default function EmpresaDetalhes() {
       )}
 
       {tabAtiva === "conhecimento" && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm">
+        <SectionCard title="Base de conhecimento" description="Gerencie as informações que apoiam as respostas do agente desta empresa." icon={Database}>
           <RAGManager empresaId={String(empresa.id)} />
-        </div>
+        </SectionCard>
       )}
 
       {tabAtiva === "canais" && (
@@ -997,29 +896,28 @@ export default function EmpresaDetalhes() {
               Dados da Empresa
             </h3>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Nome</label>
-              <input
+              <label htmlFor="company-field-12" className="mb-1 block text-xs text-slate-500">Nome</label>
+              <input id="company-field-12"
                 value={editEmpresa.nome_empresa}
                 onChange={(e) => setEditEmpresa((p) => ({ ...p, nome_empresa: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Área de atuação</label>
-              <input
+              <label htmlFor="company-field-13" className="mb-1 block text-xs text-slate-500">Área de atuação</label>
+              <input id="company-field-13"
                 value={editEmpresa.area_atuacao}
                 onChange={(e) => setEditEmpresa((p) => ({ ...p, area_atuacao: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
-            <button
+            <ActionButton
               type="submit"
               disabled={savingEmpresa}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
             >
               <Save size={14} />
               {savingEmpresa ? "Salvando..." : "Salvar dados"}
-            </button>
+            </ActionButton>
           </form>
 
           <form
@@ -1034,23 +932,22 @@ export default function EmpresaDetalhes() {
               Opcional. Se vazio, o sistema usa fallback configurado no ambiente/plataforma.
             </p>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">OPENAI API Key</label>
-              <input
+              <label htmlFor="company-field-14" className="mb-1 block text-xs text-slate-500">OPENAI API Key</label>
+              <input id="company-field-14"
                 type="password"
                 value={openaiApiKey}
                 onChange={(e) => setOpenaiApiKey(e.target.value)}
                 placeholder="sk-..."
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500"
+                className="fm-field"
               />
             </div>
-            <button
+            <ActionButton
               type="submit"
               disabled={savingCredenciais}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
             >
               <Save size={14} />
               {savingCredenciais ? "Salvando..." : "Salvar credencial"}
-            </button>
+            </ActionButton>
           </form>
         </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1067,7 +964,7 @@ export default function EmpresaDetalhes() {
       )}
 
       {tabAtiva === "pagamentos" && (
-        <EmpresaPaymentManager empresaId={String(empresa.id)} onNotify={setToast} />
+        <div className="space-y-4"><SectionCard title="Pagamentos" description="Configure o provedor de pagamentos e suas credenciais para esta empresa." icon={CreditCard} /><EmpresaPaymentManager empresaId={String(empresa.id)} onNotify={setToast} /></div>
       )}
 
       {tabAtiva === "agenda-automacoes" && (
@@ -1081,6 +978,7 @@ export default function EmpresaDetalhes() {
               A agenda operacional permanece no painel cliente, mas políticas de como o agente coleta dados e confirma
               visitas ficam na configuração do agente pelo Super Admin.
             </p>
+            <ActionButton type="button" variant="secondary" onClick={() => alterarTab("agente")}>Configurar agente</ActionButton>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
@@ -1091,6 +989,7 @@ export default function EmpresaDetalhes() {
               Follow-ups e campanhas podem ser operados pelo cliente. Configurações técnicas e roteamento permanecem sob
               responsabilidade do Super Admin.
             </p>
+            <ActionButton type="button" variant="secondary" onClick={() => alterarTab("agente")}>Configurar automações do agente</ActionButton>
           </div>
         </div>
       )}
@@ -1119,160 +1018,66 @@ export default function EmpresaDetalhes() {
               Use esta área para validar status, simular atendimento e investigar falhas sem expor detalhes técnicos ao
               cliente.
             </p>
-            <button
+            <ActionButton
               type="button"
-              onClick={irParaTesteAgente}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
+              onClick={() => setConfirmarTeste(true)}
             >
               Testar Agente
-            </button>
+            </ActionButton>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
               <MessageSquare size={16} />
               Indicadores
             </h3>
-            <p className="mt-2 text-sm text-slate-500">Mensagens registradas: {overview.totalInteracoes}</p>
-            <p className="mt-1 text-sm text-slate-500">WhatsApp: {overview.whatsappStatusLabel}</p>
+            <p className="mt-2 text-sm text-slate-500">Mensagens registradas: {overviewLoading ? "Consultando…" : overview.totalInteracoes ?? "Não disponível"}</p>
+            <p className="mt-1 text-sm text-slate-500">WhatsApp: {overviewLoading ? "Consultando…" : overview.whatsappStatusLabel}</p>
           </div>
         </div>
       )}
 
-      {toast ? (
-        <div className="fixed bottom-6 right-6 z-50 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-700 shadow-lg">
-          {toast}
-        </div>
-      ) : null}
+      </div>
+      {toast ? <div className="admin-company-toast" role={/^(Falha|Não foi possível)/.test(toast) ? "alert" : "status"} aria-live="polite">{toast}</div> : null}
 
-      {senhaExibida ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="flex items-center gap-2 text-base font-semibold text-slate-950">
-                  <KeyRound size={17} />
-                  Senha temporária
-                </h3>
-                <p className="mt-2 text-sm text-amber-700">
-                  A senha temporária será exibida apenas uma vez. Não há como consultar a senha atual depois.
-                </p>
-              </div>
-              <button type="button" onClick={() => setSenhaExibida(null)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs text-slate-500">{senhaExibida.nome} · {senhaExibida.email}</p>
-              <p className="mt-2 break-all font-mono text-sm font-semibold text-slate-950">{senhaExibida.senha}</p>
-            </div>
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={copiarSenhaExibida}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Copiar
-              </button>
-              <button
-                type="button"
-                onClick={() => setSenhaExibida(null)}
-                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-              >
-                Entendi
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <AdminDialog open={Boolean(statusUsuario)} title={statusUsuario?.ativo ? "Desativar usuário" : "Ativar usuário"} busy={savingStatusUsuario} onClose={() => setStatusUsuario(null)} footer={<><ActionButton type="button" variant="secondary" disabled={savingStatusUsuario} onClick={() => setStatusUsuario(null)}>Cancelar</ActionButton><ActionButton type="button" disabled={savingStatusUsuario} onClick={async () => { setSavingStatusUsuario(true); try { await alternarStatusUsuario(statusUsuario); } finally { setSavingStatusUsuario(false); setStatusUsuario(null); } }}>{savingStatusUsuario ? "Aguarde..." : "Confirmar alteração de acesso"}</ActionButton></>}>
+        <InfoBanner tone="warning">{statusUsuario?.ativo ? "O acesso será desativado para" : "O acesso será reativado para"} <strong>{statusUsuario?.nome}</strong> nesta empresa. O perfil de acesso será preservado.</InfoBanner>
+      </AdminDialog>
 
-      {showUsuarioModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-950">
-                  {editingUsuarioId ? "Editar usuário" : "Novo usuário"}
-                </h3>
-                <p className="mt-1 text-xs text-slate-500">Fluxo restrito ao Super Admin.</p>
-              </div>
-              <button type="button" onClick={() => setShowUsuarioModal(false)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={salvarUsuario} className="space-y-4 p-5">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs text-slate-500">Nome</label>
-                  <input required value={usuarioForm.nome} onChange={(e) => setUsuarioForm((p) => ({ ...p, nome: e.target.value }))} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-slate-500">E-mail</label>
-                  <input required type="email" value={usuarioForm.email} onChange={(e) => setUsuarioForm((p) => ({ ...p, email: e.target.value }))} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-slate-500">Role</label>
-                  <select value={usuarioForm.role} onChange={(e) => setUsuarioForm((p) => ({ ...p, role: e.target.value }))} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500">
-                    {USUARIO_ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
-                  </select>
-                </div>
-                <label className="flex items-center gap-3 self-end rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                  <input type="checkbox" checked={Boolean(usuarioForm.ativo)} onChange={(e) => setUsuarioForm((p) => ({ ...p, ativo: e.target.checked }))} />
-                  Usuário ativo
-                </label>
-              </div>
-              {!editingUsuarioId ? (
-                <div>
-                  <label className="mb-1 block text-xs text-slate-500">Senha temporária</label>
-                  <div className="flex gap-2">
-                    <input required minLength={8} value={usuarioForm.senha_temporaria} onChange={(e) => setUsuarioForm((p) => ({ ...p, senha_temporaria: e.target.value }))} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-700 outline-none focus:border-indigo-500" />
-                    <button type="button" onClick={() => setUsuarioForm((p) => ({ ...p, senha_temporaria: gerarSenhaTemporaria() }))} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Gerar</button>
-                  </div>
-                  <p className="mt-2 text-xs text-amber-700">A senha temporária será exibida apenas uma vez.</p>
-                </div>
-              ) : null}
-              <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-                <button type="button" onClick={() => setShowUsuarioModal(false)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cancelar</button>
-                <button type="submit" disabled={savingUsuario} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
-                  <Save size={14} />
-                  {savingUsuario ? "Salvando..." : "Salvar usuário"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
+      <AdminDialog open={confirmarTeste} title="Acessar o contexto da empresa" onClose={() => setConfirmarTeste(false)} footer={<><ActionButton type="button" variant="secondary" onClick={() => setConfirmarTeste(false)}>Cancelar</ActionButton><ActionButton type="button" onClick={irParaTesteAgente}>Continuar para o simulador</ActionButton></>}>
+        <InfoBanner tone="warning">Você acessará o simulador como <strong>{empresaNome}</strong>. As ações no painel usam o contexto desta empresa. Use “Encerrar Teste” para retornar à administração.</InfoBanner>
+      </AdminDialog>
 
-      {resetUsuario ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-950">Resetar senha temporária</h3>
-                <p className="mt-1 text-xs text-slate-500">{resetUsuario.nome} · {resetUsuario.email}</p>
-              </div>
-              <button type="button" onClick={() => setResetUsuario(null)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"><X size={18} /></button>
-            </div>
-            <form onSubmit={resetarSenhaUsuario} className="space-y-4 p-5">
-              <div>
-                <label className="mb-1 block text-xs text-slate-500">Nova senha temporária</label>
-                <div className="flex gap-2">
-                  <input required minLength={8} value={resetSenhaTemporaria} onChange={(e) => setResetSenhaTemporaria(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-700 outline-none focus:border-indigo-500" />
-                  <button type="button" onClick={() => setResetSenhaTemporaria(gerarSenhaTemporaria())} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Gerar</button>
-                </div>
-                <p className="mt-2 text-xs text-amber-700">A senha temporária será exibida apenas uma vez.</p>
-              </div>
-              <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-                <button type="button" onClick={() => setResetUsuario(null)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cancelar</button>
-                <button type="submit" disabled={savingResetSenha} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
-                  <KeyRound size={14} />
-                  {savingResetSenha ? "Resetando..." : "Resetar senha"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
+      <AdminDialog open={Boolean(senhaExibida)} title="Senha temporária" onClose={() => setSenhaExibida(null)} footer={<><ActionButton type="button" variant="secondary" onClick={copiarSenhaExibida}>Copiar</ActionButton><ActionButton type="button" onClick={() => setSenhaExibida(null)}>Entendi</ActionButton></>}>
+        <InfoBanner tone="warning">A senha temporária será exibida apenas uma vez. Não há como consultar a senha atual depois.</InfoBanner>
+        <div className="admin-company-password"><p>{senhaExibida?.nome} · {senhaExibida?.email}</p><p className="font-mono mt-2">{senhaExibida?.senha}</p></div>
+      </AdminDialog>
 
+      <AdminDialog open={showUsuarioModal} title={editingUsuarioId ? "Editar usuário" : "Novo usuário"} onClose={() => setShowUsuarioModal(false)} busy={savingUsuario} className="admin-company-form-dialog">
+        <form onSubmit={salvarUsuario} className="space-y-4">
+          <p className="fm-helper">Administre o acesso à empresa selecionada. Campos marcados com * são obrigatórios.</p>
+          {usuarioError ? <div role="alert"><InfoBanner tone="danger">{usuarioError}</InfoBanner></div> : null}
+          <fieldset disabled={savingUsuario} className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div><label htmlFor="company-user-name">Nome *</label><input className="fm-field" id="company-user-name" data-autofocus required autoComplete="name" value={usuarioForm.nome} onChange={(e) => setUsuarioForm((p) => ({ ...p, nome: e.target.value }))} /></div>
+              <div><label htmlFor="company-user-email">E-mail *</label><input className="fm-field" id="company-user-email" required type="email" autoComplete="email" value={usuarioForm.email} onChange={(e) => setUsuarioForm((p) => ({ ...p, email: e.target.value }))} /></div>
+              <div><label htmlFor="company-user-role">Perfil de acesso</label><select className="fm-field" id="company-user-role" value={usuarioForm.role} onChange={(e) => setUsuarioForm((p) => ({ ...p, role: e.target.value }))}>{USUARIO_ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}</select></div>
+              <label className="flex items-center gap-3"><input type="checkbox" checked={Boolean(usuarioForm.ativo)} onChange={(e) => setUsuarioForm((p) => ({ ...p, ativo: e.target.checked }))} />Usuário ativo</label>
+            </div>
+            {!editingUsuarioId ? <div><label htmlFor="company-user-password">Senha temporária *</label><div className="flex gap-2"><input className="fm-field" id="company-user-password" required minLength={8} autoComplete="new-password" value={usuarioForm.senha_temporaria} onChange={(e) => setUsuarioForm((p) => ({ ...p, senha_temporaria: e.target.value }))} /><ActionButton type="button" variant="secondary" onClick={() => setUsuarioForm((p) => ({ ...p, senha_temporaria: gerarSenhaTemporaria() }))}>Gerar</ActionButton></div><p className="fm-helper">Compartilhe a senha temporária somente com o usuário.</p></div> : null}
+          </fieldset>
+          <div className="fm-actions justify-end"><ActionButton type="button" variant="secondary" disabled={savingUsuario} onClick={() => setShowUsuarioModal(false)}>Cancelar</ActionButton><ActionButton type="submit" disabled={savingUsuario} icon={Save}>{savingUsuario ? "Salvando..." : "Salvar usuário"}</ActionButton></div>
+        </form>
+      </AdminDialog>
+
+      <AdminDialog open={Boolean(resetUsuario)} title="Resetar senha temporária" onClose={() => setResetUsuario(null)} busy={savingResetSenha} className="admin-company-form-dialog">
+        <form onSubmit={resetarSenhaUsuario} className="space-y-4">
+          <p className="fm-helper">{resetUsuario?.nome} · {resetUsuario?.email}</p>
+          <InfoBanner tone="warning">Ao confirmar, a senha anterior será substituída. A nova senha temporária será exibida apenas uma vez.</InfoBanner>
+          {resetError ? <div role="alert"><InfoBanner tone="danger">{resetError}</InfoBanner></div> : null}
+          <fieldset disabled={savingResetSenha}><label htmlFor="company-reset-password">Nova senha temporária *</label><div className="flex gap-2"><input className="fm-field" id="company-reset-password" data-autofocus required minLength={8} autoComplete="new-password" value={resetSenhaTemporaria} onChange={(e) => setResetSenhaTemporaria(e.target.value)} /><ActionButton type="button" variant="secondary" onClick={() => setResetSenhaTemporaria(gerarSenhaTemporaria())}>Gerar</ActionButton></div></fieldset>
+          <div className="fm-actions justify-end"><ActionButton type="button" variant="secondary" disabled={savingResetSenha} onClick={() => setResetUsuario(null)}>Cancelar</ActionButton><ActionButton type="submit" disabled={savingResetSenha} icon={KeyRound}>{savingResetSenha ? "Resetando..." : "Resetar senha"}</ActionButton></div>
+        </form>
+      </AdminDialog>
     </div>
   );
 }

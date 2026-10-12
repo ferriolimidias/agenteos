@@ -1,1193 +1,187 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Activity, ArrowLeft, ArrowRight, Brain, Building, FileText, KeyRound, Pencil, Plus, RefreshCw, Settings, Trash, UserCheck, Users } from "lucide-react";
 import api from "../../services/api";
-import { Plus, Building, MapPin, X, User, LogIn, KeyRound, Settings, RefreshCw, Pencil, Trash, Brain, UserCheck, FileText, ArrowRight, Activity } from "lucide-react";
-import RAGManager from "../../components/RAGManager";
-import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
-import { ActionButton, PageHeader, StatusBadge } from "../../components/ui";
+import { ActionButton, EmptyState, ErrorState, InfoBanner, Input, LoadingState, PageHeader, SectionCard, Select, StatusBadge, Table } from "../../components/ui";
+import AdminDialog from "../../components/admin/AdminDialog";
 import { clearImpersonation } from "../../utils/auth";
+import { companyAreas, companyStatus, filterCompanies } from "../../utils/adminCompanies";
 import "./Empresas.css";
 
-import { useNavigate } from "react-router-dom";
+const SETUP_DEFAULT = { nome_empresa: "", area_atuacao: "", logo_url: "", ia_personalidade: "", ia_regras_negocio: "", admin_nome: "", admin_email: "", admin_senha: "" };
+
+function CompanyForm({ editing, value, onChange, onLogo, busy, onSubmit, onCancel, error }) {
+  const field = (name, label, props = {}) => <label className="fm-company-field">{label}<Input name={name} value={value[name]} onChange={onChange} disabled={busy} {...props} /></label>;
+  return <form onSubmit={onSubmit} className="fm-company-form" aria-busy={busy}>
+    {error && <div role="alert"><InfoBanner tone="danger">{error}</InfoBanner></div>}
+    <div className="fm-company-form-grid">
+      <SectionCard title="Dados da empresa" description="Identidade usada na gestão e no painel do cliente." icon={Building}>
+        <div className="fm-company-fields">
+          {field("nome_empresa", "Nome da empresa *", { required:true, autoFocus:true })}
+          {field("area_atuacao", "Área de atuação")}
+          <label className="fm-company-field">Logo da empresa<Input type="file" accept=".png, .jpg, .jpeg, .svg" onChange={onLogo} disabled={busy} /></label>
+          {value.logo_url && <img className="fm-company-logo-preview" src={value.logo_url} alt="Prévia do logo da empresa" />}
+          <p className="fm-helper">O nome e o logo configurados permanecem no painel do cliente.</p>
+        </div>
+      </SectionCard>
+      {!editing && <>
+        <SectionCard title="Administrador inicial" description="Dados de acesso do responsável pela empresa." icon={Users}>
+          <div className="fm-company-fields">
+            {field("admin_nome", "Nome do responsável *", {required:true, autoComplete:"name"})}
+            {field("admin_email", "Email de login *", {required:true, type:"email", autoComplete:"email"})}
+            {field("admin_senha", "Senha inicial *", {required:true, type:"password", autoComplete:"new-password"})}
+            <p className="fm-helper">Depois do cadastro, gerencie os acessos na seção Usuários da empresa.</p>
+          </div>
+        </SectionCard>
+        <SectionCard title="Instruções iniciais do agente" description="Estas configurações continuam disponíveis na seção Agente da empresa." icon={Brain} className="fm-company-form-wide">
+          <div className="fm-company-fields">
+            <label className="fm-company-field">Identidade e tom de voz<textarea className="fm-field" name="ia_personalidade" value={value.ia_personalidade} onChange={onChange} rows={3} disabled={busy} /></label>
+            <label className="fm-company-field">Diretrizes de atendimento e vendas<textarea className="fm-field" name="ia_regras_negocio" value={value.ia_regras_negocio} onChange={onChange} rows={3} disabled={busy} /></label>
+          </div>
+        </SectionCard>
+      </>}
+    </div>
+    <div className="fm-company-form-actions"><ActionButton type="button" variant="secondary" onClick={onCancel} disabled={busy}>Cancelar</ActionButton><ActionButton type="submit" disabled={busy}>{busy ? "Salvando..." : editing ? "Salvar alterações" : "Concluir cadastro"}</ActionButton></div>
+  </form>;
+}
 
 export default function Empresas() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [empresas, setEmpresas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [showRagModal, setShowRagModal] = useState(false);
-  
-  // Modal de Credenciais
-  const [showCredenciaisModal, setShowCredenciaisModal] = useState(false);
-  const [empresaSelecionada, setEmpresaSelecionada] = useState(null);
-  const [activeIntegracaoTab, setActiveIntegracaoTab] = useState("conexoes");
-  const [credenciais, setCredenciais] = useState({
-    openai_api_key: ""
-  });
-  const [savingCredenciais, setSavingCredenciais] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
-
-  // Form State
-  const [formData, setFormData] = useState({
-    nome_empresa: "",
-    area_atuacao: "",
-    logo_url: "",
-    ia_personalidade: "",
-    ia_regras_negocio: "",
-    admin_nome: "",
-    admin_email: "",
-    admin_senha: ""
-  });
-
-  // Edit State
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [listError, setListError] = useState("");
+  const [formMode, setFormMode] = useState(null);
+  const [formData, setFormData] = useState(SETUP_DEFAULT);
   const [empresaEdit, setEmpresaEdit] = useState(null);
-  const [editFormData, setEditFormData] = useState({
-    nome_empresa: "",
-    area_atuacao: "",
-    logo_url: ""
-  });
-
-  // Config IA State
-  const [showConfigIAModal, setShowConfigIAModal] = useState(false);
-  const [configIAData, setConfigIAData] = useState({
-    ia_personalidade: "",
-    ia_regras_negocio: "",
-    nome_agente: "",
-    mensagem_saudacao: "",
-    modelo_ia: "gpt-4o-mini",
-    followup_ativo: false,
-    limite_certeza: 0.65,
-    limite_duvida: 0.45,
-    max_agentes_desempate: 3,
-  });
-  const [loadingConfigIA] = useState(false);
-  const [savingConfigIA, setSavingConfigIA] = useState(false);
-  const [modelosDisponiveis, setModelosDisponiveis] = useState([]);
+  const [editFormData, setEditFormData] = useState({nome_empresa:"",area_atuacao:"",logo_url:""});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [pendingAction, setPendingAction] = useState(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
   const [workerStatus, setWorkerStatus] = useState(null);
-  const [loadingWorkerStatus, setLoadingWorkerStatus] = useState(false);
+  const [loadingWorkerStatus, setLoadingWorkerStatus] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [nowTick, setNowTick] = useState(Date.now());
-  const [etapasFunil, setEtapasFunil] = useState([]);
-  const [loadingEtapasFunil, setLoadingEtapasFunil] = useState(false);
-  const [salvandoEtapaFunil, setSalvandoEtapaFunil] = useState(false);
-  const [novaEtapaNome, setNovaEtapaNome] = useState("");
 
-  const fetchEmpresas = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get("/empresas/");
-      setEmpresas(res.data);
-    } catch (err) {
-      console.error("Erro ao buscar empresas:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchModelosDisponiveis = async () => {
-    try {
-      const res = await api.get("/admin/modelos-ia");
-      setModelosDisponiveis(res.data);
-    } catch (err) {
-      console.error("Erro ao buscar modelos de IA:", err);
-    }
-  };
-
-  const fetchWorkerStatus = async ({ silent = false } = {}) => {
-    try {
-      if (!silent) {
-        setLoadingWorkerStatus(true);
-      }
-      const res = await api.get("/admin/workers/status");
-      setWorkerStatus(res.data || null);
-      setLastUpdate(Date.now());
-    } catch (err) {
-      console.error("Erro ao buscar status do worker:", err);
-      setWorkerStatus(null);
-    } finally {
-      if (!silent) {
-        setLoadingWorkerStatus(false);
-      }
-    }
-  };
-
-  const fetchEtapasFunil = async (empresaId) => {
-    if (!empresaId) return;
-    try {
-      setLoadingEtapasFunil(true);
-      const res = await api.get(`/empresas/${empresaId}/crm/tags/oficiais`);
-      const tags = Array.isArray(res.data) ? res.data : [];
-      const etapas = tags
-        .filter((tag) => tag?.tipo === "etapa_funil")
-        .sort((a, b) => {
-          const ordemA = Number.isFinite(Number(a?.ordem)) ? Number(a.ordem) : 9999;
-          const ordemB = Number.isFinite(Number(b?.ordem)) ? Number(b.ordem) : 9999;
-          if (ordemA !== ordemB) return ordemA - ordemB;
-          return String(a?.nome || "").localeCompare(String(b?.nome || ""));
-        });
-      setEtapasFunil(etapas);
-    } catch (err) {
-      console.error("Erro ao carregar etapas do funil:", err);
-      setEtapasFunil([]);
-    } finally {
-      setLoadingEtapasFunil(false);
-    }
-  };
-
-  const handleCriarEtapaFunil = async () => {
-    const nome = String(novaEtapaNome || "").trim();
-    if (!empresaSelecionada?.id || !nome) return;
-    try {
-      setSalvandoEtapaFunil(true);
-      const maiorOrdem = etapasFunil.reduce((acc, item) => {
-        const ordem = Number(item?.ordem);
-        return Number.isFinite(ordem) ? Math.max(acc, ordem) : acc;
-      }, 0);
-      await api.post(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais`, {
-        nome,
-        tipo: "etapa_funil",
-        ativa_no_funil: true,
-        ordem: maiorOrdem + 1,
-      });
-      setNovaEtapaNome("");
-      await fetchEtapasFunil(empresaSelecionada.id);
-    } catch (err) {
-      console.error("Erro ao criar etapa do funil:", err);
-      alert("Erro ao criar etapa do funil.");
-    } finally {
-      setSalvandoEtapaFunil(false);
-    }
-  };
-
-  const handleEditarEtapaFunil = async (etapa) => {
-    if (!empresaSelecionada?.id || !etapa?.id) return;
-    const novoNome = window.prompt("Nome da etapa:", etapa.nome || "");
-    if (novoNome === null) return;
-    const nomeLimpo = String(novoNome || "").trim();
-    if (!nomeLimpo) return;
-    const novaOrdemRaw = window.prompt("Ordem da etapa:", String(etapa.ordem ?? ""));
-    if (novaOrdemRaw === null) return;
-    const novaOrdem = parseInt(novaOrdemRaw, 10);
-    try {
-      await api.put(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`, {
-        nome: nomeLimpo,
-        tipo: "etapa_funil",
-        ativa_no_funil: true,
-        ordem: Number.isFinite(novaOrdem) ? novaOrdem : etapa.ordem,
-      });
-      await fetchEtapasFunil(empresaSelecionada.id);
-    } catch (err) {
-      console.error("Erro ao editar etapa do funil:", err);
-      alert("Erro ao editar etapa do funil.");
-    }
-  };
-
-  const handleExcluirEtapaFunil = async (etapa) => {
-    if (!empresaSelecionada?.id || !etapa?.id) return;
-    if (!window.confirm(`Excluir a etapa "${etapa.nome}"?`)) return;
-    try {
-      await api.delete(`/empresas/${empresaSelecionada.id}/crm/tags/oficiais/${etapa.id}`);
-      await fetchEtapasFunil(empresaSelecionada.id);
-    } catch (err) {
-      console.error("Erro ao excluir etapa do funil:", err);
-      alert("Erro ao excluir etapa do funil.");
-    }
-  };
-
-  useEffect(() => {
-    fetchEmpresas();
-    fetchModelosDisponiveis();
-    fetchWorkerStatus();
-
-    const intervalId = setInterval(() => {
-      fetchWorkerStatus({ silent: true });
-    }, 30000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
+  const fetchEmpresas = useCallback(async () => {
+    setLoading(true); setListError("");
+    try { const res = await api.get("/empresas/"); setEmpresas(Array.isArray(res.data) ? res.data : []); }
+    catch { setListError("Não foi possível carregar as empresas. Tente novamente."); }
+    finally { setLoading(false); }
   }, []);
-
-  useEffect(() => {
-    const tickId = setInterval(() => {
-      setNowTick(Date.now());
-    }, 15000);
-    return () => {
-      clearInterval(tickId);
-    };
+  const fetchWorkerStatus = useCallback(async ({silent=false}={}) => {
+    if (!silent) setLoadingWorkerStatus(true);
+    try { const res = await api.get("/admin/workers/status"); setWorkerStatus(res.data || null); setLastUpdate(new Date()); }
+    catch { setWorkerStatus(null); }
+    finally { setLoadingWorkerStatus(false); }
   }, []);
+  useEffect(() => {
+    fetchEmpresas(); fetchWorkerStatus();
+    const interval = setInterval(() => fetchWorkerStatus({silent:true}), 30000);
+    return () => clearInterval(interval);
+  }, [fetchEmpresas, fetchWorkerStatus]);
 
-  const getLastUpdateLabel = () => {
-    if (!lastUpdate) return "Atualização ainda não realizada";
-    const diffMs = Math.max(0, nowTick - lastUpdate);
-    const diffSec = Math.floor(diffMs / 1000);
-    if (diffSec < 60) {
-      return `Atualizado há ${diffSec} segundo${diffSec === 1 ? "" : "s"}`;
-    }
-    const diffMin = Math.floor(diffSec / 60);
-    return `Atualizado há ${diffMin} minuto${diffMin === 1 ? "" : "s"}`;
+  const filters = {query:searchParams.get("q") || "", area:searchParams.get("area") || "", status:searchParams.get("status") || "", sort:searchParams.get("sort") || "name"};
+  const visible = filterCompanies(empresas, filters);
+  const companyLinkState = { companiesReturn: `/admin${searchParams.size ? `?${searchParams}` : ""}` };
+  const updateFilter = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key,value); else next.delete(key);
+    setSearchParams(next, {replace:true});
   };
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+  const clearFilters = () => { const next=new URLSearchParams(searchParams); ["q","area","status","sort"].forEach(key=>next.delete(key)); setSearchParams(next,{replace:true}); };
+  const openForm = (company=null) => {
+    setError(""); setFeedback("");
+    setEmpresaEdit(company);
+    if (company) setEditFormData({nome_empresa:company.nome_empresa || "",area_atuacao:company.area_atuacao || "",logo_url:company.logo_url || ""});
+    setFormMode(company ? "edit" : "create");
   };
-
-  const handleLogoUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData({ ...formData, logo_url: reader.result });
-      };
-      reader.readAsDataURL(file);
-    }
+  const closeForm = () => { setFormMode(null); setError(""); setFormData(SETUP_DEFAULT); };
+  const handleChange = e => { const {name,value}=e.target; if (formMode==="edit") setEditFormData(prev=>({...prev,[name]:value})); else setFormData(prev=>({...prev,[name]:value})); };
+  const handleLogoUpload = e => {
+    const file=e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend=()=> { if (formMode==="edit") setEditFormData(prev=>({...prev,logo_url:reader.result})); else setFormData(prev=>({...prev,logo_url:reader.result})); };
+    reader.readAsDataURL(file);
   };
-
-  const handleEditChange = (e) => {
-    const { name, value } = e.target;
-    setEditFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleEditLogoUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setEditFormData({ ...editFormData, logo_url: reader.result });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const openEditModal = (emp) => {
-    setEmpresaEdit(emp);
-    setEditFormData({
-      nome_empresa: emp.nome_empresa || "",
-      area_atuacao: emp.area_atuacao || "",
-      logo_url: emp.logo_url || ""
-    });
-    setShowEditModal(true);
-  };
-
-  const handleEditSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
+  const handleSubmit = async e => {
+    e.preventDefault(); setError(""); setSubmitting(true);
     try {
-      await api.put(`/empresas/${empresaEdit.id}`, editFormData);
-      setShowEditModal(false);
-      fetchEmpresas();
-    } catch (err) {
-      alert("Erro ao atualizar cliente.");
-      console.error(err);
-    } finally {
-      setSubmitting(false);
-    }
+      if (formMode==="edit") await api.put(`/empresas/${empresaEdit.id}`,editFormData);
+      else await api.post("/empresas/setup",formData);
+      setFeedback(formMode==="edit" ? "Dados da empresa atualizados." : "Empresa cadastrada com sucesso.");
+      closeForm(); await fetchEmpresas();
+    } catch { setError("Não foi possível salvar a empresa. Verifique os campos e tente novamente."); }
+    finally { setSubmitting(false); }
   };
-
-  const handleDelete = async (empId) => {
-    if (window.confirm("Tem certeza? Isso apagará todos os dados deste cliente!")) {
-      try {
-        await api.delete(`/empresas/${empId}`);
-        fetchEmpresas();
-      } catch (err) {
-        alert("Erro ao excluir cliente.");
-        console.error(err);
-      }
-    }
+  const prepareAction = (type, company) => { setActionError(""); setPendingAction({type,company}); };
+  const handleDelete = async company => {
+    await api.delete(`/empresas/${company.id}`);
+    setPendingAction(null); setFeedback("Empresa excluída."); await fetchEmpresas();
   };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-
-    try {
-      await api.post("/empresas/setup", formData);
-      setShowModal(false);
-      setFormData({
-        nome_empresa: "",
-        area_atuacao: "",
-        logo_url: "",
-        ia_personalidade: "",
-        ia_regras_negocio: "",
-        admin_nome: "",
-        admin_email: "",
-        admin_senha: ""
-      });
-      fetchEmpresas(); // Recarrega a lista
-    } catch (err) {
-      console.error("Erro no setup:", err);
-      // Extrai detalhe exato do backend se houver (ex: Erro banco de dados: ...)
-      if (err.response && err.response.data && err.response.data.detail) {
-        setError(err.response.data.detail);
-      } else {
-        setError("Erro de conexão ao servidor. Tente novamente.");
-      }
-    } finally {
-      setSubmitting(false);
-    }
+  const handleImpersonate = async emp => {
+    const res = await api.post(`/auth/impersonate/${emp.id}`);
+    const data = res.data;
+    const currentUser = localStorage.getItem("user");
+    const currentToken = localStorage.getItem("token");
+    clearImpersonation();
+    if (currentUser) localStorage.setItem("original_user", currentUser);
+    if (currentToken && currentToken !== "null" && currentToken !== "undefined") localStorage.setItem("original_token", currentToken);
+    localStorage.setItem("impersonating", "true");
+    localStorage.setItem("impersonating_empresa", emp.nome_empresa);
+    localStorage.setItem("impersonated_empresa_id", emp.id);
+    if (data?.usuario?.id) localStorage.setItem("impersonated_user_id", data.usuario.id);
+    window.location.href = "/painel";
   };
-
-  const handleConexaoDisparoUpdated = (nextConfig) => {
-    setEmpresaSelecionada((prev) => (
-      prev ? { ...prev, ...nextConfig } : prev
-    ));
-    setEmpresas((prev) => prev.map((empresa) => (
-      empresa.id === empresaSelecionada?.id
-        ? { ...empresa, ...nextConfig }
-        : empresa
-    )));
+  const confirmAction = async () => {
+    if (!pendingAction || actionBusy) return;
+    setActionBusy(true); setActionError("");
+    try { if (pendingAction.type==="delete") await handleDelete(pendingAction.company); else await handleImpersonate(pendingAction.company); }
+    catch { setActionError("Não foi possível concluir a ação. Tente novamente."); }
+    finally { setActionBusy(false); }
   };
+  const lastRun=workerStatus?.ultima_execucao ? new Date(workerStatus.ultima_execucao) : null;
+  const knownRun=lastRun && Number.isFinite(lastRun.getTime());
+  const workerActive=knownRun && Date.now()-lastRun.getTime()<3*60*1000;
+  const metric = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? "Não informado" : Number(value);
 
-  const handleSaveCredenciais = async (e) => {
-    e.preventDefault();
-    try {
-      setSavingCredenciais(true);
-      await api.put(`/empresas/${empresaSelecionada.id}/credenciais`, credenciais);
-      alert("Credenciais salvas com sucesso!");
-      setShowCredenciaisModal(false);
-      fetchEmpresas();
-    } catch (err) {
-      alert("Erro ao salvar credenciais");
-      console.error(err);
-    } finally {
-      setSavingCredenciais(false);
-    }
-  };
-
-  const handleSaveConfigIA = async (e) => {
-    e.preventDefault();
-    setSavingConfigIA(true);
-    try {
-      await api.put(`/empresas/${empresaSelecionada.id}/ia-config`, configIAData);
-      alert("Configuração do Agente salva com sucesso!");
-      setShowConfigIAModal(false);
-    } catch (err) {
-      console.error(err);
-      alert("Erro ao salvar a configuração do Agente.");
-    } finally {
-      setSavingConfigIA(false);
-    }
-  };
-
-  const handleImpersonate = async (emp) => {
-    try {
-      const res = await api.post(`/auth/impersonate/${emp.id}`);
-      const data = res.data;
-      const currentUser = localStorage.getItem("user");
-      const currentToken = localStorage.getItem("token");
-
-      // Mantém a identidade autenticada original e troca apenas o tenant ativo.
-      clearImpersonation();
-      if (currentUser) {
-        localStorage.setItem("original_user", currentUser);
-      }
-      if (currentToken && currentToken !== "null" && currentToken !== "undefined") {
-        localStorage.setItem("original_token", currentToken);
-      }
-      localStorage.setItem("impersonating", "true");
-      localStorage.setItem("impersonating_empresa", emp.nome_empresa);
-      localStorage.setItem("impersonated_empresa_id", emp.id);
-      if (data?.usuario?.id) {
-        localStorage.setItem("impersonated_user_id", data.usuario.id);
-      }
-
-      window.location.href = "/painel"; // Full reload to clear states and trigger layout update
-    } catch (err) {
-      console.error(err);
-      alert(err.response?.data?.detail || "Erro ao tentar personificar cliente.");
-    }
-  };
-
-  return (
-    <div className="fm-companies space-y-6">
-      <PageHeader
-        title="Clientes / Empresas"
-        description="Gerencie tenants, acessos, credenciais, base de conhecimento e configurações operacionais."
-        icon={Building}
-        eyebrow="Super Admin"
-        actions={
-          <ActionButton
-            type="button"
-          onClick={() => setShowModal(true)}
-            icon={Plus}
-          >
-            Novo cliente
-          </ActionButton>
-        }
-      />
-
-      <div className="fm-companies-health">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-              <Activity size={16} className="text-indigo-600" />
-              Saúde do Sistema
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">Monitoramento do Worker de Follow-up</p>
-          </div>
-          <button
-            type="button"
-            onClick={fetchWorkerStatus}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Atualizar
-          </button>
+  return <div className="fm-companies space-y-6">
+    <PageHeader eyebrow="Super Admin" title={formMode ? formMode==="edit" ? "Editar empresa" : "Nova empresa" : "Clientes / Empresas"} icon={Building} description={formMode ? "Organize os dados e acessos da empresa." : "Encontre uma empresa e gerencie seus usuários, agente, canais e configurações."} actions={formMode ? <ActionButton type="button" variant="secondary" icon={ArrowLeft} onClick={closeForm} disabled={submitting}>Voltar à lista</ActionButton> : <ActionButton type="button" icon={Plus} onClick={()=>openForm()}>Novo cliente</ActionButton>} />
+    {feedback && <div role="status"><InfoBanner tone="success">{feedback}</InfoBanner></div>}
+    {formMode ? <CompanyForm editing={formMode==="edit"} value={formMode==="edit" ? editFormData : formData} onChange={handleChange} onLogo={handleLogoUpload} busy={submitting} error={error} onSubmit={handleSubmit} onCancel={closeForm} /> : <>
+      <SectionCard title="Carteira de empresas" description="Busque pelo nome, área ou identificador. Filtros são aplicados à lista cadastrada." actions={<ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={fetchEmpresas} disabled={loading}>Atualizar lista</ActionButton>}>
+        <div className="fm-company-filters">
+          <label className="fm-company-field">Buscar empresas<Input type="search" value={filters.query} onChange={e=>updateFilter("q",e.target.value)} placeholder="Nome, área ou ID" /></label>
+          <label className="fm-company-field">Área de atuação<Select value={filters.area} onChange={e=>updateFilter("area",e.target.value)}><option value="">Todas as áreas</option>{companyAreas(empresas).map(area=><option key={area}>{area}</option>)}</Select></label>
+          <label className="fm-company-field">Status cadastral<Select value={filters.status} onChange={e=>updateFilter("status",e.target.value)}><option value="">Todos os status</option><option value="active">Ativa</option><option value="inactive">Inativa</option><option value="unknown">Não informado</option></Select></label>
+          <label className="fm-company-field">Ordenar por<Select value={filters.sort} onChange={e=>updateFilter("sort",e.target.value)}><option value="name">Nome</option><option value="area">Área de atuação</option></Select></label>
         </div>
-        <div className="mt-4">
-          {loadingWorkerStatus ? (
-            <p className="text-xs text-slate-500">Carregando status do worker...</p>
-          ) : (() => {
-              const ultima = workerStatus?.ultima_execucao ? new Date(workerStatus.ultima_execucao) : null;
-              const ativo = !!(ultima && (Date.now() - ultima.getTime()) < 3 * 60 * 1000);
-              return (
-                <div className="flex flex-wrap items-center gap-3 text-xs">
-                  <StatusBadge tone={ativo ? "active" : "danger"}>
-                    {ativo ? "Worker Ativo" : "Worker Inativo"}
-                  </StatusBadge>
-                  <span className="text-slate-600">
-                    Leads processados hoje: <strong>{Number(workerStatus?.leads_processados_hoje || 0)}</strong>
-                  </span>
-                  <span className="text-slate-500">
-                    Erros recentes: <strong>{Number(workerStatus?.erros_recentes || 0)}</strong>
-                  </span>
-                  <span className="text-slate-500">
-                    Lock: {workerStatus?.status_lock || "N/A"}
-                  </span>
-                </div>
-              );
-            })()}
-        </div>
-        <div className="mt-3 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
-          {getLastUpdateLabel()}
-        </div>
-      </div>
-
-      <section className="fm-companies-registry" aria-label="Clientes cadastrados">
-        <div className="fm-companies-registry-heading"><h2>Carteira de clientes</h2><p>Gestão de acessos e operação por empresa</p></div>
-        <div className="fm-companies-table-scroll" tabIndex={0} role="region" aria-label="Tabela de clientes">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead className="border-b border-slate-200 bg-slate-50 font-semibold uppercase tracking-wider text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Cliente</th>
-                <th className="px-4 py-3">Área</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Tenant ID</th>
-                <th className="px-4 py-3 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
-              {loading ? (
-                <tr>
-                  <td colSpan="5" className="px-4 py-8 text-center text-slate-500">Carregando empresas...</td>
-                </tr>
-              ) : empresas.length === 0 ? (
-                <tr>
-                  <td colSpan="5" className="px-4 py-8 text-center text-slate-500">Nenhum cliente cadastrado.</td>
-                </tr>
-              ) : (
-                empresas.map((emp) => (
-                  <tr key={emp.id} className="transition-colors hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium">
-                      <div className="flex items-center space-x-3">
-                      {emp.logo_url ? (
-                        <img
-                          src={emp.logo_url}
-                          alt={`Logo de ${emp.nome_empresa}`}
-                          className="w-7 h-7 rounded-md object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-50 text-indigo-700">
-                          <Building size={14} />
-                        </div>
-                      )}
-                      <span className="text-sm">{emp.nome_empresa}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-500">
-                      <div className="flex items-center space-x-2">
-                        {emp.area_atuacao ? (
-                          <>
-                            <MapPin size={12} />
-                            <span>{emp.area_atuacao}</span>
-                          </>
-                        ) : (
-                          <span className="italic text-slate-400">Não informada</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge tone="active">Ativo</StatusBadge>
-                    </td>
-                    <td className="max-w-[180px] truncate px-4 py-3 font-mono text-[11px] text-slate-400">
-                      {emp.id}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <button 
-                          onClick={() => navigate(`/admin/empresas/${emp.id}`)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
-                          title="Gerenciar Empresa"
-                        >
-                          Gerenciar <ArrowRight size={13} />
-                        </button>
-                        <button 
-                          onClick={() => handleImpersonate(emp)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700"
-                          title="Acessar Painel (Impersonate)"
-                        >
-                          <UserCheck size={14} />
-                        </button>
-                        <button 
-                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=agente`)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-purple-50 hover:text-purple-700"
-                          title="Configuração do Agente"
-                        >
-                          <Brain size={14} />
-                        </button>
-                        <button 
-                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=conhecimento`)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-orange-50 hover:text-orange-700"
-                          title="Treinamento RAG"
-                        >
-                          <FileText size={14} />
-                        </button>
-                        <button 
-                          onClick={() => navigate(`/admin/empresas/${emp.id}?tab=canais`)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
-                          title="Configurar Integrações"
-                        >
-                          <Settings size={14} />
-                        </button>
-                        <button 
-                          onClick={() => openEditModal(emp)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
-                          title="Editar Cliente"
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(emp.id)}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 p-1.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-700"
-                          title="Excluir Cliente"
-                        >
-                          <Trash size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Modal Novo Cliente */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
-              <h2 className="text-xl font-bold text-white tracking-tight">Setup de Novo Cliente</h2>
-              <button onClick={() => setShowModal(false)} aria-label="Fechar novo cliente" className="text-gray-400 hover:text-white transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto custom-scrollbar">
-              {error && (
-                <div className="mb-6 p-3 bg-red-900/30 border border-red-800 text-red-300 rounded-lg text-sm">
-                  {error}
-                </div>
-              )}
-              
-              <form id="setup-form" onSubmit={handleSubmit} className="space-y-6">
-                
-                {/* Dados da Empresa */}
-                <div>
-                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <Building size={16} /> Dados da Empresa
-                  </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome da Empresa *</label>
-                      <input 
-                        required name="nome_empresa" value={formData.nome_empresa} onChange={handleChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                        placeholder="Ex: Clínica Sorriso"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Área de Atuação</label>
-                      <input 
-                        name="area_atuacao" value={formData.area_atuacao} onChange={handleChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                        placeholder="Ex: Saúde / Odontologia"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
-                      <div className="flex items-center gap-4 mt-1">
-                        {formData.logo_url && (
-                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
-                            <img src={formData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
-                          </div>
-                        )}
-                        <input
-                          type="file"
-                          accept=".png, .jpg, .jpeg, .svg"
-                          onChange={handleLogoUpload}
-                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-800 my-2"></div>
-
-                {/* Configuração Inicial da IA */}
-                <div>
-                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <Brain size={16} /> Instruções da IA
-                  </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Identidade e Tom de Voz</label>
-                      <textarea
-                        name="ia_personalidade"
-                        value={formData.ia_personalidade}
-                        onChange={handleChange}
-                        rows={3}
-                        placeholder="Ex: Você é a Gabi, consultora da clínica. Fale de forma acolhedora, empática e use emojis curtos."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Diretrizes de Atendimento e Vendas</label>
-                      <textarea
-                        name="ia_regras_negocio"
-                        value={formData.ia_regras_negocio}
-                        onChange={handleChange}
-                        rows={3}
-                        placeholder="Ex: Nunca dê descontos. Sempre tente descobrir o curso de interesse. Responda dúvidas de forma direta."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-800 my-2"></div>
-
-                {/* Dados do Admin */}
-                <div>
-                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <User size={16} /> Dados do Administrador
-                  </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Responsável *</label>
-                      <input 
-                        required name="admin_nome" value={formData.admin_nome} onChange={handleChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                        placeholder="João da Silva"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Email de Login *</label>
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <LogIn size={16} className="text-gray-500" />
-                        </div>
-                        <input 
-                          type="email" required name="admin_email" value={formData.admin_email} onChange={handleChange}
-                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                          placeholder="joao@clinica.com"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Senha Inicial *</label>
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <KeyRound size={16} className="text-gray-500" />
-                        </div>
-                        <input 
-                          type="text" required name="admin_senha" value={formData.admin_senha} onChange={handleChange}
-                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                          placeholder="Senha de acesso"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-              </form>
-            </div>
-            
-            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3">
-              <button 
-                type="button" onClick={() => setShowModal(false)}
-                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
-                disabled={submitting}
-              >
-                Cancelar
-              </button>
-              <button 
-                type="submit" form="setup-form" disabled={submitting}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {submitting ? "Criando ambiente..." : "Concluir Setup"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Editar Cliente */}
-      {showEditModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
-              <h2 className="text-xl font-bold text-white tracking-tight">Editar Cliente</h2>
-              <button onClick={() => setShowEditModal(false)} aria-label="Fechar edição do cliente" className="text-gray-400 hover:text-white transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6">
-              <form id="edit-form" onSubmit={handleEditSubmit} className="space-y-6">
-                <div>
-                  <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <Building size={16} /> Dados da Empresa
-                  </h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Nome da Empresa *</label>
-                      <input 
-                        required name="nome_empresa" value={editFormData.nome_empresa} onChange={handleEditChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Área de Atuação</label>
-                      <input 
-                        name="area_atuacao" value={editFormData.area_atuacao} onChange={handleEditChange}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Logo da Empresa (White-Label)</label>
-                      <div className="flex items-center gap-4 mt-1">
-                        {editFormData.logo_url && (
-                          <div className="h-12 w-12 rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center">
-                            <img src={editFormData.logo_url} alt="Logo Preview" className="max-h-full max-w-full object-contain" />
-                          </div>
-                        )}
-                        <input
-                          type="file"
-                          accept=".png, .jpg, .jpeg, .svg"
-                          onChange={handleEditLogoUpload}
-                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">Selecione uma imagem para personalizar o painel deste cliente.</p>
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
-            
-            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3">
-              <button 
-                type="button" onClick={() => setShowEditModal(false)}
-                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
-                disabled={submitting}
-              >
-                Cancelar
-              </button>
-              <button 
-                type="submit" form="edit-form" disabled={submitting}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {submitting ? "Salvando..." : "Salvar Alterações"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL INTEGRAÇÕES E CONEXÕES */}
-      {showCredenciaisModal && empresaSelecionada && (
-        <div className="fixed inset-0 bg-gray-900/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-              <div>
-                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                  <Settings className="text-gray-500" size={24} />
-                  Integrações e Canais
-                </h2>
-                <p className="text-xs text-gray-500 mt-1">Empresa: {empresaSelecionada.nome_empresa}</p>
-              </div>
-              <button 
-                onClick={() => setShowCredenciaisModal(false)}
-                className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="border-b border-gray-100 px-6 pt-4">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveIntegracaoTab("conexoes")}
-                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
-                    activeIntegracaoTab === "conexoes"
-                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  Canais / Conexões
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveIntegracaoTab("openai")}
-                  className={`rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
-                    activeIntegracaoTab === "openai"
-                      ? "bg-indigo-50 text-indigo-700 border border-b-white border-indigo-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  OpenAI (cliente)
-                </button>
-              </div>
-            </div>
-
-            <div className="max-h-[80vh] overflow-y-auto p-6">
-              {activeIntegracaoTab === "conexoes" ? (
-                <EmpresaConexoesManager
-                  empresaId={empresaSelecionada.id}
-                  empresaNome={empresaSelecionada.nome_empresa}
-                  conexaoDisparoId={empresaSelecionada.conexao_disparo_id}
-                  disparoDelayMin={empresaSelecionada.disparo_delay_min}
-                  disparoDelayMax={empresaSelecionada.disparo_delay_max}
-                  onConexaoDisparoUpdated={handleConexaoDisparoUpdated}
-                />
-              ) : (
-                <form onSubmit={handleSaveCredenciais} className="space-y-6">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    O WhatsApp (Evolution) é provisionado pelo AgenteOS em <strong>Canais / Conexões</strong>. Aqui você pode opcionalmente definir uma chave OpenAI dedicada a esta empresa.
-                  </div>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-1">
-                        Chave da OpenAI (Opcional - Chave do Cliente)
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="sk-..."
-                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        value={credenciais.openai_api_key}
-                        onChange={(e) => setCredenciais({...credenciais, openai_api_key: e.target.value})}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-8 flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={savingCredenciais}
-                      className="bg-gray-900 hover:bg-black text-white px-6 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                    >
-                      {savingCredenciais ? (
-                        <><RefreshCw size={18} className="animate-spin" /> Salvando...</>
-                      ) : (
-                        "Salvar Integração"
-                      )}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL CONFIGURAÇÃO IA */}
-      {showConfigIAModal && empresaSelecionada && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="fm-company-dialog bg-gray-900 border border-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-6 py-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
-              <div>
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  <Brain className="text-purple-500" size={24} />
-                  Configuração da IA
-                </h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  Empresa: {empresaSelecionada.nome_empresa} — identidade, modelos e regras do Agente de Atendimento.
-                </p>
-              </div>
-              <button 
-                onClick={() => setShowConfigIAModal(false)}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto custom-scrollbar">
-              {loadingConfigIA ? (
-                <div className="flex justify-center items-center py-10 text-gray-400">
-                  <RefreshCw size={24} className="animate-spin" />
-                </div>
-              ) : (
-                <form id="config-ia-form" onSubmit={handleSaveConfigIA} className="space-y-6">
-                  <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4 space-y-4">
-                    <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider">
-                      Identidade e regras da empresa
-                    </h3>
-                    <p className="text-xs text-gray-500 leading-relaxed">
-                      Contexto usado pelo Agente de Atendimento. Ajuste tom e políticas comerciais
-                      no detalhe da empresa para manter a configuração em um único lugar.
-                    </p>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Personalidade / tom de voz</label>
-                      <textarea
-                        value={configIAData.ia_personalidade}
-                        onChange={(e) => setConfigIAData({ ...configIAData, ia_personalidade: e.target.value })}
-                        rows={6}
-                        placeholder="Ex.: Tom acolhedor, uso moderado de emojis, como se fosse o consultor da marca."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Regras de negócio e diretrizes</label>
-                      <textarea
-                        value={configIAData.ia_regras_negocio}
-                        onChange={(e) => setConfigIAData({ ...configIAData, ia_regras_negocio: e.target.value })}
-                        rows={6}
-                        placeholder="Ex.: Não prometer prazos sem confirmar; sempre coletar e-mail antes de enviar proposta."
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Nome do Agente Principal</label>
-                    <input
-                      type="text"
-                      value={configIAData.nome_agente}
-                      onChange={(e) => setConfigIAData({...configIAData, nome_agente: e.target.value})}
-                      placeholder="Ex: Assistente Virtual"
-                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Mensagem de Saudação Inicial</label>
-                    <textarea
-                      value={configIAData.mensagem_saudacao}
-                      onChange={(e) => setConfigIAData({...configIAData, mensagem_saudacao: e.target.value})}
-                      rows={2}
-                      placeholder="Ex: Olá! Sou o {nome_agente}, como posso te ajudar hoje?"
-                      className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all resize-y"
-                    />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">Modelo padrão (LLM)</label>
-                      <select
-                        value={configIAData.modelo_ia}
-                        onChange={(e) => setConfigIAData({...configIAData, modelo_ia: e.target.value})}
-                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-purple-600 focus:border-purple-600 outline-none transition-all"
-                      >
-                        {modelosDisponiveis.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-800 space-y-4">
-                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
-                      Parâmetros de roteamento
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Certeza</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={configIAData.limite_certeza}
-                          onChange={(e) => setConfigIAData({...configIAData, limite_certeza: parseFloat(e.target.value) || 0})}
-                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-400 mb-1">Limite de Dúvida</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={configIAData.limite_duvida}
-                          onChange={(e) => setConfigIAData({...configIAData, limite_duvida: parseFloat(e.target.value) || 0})}
-                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-400 mb-1">Máx. Agentes de Desempate</label>
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={configIAData.max_agentes_desempate}
-                          onChange={(e) => setConfigIAData({...configIAData, max_agentes_desempate: parseInt(e.target.value, 10) || 1})}
-                          className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 outline-none"
-                        />
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      O fluxo produtivo usa o Agente de Atendimento e as ferramentas comerciais configuradas para o tenant.
-                    </p>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-800 space-y-4">
-                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
-                       Follow-up Automático
-                    </h3>
-                    
-                    <label className="flex items-center gap-3 p-3 bg-gray-950 border border-gray-800 rounded-xl cursor-pointer hover:border-indigo-500 transition-colors">
-                      <input
-                        type="checkbox"
-                        className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-900 border-gray-700"
-                        checked={configIAData.followup_ativo}
-                        onChange={(e) => setConfigIAData({...configIAData, followup_ativo: e.target.checked})}
-                      />
-                      <div>
-                        <p className="text-sm font-semibold text-white">Ativar Reengajamento (Follow-up)</p>
-                        <p className="text-xs text-gray-400 mt-0.5">Chave-mestra global: liga ou desliga o motor de follow-up para esta empresa.</p>
-                      </div>
-                    </label>
-
-                    <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/30 p-3">
-                      <p className="text-xs text-indigo-200">
-                        As mensagens e os tempos de espera agora são configurados no menu <span className="font-semibold">Cadências / Follow-up</span>.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-800 space-y-4">
-                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">
-                      Etapas do Funil (Tags)
-                    </h3>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={novaEtapaNome}
-                        onChange={(e) => setNovaEtapaNome(e.target.value)}
-                        placeholder="Nome da nova etapa"
-                        className="flex-1 bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition-all"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleCriarEtapaFunil}
-                        disabled={salvandoEtapaFunil || !String(novaEtapaNome || "").trim()}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        + Nova Etapa
-                      </button>
-                    </div>
-
-                    {loadingEtapasFunil ? (
-                      <p className="text-sm text-gray-400">Carregando etapas...</p>
-                    ) : etapasFunil.length === 0 ? (
-                      <p className="text-sm text-gray-500">Nenhuma etapa de funil cadastrada.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {etapasFunil.map((etapa) => (
-                          <div
-                            key={etapa.id}
-                            className="flex items-center justify-between gap-3 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-sm text-white truncate">{etapa.nome}</p>
-                              <p className="text-xs text-gray-400">Ordem: {etapa.ordem ?? "-"}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleEditarEtapaFunil(etapa)}
-                                className="text-gray-300 hover:text-indigo-400 transition-colors p-1"
-                                title="Editar etapa"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleExcluirEtapaFunil(etapa)}
-                                className="text-gray-300 hover:text-red-500 transition-colors p-1"
-                                title="Excluir etapa"
-                              >
-                                <Trash size={14} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </form>
-              )}
-            </div>
-            
-            <div className="px-6 py-4 bg-gray-950 border-t border-gray-800 flex justify-end space-x-3 mt-auto shrink-0">
-              <button 
-                type="button" onClick={() => setShowConfigIAModal(false)}
-                className="px-4 py-2 text-gray-300 font-medium hover:text-white transition-colors"
-                disabled={savingConfigIA}
-              >
-                Cancelar
-              </button>
-              <button 
-                type="submit" form="config-ia-form" disabled={savingConfigIA || loadingConfigIA}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {savingConfigIA ? <><RefreshCw size={16} className="animate-spin" /> Salvando...</> : "Salvar Configurações"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL TREINAMENTO RAG */}
-      {showRagModal && empresaSelecionada && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl shadow-xl w-full max-w-6xl overflow-hidden flex flex-col max-h-[95vh]">
-            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-white">
-              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                <Brain className="text-blue-600" size={24} />
-                Treinamento RAG: {empresaSelecionada.nome_empresa}
-              </h2>
-              <button onClick={() => setShowRagModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto custom-scrollbar bg-gray-50">
-              {/* Wrapped the RAG Manager in the modal */}
-              <RAGManager empresaId={empresaSelecionada.id} />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+        <div className="fm-company-results"><p role="status">{loading ? "Carregando empresas..." : listError ? "Lista indisponível" : `${visible.length} de ${empresas.length} empresas`}</p>{(filters.query || filters.area || filters.status || filters.sort!=="name") && <ActionButton type="button" variant="ghost" onClick={clearFilters}>Limpar filtros</ActionButton>}</div>
+        {loading ? <LoadingState label="Carregando empresas..." /> : listError ? <ErrorState title="Lista de empresas indisponível" description={listError} action={<ActionButton type="button" onClick={fetchEmpresas}>Tentar novamente</ActionButton>} /> : visible.length===0 ? <EmptyState title={empresas.length ? "Nenhuma empresa encontrada" : "Nenhum cliente cadastrado"} description={empresas.length ? "Revise a busca ou limpe os filtros para visualizar sua carteira." : "Cadastre a primeira empresa para configurar seus acessos e atendimento."} action={<ActionButton type="button" onClick={empresas.length ? clearFilters : ()=>openForm()}>{empresas.length ? "Limpar filtros" : "Novo cliente"}</ActionButton>} /> : <Table label="Empresas cadastradas" className="fm-company-table">
+          <thead><tr><th scope="col">Empresa / área</th><th scope="col">Status cadastral</th><th scope="col">Gestão</th></tr></thead>
+          <tbody>{visible.map(emp=>{ const state=companyStatus(emp); return <tr key={emp.id}>
+            <td><div className="fm-company-identity">{emp.logo_url ? <img src={emp.logo_url} alt={`Logo de ${emp.nome_empresa}`} /> : <Building size={22} aria-hidden="true" />}<div><Link className="fm-company-name" to={`/admin/empresas/${emp.id}`} state={{companiesReturn:`/admin${searchParams.size ? `?${searchParams}` : ""}`}}>{emp.nome_empresa}</Link><p>{emp.area_atuacao || "Área não informada"}</p><span className="fm-company-id">{emp.id}</span></div></div></td>
+            <td><StatusBadge tone={state.tone}>{state.label}</StatusBadge></td>
+            <td><div className="fm-company-actions"><ActionButton type="button" variant="secondary" icon={ArrowRight} onClick={()=>navigate(`/admin/empresas/${emp.id}`,{state:{companiesReturn:`/admin${searchParams.size ? `?${searchParams}` : ""}`}})}>Gerenciar</ActionButton><details className="fm-company-menu"><summary aria-label={`Ações de ${emp.nome_empresa}`}>Mais ações</summary><div className="fm-company-menu-items">
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=usuarios`}><Users size={16} aria-hidden="true" />Usuários e acessos</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=agente`}><Brain size={16} aria-hidden="true" />Configuração do agente</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=conhecimento`}><FileText size={16} aria-hidden="true" />Base de conhecimento</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=canais`}><KeyRound size={16} aria-hidden="true" />Canais e credenciais</Link>
+              <Link to={`/admin/configuracoes/integracoes/jev?empresa=${encodeURIComponent(emp.id)}`}><Settings size={16} aria-hidden="true" />Integração JEV</Link>
+              <ActionButton type="button" variant="ghost" icon={Pencil} onClick={()=>openForm(emp)}>Editar cliente</ActionButton>
+              <ActionButton type="button" variant="ghost" icon={UserCheck} onClick={()=>prepareAction("impersonate",emp)}>Acessar painel da empresa</ActionButton>
+              <ActionButton type="button" variant="danger" icon={Trash} onClick={()=>prepareAction("delete",emp)}>Excluir cliente</ActionButton>
+            </div></details></div></td>
+          </tr>; })}</tbody>
+        </Table>}
+      </SectionCard>
+      <details className="fm-companies-health"><summary><Activity size={16} aria-hidden="true" />Worker de follow-up <StatusBadge tone={!knownRun ? "default" : workerActive ? "active" : "warning"}>{loadingWorkerStatus ? "Consultando" : !workerStatus ? "Status indisponível" : !knownRun ? "Sem execução informada" : workerActive ? "Execução recente" : "Sem execução recente"}</StatusBadge></summary><div className="fm-company-worker"><p className="fm-helper">Informações disponíveis do worker. Não representam a saúde de todas as integrações.</p><p>Leads processados hoje: <strong>{metric(workerStatus?.leads_processados_hoje)}</strong> · Erros recentes: <strong>{metric(workerStatus?.erros_recentes)}</strong> · Lock: {workerStatus?.status_lock || "Não informado"}</p><p className="fm-helper">{lastUpdate ? `Consultado às ${lastUpdate.toLocaleTimeString("pt-BR")}` : "Consulta ainda não concluída"}</p><ActionButton type="button" variant="secondary" onClick={()=>fetchWorkerStatus()} disabled={loadingWorkerStatus}>Atualizar status</ActionButton></div></details>
+    </>}
+    {pendingAction && <AdminDialog title={pendingAction.type==="delete" ? "Excluir empresa" : "Acessar painel da empresa"} busy={actionBusy} onClose={()=>setPendingAction(null)} footer={<><ActionButton type="button" variant="secondary" onClick={()=>setPendingAction(null)} disabled={actionBusy}>Cancelar</ActionButton><ActionButton type="button" variant={pendingAction.type==="delete" ? "danger" : "primary"} onClick={confirmAction} disabled={actionBusy}>{actionBusy ? "Aguarde..." : pendingAction.type==="delete" ? "Confirmar exclusão" : "Acessar painel"}</ActionButton></>}>
+      <InfoBanner tone="warning">{pendingAction.type==="delete" ? <>Excluir <strong>{pendingAction.company.nome_empresa}</strong> apagará todos os dados deste cliente. Esta ação não pode ser desfeita.</> : <>Você acessará o painel de <strong>{pendingAction.company.nome_empresa}</strong> como Super Admin. As ações realizadas pertencem a esta empresa. Use “Sair e Voltar” no painel para retornar à administração.</>}</InfoBanner>
+      {actionError && <p role="alert" className="fm-helper">{actionError}</p>}
+    </AdminDialog>}
+  </div>;
 }

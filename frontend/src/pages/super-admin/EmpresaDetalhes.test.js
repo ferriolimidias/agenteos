@@ -54,7 +54,8 @@ test("main model select uses canonical IDs and friendly labels", () => {
   assert.match(modelBlock, /<select/);
   assert.match(modelBlock, /option\.value/);
   assert.match(modelBlock, /option\.label/);
-  assert.match(companiesSource, /option\.value/);
-  assert.match(companiesSource, /option\.label/);
+  // UX03 removed the unreachable duplicate list modal; the canonical select stays in details.
+  assert.match(companiesSource, /tab=agente/);
+  assert.doesNotMatch(companiesSource, /showConfigIAModal/);
   assert.doesNotMatch(modelBlock, /<input/);
 });

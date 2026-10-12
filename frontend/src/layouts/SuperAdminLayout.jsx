@@ -3,10 +3,15 @@ import { Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { BrainCircuit, Settings, Building, LogOut, ShieldCheck, Menu, X } from "lucide-react";
 import api from "../services/api";
 import { shellStyles } from "../utils/uiStyles";
+import "../styles/admin-navigation.css";
 
 export default function SuperAdminLayout() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const companiesActive = location.pathname.replace(/\/$/, "") === "/admin" || location.pathname.startsWith("/admin/empresas/");
+  const companyPage = location.pathname.startsWith("/admin/empresas/");
+  const jevPage = location.pathname.startsWith("/admin/configuracoes/integracoes/jev");
+  const contextTitle = companyPage ? "Detalhes da empresa" : jevPage ? "Integração JEV" : location.pathname.startsWith("/admin/configuracoes") ? "Configurações globais" : location.pathname.startsWith("/admin/agentes") ? "Agentes por empresa" : "Empresas";
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
 
@@ -98,18 +103,23 @@ export default function SuperAdminLayout() {
         </div>
         
         <nav className="fm-sidebar-nav" aria-label="Menu principal" onClick={(event) => { if (event.target.closest("a")) setMenuOpen(false); }}>
-          <p className={shellStyles.navSection}>Plataforma</p>
-          <NavLink to="/admin/" end className={({ isActive }) => `${shellStyles.navItem} ${isActive || location.pathname.replace(/\/$/, "") === "/admin" ? shellStyles.navActive : shellStyles.navInactive}`}>
-            <Building size={16} />
-            <span>Clientes / Empresas</span>
-          </NavLink>
+          <p className={shellStyles.navSection}>Gestão</p>
+          <Link to="/admin/" aria-current={companiesActive ? "page" : undefined} className={`${shellStyles.navItem} ${companiesActive ? shellStyles.navActive : shellStyles.navInactive}`}>
+            <Building size={16} aria-hidden="true" />
+            <span>Empresas</span>
+          </Link>
           <NavLink to="/admin/agentes" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
             <BrainCircuit size={16} />
-            <span>Arquitetura Global</span>
+            <span>Agentes por empresa</span>
           </NavLink>
-          <NavLink to="/admin/configuracoes" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
+          <p className={shellStyles.navSection}>Sistema e integrações</p>
+          <NavLink to="/admin/configuracoes" aria-current={jevPage ? "location" : "page"} className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
             <Settings size={16} />
             <span>Configurações Globais</span>
+          </NavLink>
+          <NavLink to="/admin/configuracoes/integracoes/jev" className={({ isActive }) => `${shellStyles.navItem} fm-admin-nav-child ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
+            <ShieldCheck size={16} aria-hidden="true" />
+            <span>Integração JEV</span>
           </NavLink>
         </nav>
         
@@ -125,10 +135,17 @@ export default function SuperAdminLayout() {
       <main className="fm-shell-main" {...(menuOpen ? { inert: "" } : {})}>
         <header className={shellStyles.topbar}>
           <button ref={menuToggleRef} type="button" className="fm-menu-toggle" aria-label="Abrir menu" aria-expanded={menuOpen} aria-controls="admin-navigation" onClick={() => setMenuOpen(true)}><Menu size={20} aria-hidden="true" /></button>
-          <div className="fm-topbar-context"><span className="fm-topbar-label">Administração da plataforma</span><span className="fm-topbar-title">{configVisual.nomeSistema}</span></div>
+          <div className="fm-topbar-context"><span className="fm-topbar-label">Administração da plataforma</span><span className="fm-topbar-title">{contextTitle}</span></div>
           <span className="fm-avatar" aria-label="Super Admin">SA</span>
         </header>
         <div id="admin-content" tabIndex={-1} className={shellStyles.content}>
+          <nav className="fm-admin-breadcrumbs" aria-label="Caminho da página">
+            <ol>
+              <li>{contextTitle === "Empresas" ? <span aria-current="page">Empresas</span> : <Link to="/admin">Empresas</Link>}</li>
+              {jevPage && <li><Link to="/admin/configuracoes">Configurações globais</Link></li>}
+              {contextTitle !== "Empresas" && <li><span aria-current="page">{contextTitle}</span></li>}
+            </ol>
+          </nav>
           <Outlet />
         </div>
       </main>

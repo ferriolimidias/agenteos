@@ -1,0 +1,9 @@
+.fm-admin-dialog-backdrop { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:var(--fm-space-4,16px); background:color-mix(in srgb,var(--fm-sidebar) 65%,transparent); }
+.fm-admin-dialog { display:flex; flex-direction:column; width:100%; max-width:560px; max-height:90dvh; background:var(--fm-raised); border:1px solid var(--fm-border); border-radius:var(--fm-radius-lg); color:var(--fm-text); box-shadow:var(--fm-shadow-raised); }
+.fm-admin-dialog > header,.fm-admin-dialog > footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 20px; flex-wrap:wrap; }
+.fm-admin-dialog > header { border-bottom:1px solid var(--fm-border); }
+.fm-admin-dialog > header h2 { font-weight:650; font-size:1.05rem; }
+.fm-admin-dialog-body { padding:20px; overflow:auto; min-height:0; }
+.fm-admin-dialog > footer { justify-content:flex-end; border-top:1px solid var(--fm-border); background:var(--fm-surface); border-radius:0 0 var(--fm-radius-lg) var(--fm-radius-lg); }
+.fm-admin-dialog input,.fm-admin-dialog select,.fm-admin-dialog textarea { max-width:100%; }
+@media (max-width:639px) { .fm-admin-dialog button { min-height:44px; } .fm-admin-dialog-body { padding:16px; } }

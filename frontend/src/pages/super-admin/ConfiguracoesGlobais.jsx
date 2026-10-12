@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Save, Settings } from "lucide-react";
 import api from "../../services/api";
-import { ActionButton, InfoBanner, LoadingState, PageHeader, SectionCard } from "../../components/ui";
+import { ActionButton, InfoBanner, Input, LoadingState, PageHeader, SectionCard } from "../../components/ui";
 
 export default function ConfiguracoesGlobais() {
   const [formData, setFormData] = useState({
@@ -13,6 +13,8 @@ export default function ConfiguracoesGlobais() {
     logo_base64: "",
   });
   const [loading, setLoading] = useState(true);
+  const [savedData, setSavedData] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -23,13 +25,15 @@ export default function ConfiguracoesGlobais() {
       setErrorMessage("");
       try {
         const response = await api.get("/admin/configuracoes");
-        setFormData({
+        const loadedData = {
           nome_sistema: response.data.nome_sistema || "",
           cor_primaria: response.data.cor_primaria || "#6366f1",
           openai_key_global: response.data.openai_key_global || "",
           favicon_base64: response.data.favicon_base64 || "",
           logo_base64: response.data.logo_base64 || "",
-        });
+        };
+        setFormData(loadedData);
+        setSavedData(loadedData);
       } catch (error) {
         const backendMessage = error?.response?.data?.detail || error?.message || "Falha ao carregar configurações.";
         setErrorMessage(`Erro ao carregar configurações: ${backendMessage}`);
@@ -39,7 +43,7 @@ export default function ConfiguracoesGlobais() {
     };
 
     carregarConfiguracoes();
-  }, []);
+  }, [loadAttempt]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -89,6 +93,7 @@ export default function ConfiguracoesGlobais() {
     setSuccessMessage("");
     try {
       await api.put("/admin/configuracoes", formData);
+      setSavedData({ ...formData });
       setSuccessMessage("Configurações salvas com sucesso.");
       window.dispatchEvent(new Event("configuracoesUpdated"));
     } catch (error) {
@@ -99,130 +104,68 @@ export default function ConfiguracoesGlobais() {
     }
   };
 
+  const cancelChanges = () => {
+    if (!savedData) return;
+    setFormData({ ...savedData });
+    setErrorMessage("");
+    setSuccessMessage("Alterações descartadas. A configuração salva foi restaurada.");
+  };
+
   return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader
-        title="Configurações Globais"
-        description="Personalize o sistema e configure as credenciais globais da API do Instagram. Segredos são somente para escrita."
-        icon={Settings}
-        eyebrow="Super Admin"
-      />
-      <SectionCard title="Integrações"><Link to="/admin/configuracoes/integracoes/jev" className="text-sm font-semibold text-indigo-700 underline">Configurar JEV por empresa · SHADOW</Link></SectionCard>
-
-        {loading && (
-          <LoadingState label="Carregando configurações..." />
-        )}
-
-        {errorMessage && (
-          <InfoBanner tone="danger">{errorMessage}</InfoBanner>
-        )}
-
-        {successMessage && (
-          <InfoBanner tone="success">{successMessage}</InfoBanner>
-        )}
-
-      <SectionCard title="Branding e integrações globais" description="Configurações aplicadas ao login, barras laterais e fallback de IA.">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Nome do Sistema</label>
-            <input
-              type="text"
-              name="nome_sistema"
-              value={formData.nome_sistema}
-              onChange={handleChange}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition-colors focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-              placeholder="Ex: Agente OS"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Favicon</label>
-            <input
-              type="file"
-              accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml"
-              onChange={handleFaviconUpload}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition-colors focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-            />
-            {formData.favicon_base64 && (
-              <div className="mt-3">
-                <img
-                  src={formData.favicon_base64}
-                  alt="Preview favicon"
-                  className="h-8 w-8 rounded border border-slate-200 bg-white p-1"
-                />
+    <div className="fm-admin-page fm-admin-settings">
+      <PageHeader title="Configurações globais" description="Gerencie a identidade visual da plataforma e a credencial global de fallback de IA." icon={Settings} eyebrow="Super Admin" />
+      <SectionCard title="Integrações por empresa" description="As configurações JEV, os usuários, os agentes e as demais integrações pertencem a cada empresa.">
+        <div className="fm-actions">
+          <Link to="/admin/configuracoes/integracoes/jev" className="fm-button fm-button-secondary">Configurar integração JEV · SHADOW</Link>
+          <Link to="/admin" className="fm-button fm-button-ghost">Gerenciar empresas e acessos</Link>
+        </div>
+      </SectionCard>
+      {loading && <LoadingState label="Carregando configurações..." />}
+      {errorMessage && <div role="alert"><InfoBanner tone="danger">{errorMessage}</InfoBanner></div>}
+      {successMessage && <div role="status" aria-live="polite"><InfoBanner tone="success">{successMessage}</InfoBanner></div>}
+      {!loading && !savedData && <ActionButton variant="secondary" onClick={() => setLoadAttempt(previous => previous + 1)}>Tentar novamente</ActionButton>}
+      {savedData && <form onSubmit={handleSubmit} className="fm-admin-page" aria-busy={saving}>
+        <fieldset className="fm-admin-fieldset" disabled={loading || saving}>
+          <legend className="sr-only">Configurações globais da plataforma</legend>
+          <div className="fm-admin-page">
+            <SectionCard title="Identidade da plataforma" description="Nome, logo e favicon aplicados no login e nas barras laterais.">
+              <div className="fm-admin-field">
+                <label htmlFor="global-system-name">Nome do sistema</label>
+                <Input id="global-system-name" type="text" name="nome_sistema" value={formData.nome_sistema} onChange={handleChange} placeholder="Ex: AgenteOS" required />
               </div>
-            )}
-            <p className="mt-2 text-xs text-slate-500">O favicon aparece na aba do navegador.</p>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Logo do Sistema</label>
-            <input
-              type="file"
-              accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml"
-              onChange={handleLogoUpload}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition-colors focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-            />
-            {formData.logo_base64 && (
-              <div className="mt-3">
-                <img
-                  src={formData.logo_base64}
-                  alt="Preview logo"
-                  className="h-12 max-w-[160px] rounded border border-slate-200 bg-white object-contain p-1"
-                />
+              <div className="fm-admin-field">
+                <label htmlFor="global-favicon">Favicon</label>
+                <Input id="global-favicon" type="file" accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml" onChange={handleFaviconUpload} aria-describedby="global-favicon-help" />
+                {formData.favicon_base64 && <img src={formData.favicon_base64} alt="Prévia do favicon" className="fm-admin-preview" width="32" height="32" />}
+                <p id="global-favicon-help" className="fm-helper">O favicon aparece na aba do navegador.</p>
               </div>
-            )}
-            <p className="mt-2 text-xs text-slate-500">A logo é aplicada na Sidebar e na tela de Login.</p>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Cor Primária (Hexadecimal)</label>
-            <div className="flex gap-4">
-              <input
-                type="color"
-                name="cor_primaria"
-                value={formData.cor_primaria}
-                onChange={handleChange}
-                className="h-12 w-16 cursor-pointer rounded-lg border border-slate-300 bg-white p-1"
-              />
-              <input
-                type="text"
-                name="cor_primaria"
-                value={formData.cor_primaria}
-                onChange={handleChange}
-                className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition-colors focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-                placeholder="#6366f1"
-                required
-              />
+              <div className="fm-admin-field">
+                <label htmlFor="global-logo">Logo do sistema</label>
+                <Input id="global-logo" type="file" accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml" onChange={handleLogoUpload} aria-describedby="global-logo-help" />
+                {formData.logo_base64 && <img src={formData.logo_base64} alt="Prévia da logo" className="fm-admin-preview" />}
+                <p id="global-logo-help" className="fm-helper">A logo é aplicada na barra lateral e no login.</p>
+              </div>
+              <div className="fm-admin-field">
+                <label htmlFor="global-primary-color">Cor primária (hexadecimal)</label>
+                <div className="fm-admin-color-field">
+                  <Input aria-label="Escolher cor primária" type="color" name="cor_primaria" value={formData.cor_primaria} onChange={handleChange} />
+                  <Input id="global-primary-color" type="text" name="cor_primaria" value={formData.cor_primaria} onChange={handleChange} placeholder="#6366f1" required />
+                </div>
+              </div>
+            </SectionCard>
+            <SectionCard title="Credencial global de IA" description="Chave utilizada como fallback global. O campo permanece protegido.">
+              <div className="fm-admin-field">
+                <label htmlFor="global-openai-key">Chave OpenAI global (fallback)</label>
+                <Input id="global-openai-key" type="password" autoComplete="new-password" name="openai_key_global" value={formData.openai_key_global} onChange={handleChange} placeholder="sk-..." />
+              </div>
+            </SectionCard>
+            <div className="fm-admin-form-actions">
+              <ActionButton type="submit" icon={Save}>{saving ? "Salvando..." : "Salvar configurações"}</ActionButton>
+              <ActionButton type="reset" variant="secondary" onClick={cancelChanges}>Descartar alterações</ActionButton>
             </div>
           </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Chave OpenAI Global (Fallback)</label>
-            <input
-              type="password"
-              name="openai_key_global"
-              value={formData.openai_key_global}
-              onChange={handleChange}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition-colors focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
-              placeholder="sk-..."
-            />
-          </div>
-
-          <div className="pt-2">
-            <ActionButton
-              type="submit"
-              disabled={saving}
-              icon={Save}
-              className="min-w-[180px]"
-            >
-              {saving ? "Salvando..." : "Salvar Configurações"}
-            </ActionButton>
-          </div>
-        </form>
-      </SectionCard>
-
+        </fieldset>
+      </form>}
     </div>
   );
 }
