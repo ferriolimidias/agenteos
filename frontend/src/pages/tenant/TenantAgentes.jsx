@@ -1,3 +1,4 @@
+import "../../styles/ux05-tools.css";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, CheckCircle2, ClipboardList, Headphones, Image, Send, Sparkles } from "lucide-react";
 import api from "../../services/api";
@@ -136,7 +137,7 @@ export default function TenantAgentes() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="ux05-tools ux05-agents space-y-6">
       <PageHeader
         title="Agente de Atendimento"
         description="Visualize a operação do agente, acompanhe capacidades ativas e solicite ajustes à equipe AgenteOS."
@@ -157,7 +158,7 @@ export default function TenantAgentes() {
         <EmptyState title="Status indisponível" description={erroCarregamento} icon={Bot} />
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="ux05-agent-overview grid gap-4 md:grid-cols-3">
             <FeatureCard
               title="Status do agente"
               description="Camada principal que responde aos clientes."
@@ -197,11 +198,11 @@ export default function TenantAgentes() {
           </div>
 
           <SectionCard title="Capacidades do agente" description="Visualização operacional das capacidades do atendimento.">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="ux05-capabilities grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {capacidades.map((capacidade) => {
                 const Icon = inferCapabilityIcon(capacidade.nome);
                 return (
-                  <div key={capacidade.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/40">
+                  <div key={capacidade.id} className="ux05-capability rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/40">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-sm font-semibold text-slate-950">{capacidade.nome}</h3>
@@ -234,13 +235,14 @@ export default function TenantAgentes() {
             Solicitação preparada no painel. Para concluir, envie pelo canal de suporte combinado com a equipe AgenteOS.
           </InfoBanner>
         ) : null}
-        <form onSubmit={registrarSolicitacao} className="mt-4 grid gap-4 lg:grid-cols-2">
+        <form onSubmit={registrarSolicitacao} className="ux05-change-request mt-4 grid gap-4 lg:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Tipo de alteração</label>
+            <label htmlFor="ux05-agent-request-type" className="mb-1 block text-sm font-medium text-slate-700">Tipo de alteração</label>
             <select
+              id="ux05-agent-request-type"
               value={solicitacao.tipo}
               onChange={(e) => setSolicitacao((prev) => ({ ...prev, tipo: e.target.value }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
+              className="fm-field w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
             >
               {TIPOS_ALTERACAO.map((tipo) => (
                 <option key={tipo} value={tipo}>{tipo}</option>
@@ -248,11 +250,12 @@ export default function TenantAgentes() {
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Urgência</label>
+            <label htmlFor="ux05-agent-request-priority" className="mb-1 block text-sm font-medium text-slate-700">Urgência</label>
             <select
+              id="ux05-agent-request-priority"
               value={solicitacao.urgencia}
               onChange={(e) => setSolicitacao((prev) => ({ ...prev, urgencia: e.target.value }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
+              className="fm-field w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
             >
               {URGENCIAS.map((urgencia) => (
                 <option key={urgencia} value={urgencia}>{urgencia}</option>
@@ -260,22 +263,24 @@ export default function TenantAgentes() {
             </select>
           </div>
           <div className="lg:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-slate-700">Descrição</label>
+            <label htmlFor="ux05-agent-request-description" className="mb-1 block text-sm font-medium text-slate-700">Descrição</label>
             <textarea
               rows={4}
+              id="ux05-agent-request-description"
               value={solicitacao.descricao}
               onChange={(e) => setSolicitacao((prev) => ({ ...prev, descricao: e.target.value }))}
-              className="w-full resize-y rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
+              className="fm-field w-full resize-y rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
               placeholder="Descreva o que precisa mudar no atendimento."
             />
           </div>
           <div className="lg:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-slate-700">Exemplo de mensagem/resposta desejada</label>
+            <label htmlFor="ux05-agent-request-example" className="mb-1 block text-sm font-medium text-slate-700">Exemplo de mensagem/resposta desejada</label>
             <textarea
               rows={3}
+              id="ux05-agent-request-example"
               value={solicitacao.exemplo}
               onChange={(e) => setSolicitacao((prev) => ({ ...prev, exemplo: e.target.value }))}
-              className="w-full resize-y rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
+              className="fm-field w-full resize-y rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100"
               placeholder="Opcional: cole um exemplo do que você espera."
             />
           </div>
@@ -285,7 +290,7 @@ export default function TenantAgentes() {
             </ActionButton>
             <a
               href={mailtoHref}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+              className="fm-button fm-button-secondary inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
             >
               <Send size={16} />
               Abrir email de suporte

@@ -68,3 +68,32 @@
   .jev-diagnostics button { min-height:44px; }
   .jev-diagnostics input,.jev-diagnostics select { font-size:1rem; }
 }
+
+/* UX05C: observation, requests and retained evidence remain separate. */
+.ux05-jev .jev-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); }
+.ux05-jev .jev-metrics > div { display: flex; flex-direction: column; gap: var(--fm-space-1); }
+.ux05-jev .jev-metrics strong { line-height: 1.55; }
+.ux05-jev .jev-links { padding: var(--fm-space-3) var(--fm-space-4); background: var(--fm-surface); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); gap: var(--fm-space-3) var(--fm-space-5); }
+.ux05-jev .jev-links a { min-height: 2.5rem; }
+.ux05-jev .jev-example { max-height: 20rem; overflow-y: auto; scrollbar-gutter: stable; }
+.ux05-jev .jev-example p { padding: var(--fm-space-2) var(--fm-space-3); background: var(--fm-raised); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-sm); }
+.ux05-jev .jev-example p:last-child { margin-bottom: 0; }
+.ux05-jev .ux05-jev-requests { align-items: start; }
+.ux05-jev .ux05-jev-requests > .jev-card { display: flex; flex-direction: column; }
+.ux05-jev .ux05-jev-requests > .jev-card > button { align-self: start; }
+.ux05-jev .jev-checkbox { padding: var(--fm-space-3); border: 1px solid var(--fm-status-warning); background: var(--fm-status-warning-soft); border-radius: var(--fm-radius-sm); line-height: 1.6; }
+.ux05-jev .jev-filters { padding: var(--fm-space-4); margin-bottom: var(--fm-space-4); background: var(--fm-surface); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); }
+.ux05-jev .jev-filters label { margin-bottom: 0; }
+.ux05-jev .jev-scroll table { min-width: 42rem; font-variant-numeric: tabular-nums; }
+.ux05-jev .jev-scroll tbody tr:hover { background: var(--fm-surface); }
+.ux05-jev .jev-chips span { border: 1px solid var(--fm-border); line-height: 1.6; }
+.ux05-jev .ux05-jev-decisions { padding: var(--fm-space-4); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); background: var(--fm-surface); }
+.ux05-jev .ux05-jev-decisions h3 { margin-top: 0; }
+.ux05-jev .jev-evidence li { border: 1px solid var(--fm-border); border-left: 3px solid var(--fm-bronze); border-radius: var(--fm-radius-sm); line-height: 1.65; }
+.ux05-jev .jev-evidence blockquote { margin-top: var(--fm-space-2); }
+@media (max-width: 639px) {
+  .ux05-jev .jev-heading .fm-actions, .ux05-jev .jev-heading .fm-actions > button { width: 100%; }
+  .ux05-jev .jev-links { padding: var(--fm-space-3); gap: var(--fm-space-1); }
+  .ux05-jev .ux05-jev-requests > .jev-card > button { align-self: stretch; justify-content: center; }
+  .ux05-jev .jev-filters { padding: var(--fm-space-3); }
+}

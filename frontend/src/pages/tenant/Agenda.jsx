@@ -1,3 +1,4 @@
+import "../../styles/ux05-tools.css";
 import { useState, useEffect } from "react";
 import api from "../../services/api";
 import { Calendar, Clock, Video, User, AlertCircle, CalendarDays, CheckCircle2, X, Plus, Trash2 } from "lucide-react";
@@ -295,9 +296,9 @@ export default function Agenda() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="ux05-tools ux05-agenda space-y-6">
       {toast ? (
-        <div className="fixed right-6 top-6 z-[90]">
+        <div className="ux05-agenda-toast fixed right-6 top-6 z-[90]" role="status" aria-live="polite">
           <div
             className={`min-w-[320px] max-w-md rounded-2xl border px-4 py-3 shadow-xl ${
               toast.type === "success"
@@ -313,7 +314,7 @@ export default function Agenda() {
                 <p className="text-sm font-semibold">{toast.type === "success" ? "Tudo certo" : "Atenção"}</p>
                 <p className="mt-0.5 text-sm">{toast.message}</p>
               </div>
-              <button type="button" onClick={() => setToast(null)} className="rounded-lg p-1 opacity-70 hover:opacity-100">
+              <button type="button" onClick={() => setToast(null)} aria-label="Fechar aviso" className="rounded-lg p-1 opacity-70 hover:opacity-100">
                 <X size={14} />
               </button>
             </div>
@@ -328,11 +329,11 @@ export default function Agenda() {
         eyebrow="Operação"
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="ux05-agenda-layout grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* Lado Esquerdo: Configurações */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+          <div className="ux05-agenda-config fm-section-card bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
               <Clock size={20} className="text-gray-400" /> 
               Configurações de Atendimento
@@ -402,7 +403,7 @@ export default function Agenda() {
             <button
               type="button"
               onClick={openEditModal}
-              className="w-full mt-6 text-sm text-blue-600 font-medium bg-blue-50 py-2.5 rounded-lg hover:bg-blue-100 transition-colors"
+              className="fm-button fm-button-secondary w-full mt-6 text-sm text-blue-600 font-medium bg-blue-50 py-2.5 rounded-lg hover:bg-blue-100 transition-colors"
             >
               Editar Preferências
             </button>
@@ -411,8 +412,8 @@ export default function Agenda() {
 
         {/* Lado Direito: Próximos Agendamentos */}
         <div className="lg:col-span-2">
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
-            <div className="bg-gray-50/50 px-6 py-5 border-b border-gray-100 flex justify-between items-center">
+          <div className="ux05-agenda-events fm-section-card bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
+            <div className="ux05-agenda-section-heading bg-gray-50/50 px-6 py-5 border-b border-gray-100 flex justify-between items-center">
               <h2 className="text-lg font-semibold text-gray-800 font-medium">Próximos Compromissos</h2>
               <span className="bg-green-100 text-green-700 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
@@ -420,7 +421,7 @@ export default function Agenda() {
               </span>
             </div>
             
-            <div className="flex-1 p-6 overflow-y-auto max-h-[600px] custom-scrollbar">
+            <div className="ux05-agenda-scroll flex-1 p-6 overflow-y-auto max-h-[600px] custom-scrollbar" tabIndex={0} role="region" aria-label="Próximos compromissos">
               {loading ? (
                 <div className="flex justify-center items-center h-40">
                   <div className="animate-pulse flex flex-col items-center">
@@ -439,7 +440,7 @@ export default function Agenda() {
               ) : (
                 <div className="space-y-4">
                   {agendamentos.map((ag) => (
-                    <div key={ag.id} className="group relative flex gap-4 p-4 rounded-xl border border-gray-100 hover:border-blue-200 hover:shadow-md transition-all bg-white">
+                    <div key={ag.id} className="ux05-appointment group relative flex gap-4 p-4 rounded-xl border border-gray-100 hover:border-blue-200 hover:shadow-md transition-all bg-white">
                       
                       {/* Data Vertical */}
                       <div className="w-16 flex-shrink-0 flex flex-col items-center justify-center bg-gray-50 rounded-lg py-2 border border-gray-100">
@@ -453,7 +454,7 @@ export default function Agenda() {
                       
                       {/* Detalhes do Evento */}
                       <div className="flex-1 min-w-0 flex flex-col justify-center">
-                        <div className="flex items-center justify-between mb-1">
+                        <div className="ux05-appointment-title flex items-center justify-between mb-1">
                           <h4 className="font-semibold text-gray-900 text-lg flex items-center gap-2">
                             {ag.lead?.nome_contato}
                           </h4>
@@ -462,7 +463,7 @@ export default function Agenda() {
                           </span>
                         </div>
                         
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
+                        <div className="ux05-appointment-meta flex items-center gap-4 text-sm text-gray-500">
                           <div className="flex items-center gap-1.5 font-medium text-gray-700 bg-gray-50/80 px-2 py-1 rounded border border-gray-100">
                             <Clock size={14} className="text-blue-500" />
                             {formatTime(ag.data_hora_inicio)} - {formatTime(ag.data_hora_fim)}
@@ -476,8 +477,8 @@ export default function Agenda() {
                       </div>
 
                       {/* Hover Actions */}
-                      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                         <button className="bg-white border border-gray-200 text-gray-600 hover:text-blue-600 p-1.5 rounded shadow-sm">
+                      <div className="ux05-appointment-actions absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+                         <button aria-label="Contato do compromisso" className="bg-white border border-gray-200 text-gray-600 hover:text-blue-600 p-1.5 rounded shadow-sm">
                            <User size={16} />
                          </button>
                       </div>
@@ -493,8 +494,8 @@ export default function Agenda() {
       </div>
 
       {isEditing ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/60 px-4">
-          <div className="w-full max-w-3xl rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="ux05-agenda-backdrop fixed inset-0 z-[80] flex items-center justify-center bg-gray-900/60 px-4">
+          <div className="ux05-agenda-modal w-full max-w-3xl rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-label="Editar Preferências da Agenda">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-xl font-semibold text-gray-900">Editar Preferências da Agenda</h3>
@@ -503,6 +504,7 @@ export default function Agenda() {
               <button
                 type="button"
                 onClick={() => setIsEditing(false)}
+                aria-label="Fechar preferências da agenda"
                 className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
               >
                 <X size={16} />
@@ -517,7 +519,7 @@ export default function Agenda() {
                     const dayData = editData.dias_funcionamento?.[dia.value] || { aberto: false, inicio: null, fim: null };
                     const checked = Boolean(dayData.aberto);
                     return (
-                      <div key={dia.value} className="rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                      <div key={dia.value} className="ux05-agenda-day rounded-lg border border-gray-200 bg-white px-3 py-2.5">
                         <div className="flex items-center justify-between gap-2">
                           <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700">
                             <input
@@ -537,16 +539,18 @@ export default function Agenda() {
                           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                             <input
                               type="time"
+                              aria-label={`Início de ${dia.label}`}
                               value={dayData.inicio || "08:00"}
                               onChange={(e) => handleDayTimeChange(dia.value, "inicio", e.target.value)}
-                              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              className="fm-field w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                               required
                             />
                             <input
                               type="time"
+                              aria-label={`Fim de ${dia.label}`}
                               value={dayData.fim || "18:00"}
                               onChange={(e) => handleDayTimeChange(dia.value, "fim", e.target.value)}
-                              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              className="fm-field w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                               required
                             />
                           </div>
@@ -563,7 +567,7 @@ export default function Agenda() {
                   <button
                     type="button"
                     onClick={handleAddExcecao}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    className="fm-button fm-button-secondary inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                   >
                     <Plus size={14} />
                     Adicionar data
@@ -577,16 +581,18 @@ export default function Agenda() {
                         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                           <input
                             type="date"
+                            aria-label="Data especial"
                             value={item.data}
                             onChange={(e) => handleExcecaoChange(index, "data", e.target.value)}
-                            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            className="fm-field w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                           />
                           <input
                             type="text"
                             value={item.titulo}
+                            aria-label="Título da data especial"
                             placeholder="Título do feriado"
                             onChange={(e) => handleExcecaoChange(index, "titulo", e.target.value)}
-                            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 md:col-span-2"
+                            className="fm-field w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 md:col-span-2"
                           />
                         </div>
 
@@ -604,7 +610,7 @@ export default function Agenda() {
                           <button
                             type="button"
                             onClick={() => handleRemoveExcecao(index)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                            className="fm-button fm-button-danger inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
                           >
                             <Trash2 size={13} />
                             Remover
@@ -615,15 +621,17 @@ export default function Agenda() {
                           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                             <input
                               type="time"
+                              aria-label="Início da data especial"
                               value={item.inicio || "08:00"}
                               onChange={(e) => handleExcecaoChange(index, "inicio", e.target.value)}
-                              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              className="fm-field w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                             <input
                               type="time"
+                              aria-label="Fim da data especial"
                               value={item.fim || "18:00"}
                               onChange={(e) => handleExcecaoChange(index, "fim", e.target.value)}
-                              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                              className="fm-field w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                           </div>
                         ) : null}
@@ -639,14 +647,14 @@ export default function Agenda() {
                 <button
                   type="button"
                   onClick={() => setIsEditing(false)}
-                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                  className="fm-button fm-button-secondary rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={savingEdit}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  className="fm-button fm-button-primary rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {savingEdit ? "Salvando..." : "Salvar"}
                 </button>

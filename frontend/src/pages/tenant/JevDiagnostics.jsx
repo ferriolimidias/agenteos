@@ -1,3 +1,4 @@
+import "../../styles/ux05-tools.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Brain, RefreshCw } from "lucide-react";
@@ -9,7 +10,7 @@ import { JEV_INTENTS, JEV_STATUSES, jevConfidence, jevError, jevLabel, jevLeadId
 import "./JevDiagnostics.css";
 
 function Decisions({ title, items }) {
-  return <section><h3>{title}</h3>{items?.length ? <ul>{items.map((item, index) => <li key={`${item.key}:${index}`}><strong>{jevLabel(item)}</strong> · {jevConfidence(item.confidence)}<small> Evidências: {(item.evidence_ids || []).join(", ") || "não fornecidas"}</small></li>)}</ul> : <p className="jev-muted">Nenhuma classificação sustentada neste grupo.</p>}</section>;
+  return <section className="ux05-jev-decisions"><h3>{title}</h3>{items?.length ? <ul>{items.map((item, index) => <li key={`${item.key}:${index}`}><strong>{jevLabel(item)}</strong> · {jevConfidence(item.confidence)}<small> Evidências: {(item.evidence_ids || []).join(", ") || "não fornecidas"}</small></li>)}</ul> : <p className="jev-muted">Nenhuma classificação sustentada neste grupo.</p>}</section>;
 }
 function RunDetail({ run, onClose }) {
   const classification = ["demo", "completed"].includes(run.status) ? run.classification : null;
@@ -94,10 +95,10 @@ function TenantDiagnostics({ tenant, initialLead }) {
   }
   const example = examples.find(item => item.id === exampleId);
   const allowed = Boolean(status?.enabled);
-  return <div className="jev-diagnostics" data-testid="jev-diagnostics">
+  return <div className="ux05-tools ux05-jev jev-diagnostics" data-testid="jev-diagnostics">
     <PageHeader className="jev-heading" eyebrow="JEV Core · A06" title={<>Inteligência conversacional <StatusBadge tone="info">SHADOW</StatusBadge></>} icon={Brain} description="Diagnóstico com evidências. Atendimento, respostas, funil e tags permanecem sob os fluxos existentes." actions={<button type="button" disabled={loading} onClick={() => { setRefresh(value => value + 1); setListRefresh(value => value + 1); }}><RefreshCw size={15} /> Atualizar diagnóstico</button>} />
     <p className="jev-links"><Link to="/painel/funil">Abrir funil e gargalos A05</Link>{jevLeadId(leadId) && <Link to={journeyInboxPath(leadId.trim())}>Abrir jornada A04 no Inbox</Link>}</p>
-    {loading && <p role="status">Consultando configuração do tenant...</p>}{error && <p role="alert" className="jev-notice">{error}</p>}
+    {loading && <p role="status" className="ux05-tools-state">Consultando configuração do tenant...</p>}{error && <p role="alert" className="jev-notice">{error}</p>}
     {status && <section className="jev-card" aria-label="Disponibilidade e cobertura">
       <h2>Disponibilidade e cobertura</h2><div className="jev-metrics">
         <div><small>Diagnóstico</small><strong>{status.enabled ? "SHADOW disponível" : "Desativado"}</strong></div>
@@ -111,15 +112,15 @@ function TenantDiagnostics({ tenant, initialLead }) {
       <p className="jev-muted">Precisão real, p50/p95 e custo por conversa: desconhecidos enquanto não houver amostra suficiente e medição comprovada.</p>
       {status.limitations?.length > 0 && <details><summary>Limitações observadas</summary><ul>{status.limitations.map((item, index) => <li key={index}>{item}</li>)}</ul></details>}
     </section>}
-    <div className="jev-columns">
+    <div className="jev-columns ux05-jev-requests">
       <section className="jev-card"><h2>Exemplos sintéticos PT-BR</h2><p className="jev-muted">Demonstração local independente. Escolha um exemplo e solicite explicitamente a análise.</p><label>Exemplo<select aria-label="Exemplo" value={exampleId} onChange={event => setExampleId(event.target.value)} disabled={!examples.length || busy}>{examples.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-        {example && <div className="jev-example">{example.messages.map(message => <p key={message.id}>{message.text}</p>)}</div>}
+        {example && <div className="jev-example" tabIndex={0} role="region" aria-label="Mensagens do exemplo sintético">{example.messages.map(message => <p key={message.id}>{message.text}</p>)}</div>}
         {status?.provider?.configured && status?.provider?.enabled && <label className="jev-checkbox"><input type="checkbox" checked={useProvider} onChange={event => setUseProvider(event.target.checked)} disabled={busy} />Usar provider externo somente neste exemplo sintético (consome orçamento)</label>}
         <button type="button" className="jev-primary" disabled={!allowed || !exampleId || busy} onClick={() => requestRun({ example_id: exampleId, ...(useProvider && status?.provider?.configured && status?.provider?.enabled ? { use_provider: true } : {}) })}>Analisar exemplo sintético</button>
       </section>
       <section className="jev-card"><h2>Diagnóstico de conversa existente</h2><p className="jev-muted">Somente leitura de contexto limitado. O servidor exige configuração e autorização por tenant antes de qualquer envio externo; este formulário não habilita o provider.</p><label>ID do contato (UUID)<input value={leadId} onChange={event => setLeadId(event.target.value)} placeholder="ID do contato deste tenant" autoComplete="off" /></label><button type="button" disabled={!allowed || !jevLeadId(leadId) || busy} onClick={() => requestRun({ lead_id: jevLeadId(leadId) })}>Solicitar diagnóstico SHADOW</button><p className="jev-muted">Sem provider ou autorização, o resultado permanece não avaliado.</p></section>
     </div>
-    {busy && <p role="status">Consultando análise SHADOW...</p>}{actionError && <p role="alert" className="jev-notice">{actionError}</p>}
+    {busy && <p role="status" className="ux05-tools-state">Consultando análise SHADOW...</p>}{actionError && <p role="alert" className="jev-notice">{actionError}</p>}
     {run && <RunDetail run={run} onClose={() => setRun(null)} />}
     <section className="jev-card" aria-label="Execuções de diagnóstico"><h2>Execuções retidas</h2><div className="jev-filters"><label>Estado<select aria-label="Estado" value={filters.status} onChange={event => setFilters(previous => ({ ...previous, status: event.target.value }))}><option value="">Todos os estados</option>{Object.entries(JEV_STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>Intenção<select aria-label="Intenção" value={filters.intent} onChange={event => setFilters(previous => ({ ...previous, intent: event.target.value }))}><option value="">Todas as intenções</option>{Object.entries(JEV_INTENTS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
       {listError && <p role="alert" className="jev-notice">{listError}</p>}{!runs && !listError && <p role="status">Consultando execuções...</p>}{runs && <><p className="jev-muted">{jevNumber(runs.total)} execuções neste filtro · até {jevNumber(runs.limit)} resultados</p>{!runs.items?.length ? <p>Nenhuma execução retida neste filtro. Isso não comprova ausência de intenções.</p> : <div className="jev-scroll" tabIndex={0} role="region" aria-label="Execuções retidas"><table><thead><tr><th>Horário UTC</th><th>Fonte</th><th>Estado</th><th>Intenções</th><th>Resultado</th></tr></thead><tbody>{runs.items.map(item => <tr key={item.id}><td>{jevTime(item.created_at)}</td><td>{item.source === "synthetic" ? "Sintética" : "Conversa"}</td><td>{JEV_STATUSES[item.status] || "Desconhecido"}</td><td>{(item.classification?.intents || []).map(jevLabel).join(" · ") || "Não avaliado"}</td><td><button type="button" disabled={busy} onClick={() => requestRun(null, item.id)}>Ver resultado</button></td></tr>)}</tbody></table></div>}</>}

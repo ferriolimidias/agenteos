@@ -1,0 +1,125 @@
+/* UX05C is tenant-scoped; shared RAG and Admin styles remain untouched. */
+.ux05-tools { min-width: 0; color: var(--fm-text); }
+.ux05-tools :is(.grid > *, .flex > *, .fm-section-body, .fm-feature-card) { min-width: 0; }
+.ux05-tools :is(p, h1, h2, h3, h4, dd) { overflow-wrap: anywhere; }
+.ux05-tools :is(.text-gray-300, .text-gray-400, .text-gray-500, .text-gray-600, .text-slate-400, .text-slate-500, .text-slate-600) { color: var(--fm-muted); }
+.ux05-tools :is(.text-gray-700, .text-gray-800, .text-gray-900, .text-slate-700, .text-slate-800, .text-slate-900, .text-slate-950) { color: var(--fm-text); }
+.ux05-tools :is(.text-blue-500, .text-blue-600, .text-blue-700, .text-indigo-600) { color: var(--fm-primary); }
+.ux05-tools .fm-field { min-width: 0; color: var(--fm-text); background: var(--fm-raised); border-color: var(--fm-border-strong); border-radius: var(--fm-radius-sm); }
+.ux05-tools .fm-field:disabled { color: var(--fm-muted); background: var(--fm-inset); }
+.ux05-tools :is(input[type="checkbox"], input[type="radio"]) { accent-color: var(--fm-primary); flex-shrink: 0; }
+.ux05-tools :is(button, a, input, select, textarea, [tabindex="0"]):focus-visible { outline: 3px solid var(--fm-focus); outline-offset: 3px; }
+.ux05-tools-state { border: 1px solid var(--fm-border); background: var(--fm-surface); color: var(--fm-muted); border-radius: var(--fm-radius-md); padding: var(--fm-space-4); font-size: var(--fm-text-sm); line-height: 1.6; }
+
+/* Agent status, capabilities and the request surface use separate densities. */
+.ux05-agents .ux05-agent-overview { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); align-items: stretch; }
+.ux05-agents .ux05-agent-overview .fm-feature-card { display: flex; flex-direction: column; }
+.ux05-agents .ux05-capabilities { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
+.ux05-agents .ux05-capability { display: flex; flex-direction: column; justify-content: space-between; border-color: var(--fm-border); background: var(--fm-surface); border-radius: var(--fm-radius-md); box-shadow: none; }
+.ux05-agents .ux05-capability > .mt-3 { border-top: 1px solid var(--fm-border); padding-top: var(--fm-space-3); }
+.ux05-agents .ux05-change-request { padding: var(--fm-space-4); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); background: var(--fm-surface); }
+.ux05-agents .ux05-change-request label { font-size: var(--fm-text-xs); font-weight: 650; }
+
+/* Knowledge is styled through this tenant wrapper only. */
+.ux05-rag > .space-y-8 > .grid { grid-template-columns: minmax(17rem, .9fr) minmax(0, 1.5fr); gap: var(--fm-space-5); align-items: start; }
+.ux05-rag :is(.lg\:col-span-1, .lg\:col-span-2) { grid-column: auto; }
+.ux05-rag .bg-white.rounded-2xl { border-color: var(--fm-border); border-radius: var(--fm-radius-lg); box-shadow: var(--fm-shadow-card); }
+.ux05-rag .bg-gray-50.px-6 { padding: var(--fm-space-4) var(--fm-space-5); border-color: var(--fm-border); background: var(--fm-surface); gap: var(--fm-space-3); flex-wrap: wrap; }
+.ux05-rag .bg-gray-50.px-6 h2 { font-size: var(--fm-text-sm); font-weight: 650; }
+.ux05-rag .p-6 { padding: var(--fm-space-5); }
+.ux05-rag form label { font-size: var(--fm-text-xs); font-weight: 650; margin-bottom: var(--fm-space-2); }
+.ux05-rag :is(input, textarea) { width: 100%; min-width: 0; min-height: 2.625rem; padding: var(--fm-space-2) var(--fm-space-3); color: var(--fm-text); background: var(--fm-raised); border: 1px solid var(--fm-border-strong); border-radius: var(--fm-radius-sm); font-size: var(--fm-text-sm); line-height: 1.6; }
+.ux05-rag .flex.space-x-2.mb-6 { gap: var(--fm-space-1); padding: var(--fm-space-1); background: var(--fm-inset); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); }
+.ux05-rag .flex.space-x-2.mb-6 > button { margin-left: 0; padding: var(--fm-space-2); min-height: 2.5rem; }
+.ux05-rag .flex.space-x-2.mb-6 > button.bg-white { color: var(--fm-primary); box-shadow: var(--fm-shadow-card); }
+.ux05-rag form button[type="submit"] { min-height: 2.625rem; background: var(--fm-primary); border: 1px solid var(--fm-primary); border-radius: var(--fm-radius-md); }
+.ux05-rag form button[type="submit"]:hover:enabled { background: var(--fm-primary-hover); }
+.ux05-rag :is(.bg-blue-50, .bg-indigo-50, .bg-blue-100) { background: var(--fm-primary-soft); }
+.ux05-rag .bg-green-50 { background: var(--fm-status-success-soft); color: var(--fm-status-success); }
+.ux05-rag .bg-red-50 { background: var(--fm-status-danger-soft); color: var(--fm-status-danger); }
+.ux05-rag ul { border-color: var(--fm-border); }
+.ux05-rag li { border-color: var(--fm-border); gap: var(--fm-space-3); }
+.ux05-rag li:hover { background: var(--fm-surface); }
+.ux05-rag li .flex.items-center.gap-2 { flex-wrap: wrap; }
+.ux05-rag li button { opacity: 1; color: var(--fm-muted); min-width: 2.5rem; min-height: 2.5rem; border-radius: var(--fm-radius-sm); }
+.ux05-rag li button:hover { color: var(--fm-status-danger); background: var(--fm-status-danger-soft); }
+.ux05-rag li .font-mono { overflow-wrap: anywhere; }
+
+/* Calendar: persistent preferences beside a readable appointment list. */
+.ux05-agenda .ux05-agenda-layout { grid-template-columns: minmax(17rem, .85fr) minmax(0, 1.5fr); gap: var(--fm-space-5); align-items: start; }
+.ux05-agenda .ux05-agenda-layout > :is(.lg\:col-span-1, .lg\:col-span-2) { grid-column: auto; }
+.ux05-agenda .ux05-agenda-config { padding: var(--fm-space-5); }
+.ux05-agenda .ux05-agenda-config > h2 { font-size: var(--fm-text-sm); font-weight: 650; padding-bottom: var(--fm-space-4); border-bottom: 1px solid var(--fm-border); }
+.ux05-agenda .ux05-agenda-section-heading { padding: var(--fm-space-4) var(--fm-space-5); background: var(--fm-surface); border-color: var(--fm-border); gap: var(--fm-space-3); flex-wrap: wrap; }
+.ux05-agenda .ux05-agenda-section-heading h2 { font-size: var(--fm-text-sm); font-weight: 650; }
+.ux05-agenda .ux05-agenda-scroll { padding: var(--fm-space-5); max-height: 44rem; scrollbar-gutter: stable; }
+.ux05-agenda .ux05-appointment { border-color: var(--fm-border); border-radius: var(--fm-radius-md); gap: var(--fm-space-3); padding: var(--fm-space-4); background: var(--fm-surface); box-shadow: none; }
+.ux05-agenda .ux05-appointment:hover { border-color: var(--fm-border-strong); box-shadow: none; }
+.ux05-agenda .ux05-appointment-title { flex-wrap: wrap; align-items: start; gap: var(--fm-space-2); }
+.ux05-agenda .ux05-appointment-title h4 { font-size: var(--fm-text-sm); line-height: 1.6; }
+.ux05-agenda .ux05-appointment-meta { flex-wrap: wrap; gap: var(--fm-space-2); margin-top: var(--fm-space-2); }
+.ux05-agenda .ux05-appointment-actions { position: static; opacity: 1; align-self: start; flex-shrink: 0; }
+.ux05-agenda .ux05-appointment-actions button { min-height: 2.5rem; min-width: 2.5rem; border-color: var(--fm-border); background: var(--fm-raised); }
+.ux05-agenda :is(.bg-gray-50, .bg-gray-50\/80, .bg-gray-100) { background: var(--fm-surface); border-color: var(--fm-border); }
+.ux05-agenda :is(.bg-green-100, .bg-emerald-50, .bg-emerald-100) { background: var(--fm-status-success-soft); }
+.ux05-agenda :is(.text-green-600, .text-green-700, .text-emerald-800) { color: var(--fm-status-success); }
+.ux05-agenda .bg-green-500 { background: var(--fm-status-success); }
+.ux05-agenda .bg-yellow-50 { background: var(--fm-status-warning-soft); border-color: var(--fm-status-warning); }
+.ux05-agenda :is(.text-yellow-600, .text-yellow-800) { color: var(--fm-status-warning); }
+.ux05-agenda :is(.bg-red-50, .bg-red-100) { background: var(--fm-status-danger-soft); }
+.ux05-agenda :is(.text-red-600, .text-red-800) { color: var(--fm-status-danger); }
+.ux05-agenda .ux05-agenda-toast { max-width: calc(100vw - 2rem); }
+.ux05-agenda .ux05-agenda-toast > div { min-width: 0; width: 22rem; max-width: 100%; border-radius: var(--fm-radius-md); box-shadow: var(--fm-shadow-raised); }
+.ux05-agenda .ux05-agenda-modal { border-color: var(--fm-border); border-radius: var(--fm-radius-lg); background: var(--fm-raised); max-height: calc(100dvh - 3rem); overscroll-behavior: contain; box-shadow: var(--fm-shadow-raised); }
+.ux05-agenda .ux05-agenda-modal > .mb-6 { padding-bottom: var(--fm-space-4); margin-bottom: var(--fm-space-5); border-bottom: 1px solid var(--fm-border); }
+.ux05-agenda .ux05-agenda-day { border-color: var(--fm-border); border-radius: var(--fm-radius-md); background: var(--fm-surface); }
+.ux05-agenda .ux05-agenda-modal form > .pt-2:last-child { flex-wrap: wrap; padding-top: var(--fm-space-4); border-top: 1px solid var(--fm-border); }
+
+/* Simulator chrome and composer; polling, scroll and send logic are preserved. */
+.ux05-simulator { height: clamp(28rem, calc(100dvh - 12rem), 54rem); border-color: var(--fm-border); border-radius: var(--fm-radius-lg); box-shadow: var(--fm-shadow-card); background: var(--fm-raised); }
+.ux05-simulator .ux05-simulator-scope { background: var(--fm-bronze-soft); color: var(--fm-status-warning); border-color: var(--fm-border); flex-shrink: 0; }
+.ux05-simulator .ux05-simulator-scope > .flex { flex-wrap: wrap; }
+.ux05-simulator .ux05-simulator-scope .text-violet-300 { color: var(--fm-bronze); }
+.ux05-simulator .ux05-simulator-exit { min-height: 2.25rem; border-color: var(--fm-bronze); background: var(--fm-raised); color: var(--fm-status-warning); border-radius: var(--fm-radius-sm); }
+.ux05-simulator .ux05-simulator-exit:hover { background: var(--fm-bronze-soft); }
+.ux05-simulator .ux05-simulator-heading { background: var(--fm-surface); color: var(--fm-text); border-bottom: 1px solid var(--fm-border); gap: var(--fm-space-4); box-shadow: none; flex-shrink: 0; }
+.ux05-simulator .ux05-simulator-heading h1 { font-size: var(--fm-text-base); line-height: 1.5; }
+.ux05-simulator .ux05-simulator-heading .text-blue-200 { color: var(--fm-muted); line-height: 1.6; margin-top: var(--fm-space-1); }
+.ux05-simulator .ux05-simulator-heading .fm-button-secondary { color: var(--fm-primary); background: var(--fm-raised); border-color: var(--fm-border-strong); flex-shrink: 0; }
+.ux05-simulator .ux05-simulator-transcript { min-height: 0; background: var(--fm-canvas); scrollbar-gutter: stable; }
+.ux05-simulator .ux05-simulator-message { max-width: 78%; font-size: var(--fm-text-sm); line-height: 1.65; overflow-wrap: anywhere; border-radius: var(--fm-radius-md); padding: var(--fm-space-3) var(--fm-space-4); box-shadow: var(--fm-shadow-card); }
+.ux05-simulator .ux05-simulator-message.bg-blue-600 { background: var(--fm-primary); color: var(--fm-sidebar-text); }
+.ux05-simulator .ux05-simulator-message.bg-white { background: var(--fm-raised); border-color: var(--fm-border); color: var(--fm-text); }
+.ux05-simulator .ux05-simulator-message.bg-red-100 { background: var(--fm-status-danger-soft); color: var(--fm-status-danger); }
+.ux05-simulator .ux05-simulator-processing { color: var(--fm-muted); background: var(--fm-raised); border-color: var(--fm-border); }
+.ux05-simulator .ux05-simulator-composer { flex-shrink: 0; border-color: var(--fm-border); background: var(--fm-raised); }
+.ux05-simulator .ux05-simulator-form { align-items: center; gap: var(--fm-space-3); }
+.ux05-simulator .ux05-simulator-form > * { margin-left: 0; }
+.ux05-simulator .ux05-simulator-form .fm-field { border-radius: var(--fm-radius-md); min-height: 2.75rem; }
+.ux05-simulator .ux05-simulator-send { width: 2.75rem; height: 2.75rem; background: var(--fm-primary); color: var(--fm-sidebar-text); border-radius: var(--fm-radius-md); }
+.ux05-simulator .ux05-simulator-send:hover:enabled { background: var(--fm-primary-hover); }
+
+@media (max-width: 1100px) {
+  .ux05-rag > .space-y-8 > .grid, .ux05-agenda .ux05-agenda-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+  .ux05-tools .fm-field, .ux05-rag :is(input, textarea) { font-size: 1rem; }
+  .ux05-tools :is(.fm-button, .ux05-rag button) { min-height: 2.75rem; }
+  .ux05-agents .ux05-change-request { padding: var(--fm-space-3); }
+  .ux05-rag .p-6 { padding: var(--fm-space-4); }
+  .ux05-rag li { gap: var(--fm-space-2); }
+  .ux05-rag .flex.space-x-2.mb-6 > button { gap: var(--fm-space-1); padding: var(--fm-space-2) var(--fm-space-1); }
+  .ux05-agenda :is(.ux05-agenda-config, .ux05-agenda-scroll) { padding: var(--fm-space-4); }
+  .ux05-agenda .ux05-appointment { flex-wrap: wrap; padding: var(--fm-space-3); }
+  .ux05-agenda .ux05-appointment > .w-16 { width: 3rem; }
+  .ux05-agenda .ux05-appointment-actions { margin-left: auto; }
+  .ux05-agenda .ux05-agenda-toast { top: 1rem; right: 1rem; }
+  .ux05-agenda .ux05-agenda-backdrop { padding: var(--fm-space-3); }
+  .ux05-agenda .ux05-agenda-modal { padding: var(--fm-space-4); max-height: calc(100dvh - 1.5rem); }
+  .ux05-agenda .ux05-agenda-modal form > .pt-2 > .flex:first-child { flex-wrap: wrap; gap: var(--fm-space-2); }
+  .ux05-simulator { height: clamp(26rem, calc(100dvh - 11rem), 48rem); }
+  .ux05-simulator .ux05-simulator-heading { padding: var(--fm-space-3); flex-wrap: wrap; gap: var(--fm-space-2); }
+  .ux05-simulator .ux05-simulator-message { max-width: 90%; }
+  .ux05-simulator .ux05-simulator-composer { padding: var(--fm-space-3); }
+  .ux05-simulator .ux05-simulator-form { gap: var(--fm-space-2); }
+}

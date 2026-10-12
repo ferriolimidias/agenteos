@@ -1,3 +1,4 @@
+import "../../styles/ux05-tools.css";
 import React, { useState, useRef, useEffect } from "react";
 import { Send, Bot, RefreshCw, FlaskConical, XCircle } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -118,9 +119,9 @@ export default function Simulador() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-140px)] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+    <div className="ux05-tools ux05-simulator flex flex-col h-[calc(100vh-140px)] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
       {empresaId ? (
-        <div className="sticky top-0 z-20 border-b border-[#2d2d2d] bg-[#2a1f38] px-4 py-2 text-xs text-violet-100">
+        <div className="ux05-simulator-scope sticky top-0 z-20 border-b border-[#2d2d2d] bg-[#2a1f38] px-4 py-2 text-xs text-violet-100">
           <div className="flex items-center justify-between gap-3">
             <div className="inline-flex items-center gap-2">
               <FlaskConical size={14} className="text-violet-300" />
@@ -131,7 +132,7 @@ export default function Simulador() {
             <button
               type="button"
               onClick={encerrarTeste}
-              className="inline-flex items-center gap-1 rounded-md border border-violet-300/30 bg-violet-700/20 px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-700/30"
+              className="ux05-simulator-exit inline-flex items-center gap-1 rounded-md border border-violet-300/30 bg-violet-700/20 px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-700/30"
             >
               <XCircle size={12} />
               Encerrar Teste
@@ -139,11 +140,11 @@ export default function Simulador() {
           </div>
         </div>
       ) : null}
-      <div className="bg-blue-900 text-white p-4 flex items-center justify-between shadow-md z-10">
+      <div className="ux05-simulator-heading bg-blue-900 text-white p-4 flex items-center justify-between shadow-md z-10">
         <div className="flex items-center">
           <Bot size={24} className="mr-3" />
           <div>
-            <h2 className="font-semibold">Simulador do Agente AI</h2>
+            <h1 className="font-semibold">Simulador do Agente AI</h1>
             <p className="text-xs text-blue-200">
               Teste o fluxo de conversação antes de ligar na inteligência real.
               {empresaIdFromQuery ? ` Tenant: ${empresaIdFromQuery}.` : ""}
@@ -153,7 +154,7 @@ export default function Simulador() {
         <button
           onClick={handleReset}
           disabled={loading || !empresaId}
-          className="text-white hover:text-blue-200 p-2 rounded-lg transition-colors flex items-center gap-2 text-sm bg-blue-800 hover:bg-blue-700 disabled:opacity-50"
+          className="fm-button fm-button-secondary text-white hover:text-blue-200 p-2 rounded-lg transition-colors flex items-center gap-2 text-sm bg-blue-800 hover:bg-blue-700 disabled:opacity-50"
           title="Limpar Conversa"
         >
           <RefreshCw size={18} />
@@ -161,9 +162,9 @@ export default function Simulador() {
         </button>
       </div>
 
-      <div className="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col space-y-4">
+      <div className="ux05-simulator-transcript flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col space-y-4" tabIndex={0} role="region" aria-label="Conversa do simulador">
         {messages.length === 0 && (
-          <div className="text-center text-gray-400 mt-10">
+          <div className="fm-state text-center text-gray-400 mt-10">
             Nenhuma mensagem ainda. Envie um "Olá" para testar!
           </div>
         )}
@@ -171,7 +172,7 @@ export default function Simulador() {
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[70%] rounded-2xl px-5 py-3 shadow-sm ${
+              className={`ux05-simulator-message max-w-[70%] rounded-2xl px-5 py-3 shadow-sm ${
                 msg.role === "user"
                   ? "bg-blue-600 text-white rounded-br-none"
                   : msg.role === "error"
@@ -186,7 +187,7 @@ export default function Simulador() {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="max-w-[70%] bg-white border border-gray-200 text-gray-500 rounded-2xl px-5 py-3 rounded-bl-none shadow-sm flex items-center space-x-2">
+            <div className="ux05-simulator-processing max-w-[70%] bg-white border border-gray-200 text-gray-500 rounded-2xl px-5 py-3 rounded-bl-none shadow-sm flex items-center space-x-2" role="status" aria-label="Agente está processando">
               <span className="animate-bounce">●</span>
               <span className="animate-bounce" style={{ animationDelay: "0.2s" }}>●</span>
               <span className="animate-bounce" style={{ animationDelay: "0.4s" }}>●</span>
@@ -196,11 +197,12 @@ export default function Simulador() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="p-4 bg-white border-t border-gray-200">
-        <form onSubmit={handleSend} className="flex space-x-3 text-sm">
+      <div className="ux05-simulator-composer p-4 bg-white border-t border-gray-200">
+        <form onSubmit={handleSend} className="ux05-simulator-form flex space-x-3 text-sm">
           <input
             type="text"
-            className="flex-1 border border-gray-300 rounded-full px-5 py-3 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            className="fm-field flex-1 border border-gray-300 rounded-full px-5 py-3 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            aria-label="Mensagem do simulador"
             placeholder="Digite uma mensagem..."
             value={inputStr}
             onChange={(e) => setInputStr(e.target.value)}
@@ -209,7 +211,8 @@ export default function Simulador() {
           <button
             type="submit"
             disabled={!inputStr.trim() || !empresaId || loading}
-            className="bg-blue-600 hover:bg-blue-700 text-white w-12 h-12 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 flex-shrink-0"
+            className="ux05-simulator-send bg-blue-600 hover:bg-blue-700 text-white w-12 h-12 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 flex-shrink-0"
+            aria-label="Enviar mensagem no simulador"
           >
             <Send size={20} className="ml-1" />
           </button>
