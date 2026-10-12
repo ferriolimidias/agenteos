@@ -43,3 +43,5 @@ Os testes de Chromium usam APIs interceptadas e fixtures sintéticas, bloqueiam 
 Apenas frontend é implantado sobre a imagem UX01 aprovada, preservando nginx/Anamnese, backend A06, banco e infraestrutura. Rollback, commit, imagens e evidências finais ficam em `reports/ux02-tenant-navigation-20261012/`. A entrega é utilizável independentemente da UX03 e não altera JEV ou fluxos comerciais.
 
 A comparação antes registra a falha legada de `/painel/agentes` (`Send` ausente). A candidata corrige somente o import do ícone, necessário para manter todas as rotas utilizáveis. Não altera a ação de suporte ou a lógica comercial.
+
+O revisor conserva as mesmas duas URLs permitidas. O Outlet aguarda o redirect existente em URLs proibidas, prevenindo a montagem transitória do Funil demonstrada na UX01 antes. Nenhuma permissão ou API muda.

@@ -13,6 +13,7 @@ export default function TenantLayout() {
   const location = useLocation();
   const user = getStoredUser();
   const isReviewer = user?.role === "meta_app_reviewer";
+  const reviewerRouteAllowed = ["/painel/conexoes", "/painel/tags"].includes(location.pathname);
   const [menuOpen, setMenuOpen] = useState(false);
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
@@ -60,9 +61,8 @@ export default function TenantLayout() {
 
   useEffect(() => {
     if (!isReviewer) return;
-    const allowed = new Set(["/painel/conexoes", "/painel/tags"]);
-    if (!allowed.has(location.pathname)) navigate("/painel/conexoes", { replace: true });
-  }, [isReviewer, location.pathname, navigate]);
+    if (!reviewerRouteAllowed) navigate("/painel/conexoes", { replace: true });
+  }, [isReviewer, reviewerRouteAllowed, navigate]);
   const [configVisual, setConfigVisual] = useState({
     nomeSistema: "Minha Empresa",
     logoBase64: "",
@@ -178,7 +178,7 @@ export default function TenantLayout() {
           <span className="fm-avatar" aria-hidden="true">{user?.nome ? user.nome.charAt(0).toUpperCase() : "A"}</span>
         </header>
         <div id="tenant-content" tabIndex={-1} className={isInboxRoute ? "chat-shell-content" : shellStyles.content}>
-          <Outlet />
+          {(!isReviewer || reviewerRouteAllowed) && <Outlet />}
         </div>
       </main>
     </div>

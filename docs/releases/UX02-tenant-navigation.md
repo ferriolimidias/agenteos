@@ -6,11 +6,13 @@ Baseline autorizado `51a0b45ef1ab687b60af8b4d1df97af7d083b8c9`, master e imagem 
 
 Reorganizar somente a navegação Tenant para encontro rápido de todos os módulos e contexto por cabeçalho/breadcrumb, mantendo ferramentas, URLs, links contextuais, state do router, direitos, identidade e drawer UX01. Cinco grupos recolhíveis: Visão geral e resultados; Atendimento e clientes; Aquisição e tráfego; Automações e inteligência; Configurações e integrações. Persistência guarda somente preferências visuais por tenant/papel; storage inválido/indisponível não quebra navegação; grupo ativo fica identificável e acessível ao entrar diretamente/back-forward. Não criar segunda sidebar, drawer ou root React.
 
-Zero backend/DB/migrations, callbacks/APIs comerciais, JEV, campanhas/WhatsApp/Meta, respostas/prompt/tags, login/RBAC novos, rotas/aliases alterados ou removidos. Super Admin, tokens/sharedcomponents/design-system/shell UX01 e páginas comerciais permanecem byte-identical, salvo a exceção de compatibilidade comprovada abaixo; alteração visual no TenantLayout e CSS novo da navegação. Inbox preserva header desktop oculto/topbar móvel e composer viewport. A01/A04/A05/A06 e React#16 protegidos.
+Zero backend/DB/migrations, callbacks/APIs comerciais, JEV, campanhas/WhatsApp/Meta, respostas/prompt/tags, login/permissões novas, rotas/aliases alterados ou removidos. Super Admin, tokens/sharedcomponents/design-system/shell UX01 e páginas comerciais permanecem byte-identical, salvo a exceção de compatibilidade comprovada abaixo; alteração visual no TenantLayout e CSS novo da navegação. Inbox preserva header desktop oculto/topbar móvel e composer viewport. A01/A04/A05/A06 e React#16 protegidos.
 
 ## Exceção mínima de compatibilidade demonstrada
 
 O navegador na imagem UX01 imutável comprovou `ReferenceError: Send is not defined` em `/painel/agentes`, que deixa o root vazio. Para cumprir o critério já congelado de todas as rotas acessíveis, o integrador acrescenta exclusivamente o import `Send` de lucide-react em pages/tenant/TenantAgentes.jsx. Nenhuma lógica, ação ou funcionalidade dessa página muda. A comparação antes registra essa falha preexistente e a candidata deve eliminá-la.
+
+O probe `reviewer-redirect-baseline.json` comprova, na UX01 imutável e na primeira candidata, que entrar em `/painel/funil` como revisor monta o filho e solicita o funil antes do redirect. TenantLayout passa a usar exatamente as mesmas duas URLs permitidas para também condicionar a montagem do Outlet enquanto o redirect replace ocorre. A política e as permissões permanecem iguais; evita-se a requisição prematura sem alterar backend ou rotas. O gate exige zero requisições protegidas do revisor.
 
 ## Auditoria de rotas congelada
 
