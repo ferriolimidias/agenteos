@@ -56,6 +56,6 @@ export function previewClassification(jev) {
   return jev?.provider_used === true && jev?.status === "completed" && ["observed_external", "typesafe"].includes(jev?.source) ? "JEV: decisão externa observada em exemplo sintético" : "Seleção local determinística; JEV não utilizado";
 }
 export function previewTopics(items) {
-  const labels = { price: "Preço", conditions: "Condições", trust: "Confiança", availability: "Disponibilidade", booking: "Agendamento", human: "Atendimento humano", closing: "Fechamento", questions: "Dúvidas", objection: "Objeção", support: "Suporte" };
+  const labels = { ...MODULAR_MODULES, price: "Preço", conditions: "Condições", trust: "Confiança", availability: "Disponibilidade", booking: "Agendamento", human: "Atendimento humano", closing: "Fechamento", questions: "Dúvidas", objection: "Objeção", support: "Suporte" };
   return Array.isArray(items) ? [...new Set(items.filter(key => Object.hasOwn(labels, key)))].map(key => labels[key]) : [];
 }

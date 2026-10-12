@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPreviewRequest, canPreviewProvider, metricValue, modularError, moduleVersion, previewClassification, previewModules, previewResponse, previewScopeCurrent, previewStage } from "./modularAttendance.js";
+import { buildPreviewRequest, canPreviewProvider, metricValue, modularError, moduleVersion, previewClassification, previewModules, previewResponse, previewScopeCurrent, previewStage, previewTopics } from "./modularAttendance.js";
 const catalog = [{ id: "schedule_multi", jev_eligible: true }, { id: "multi_price_trust_availability", jev_eligible: false }];
 const status = { provider: { jev_configured: true } };
 const input = { source: "example", exampleId: "schedule_multi", contextMode: "complete", channel: "whatsapp" };
@@ -46,4 +46,9 @@ test("classification provenance does not turn local or failed calls into observe
   for (const jev of [{}, { source: "observed_external", provider_used: false }, { source: "local_deterministic", provider_used: true }]) assert.match(previewClassification(jev), /não utilizado/);
   assert.match(previewClassification({ provider_used: true, source: "typesafe", status: "completed" }), /externa observada/);
   assert.equal(previewStage({ value: "consideration", status: "synthetic", source: "synthetic_fixture" }), "Consideração · sintética");
+});
+test("actual local backend module topics preserve all three simultaneous subjects and JEV keys", () => {
+  assert.deepEqual(previewTopics(["pricing_conditions", "trust_guarantees", "availability"]), ["Preços e condições", "Confiança e garantias", "Disponibilidade"]);
+  assert.deepEqual(previewTopics(["price", "trust", "availability"]), ["Preço", "Confiança", "Disponibilidade"]);
+  assert.deepEqual(previewTopics(["human_handoff", "human_handoff", "injected_topic"]), ["Transferência humana"]);
 });
