@@ -88,9 +88,9 @@ export default function CommercialJourneyTimeline({ empresaId, leadId, contactNa
         <div className="inbox-journey-time-policy"><p>Horário de Brasília</p><p>Fatos persistidos · mais recentes primeiro · somente leitura</p>{data && <p>Consulta: <JourneyTimestamp value={data.checked_at} /></p>}</div>
       </div>
       {data && <nav className="inbox-journey-section-nav" aria-label="Seções da jornada">
-        <ActionButton type="button" variant="ghost" onClick={() => visitSection(historyRef)}>Linha do tempo</ActionButton>
-        <ActionButton type="button" variant="ghost" onClick={() => visitSection(summaryRef)}>Resumo do contato</ActionButton>
-        <ActionButton type="button" variant="ghost" onClick={() => visitSection(coverageRef)}>Cobertura das fontes</ActionButton>
+        <ActionButton type="button" variant="ghost" onClick={() => visitSection(historyRef)}>Ir à linha do tempo</ActionButton>
+        <ActionButton type="button" variant="ghost" onClick={() => visitSection(summaryRef)}>Ir ao resumo</ActionButton>
+        <ActionButton type="button" variant="ghost" onClick={() => visitSection(coverageRef)}>Ir à cobertura</ActionButton>
       </nav>}
     </header>
     <div className="inbox-journey-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
