@@ -6,7 +6,7 @@ import { allowlistedFunnelFilters, journeyLeadFromSearch } from "../../utils/com
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
 import { stableConversationSendPath } from "../../utils/inboxSend";
-import { conversationKey, definedLeadPatch, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, normalizeLeadId, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
+import { conversationKey, definedLeadPatch, eventMatchesConversation, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, normalizeLeadId, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -20,6 +20,10 @@ const subscribeActiveTenant = (notify) => {
 };
 
 const STATUS_ATENDIMENTO_ABERTOS = new Set(["aberto", "aguardando_humano", "manual"]);
+const selectedConversationIdForLead = (lead) => String(lead?.active_conversation_id || lead?.conversation_id || "").trim();
+const eventConversationId = (data, message = {}) => String(
+  data?.conversation_id || message?.conversation_id || message?.channel_conversation_id || "",
+).trim();
 const AI_STATE_UI = {
   allowed: {
     label: "IA autorizada",
@@ -359,7 +363,7 @@ export default function Inbox() {
       return;
     }
     journeyLinkAppliedRef.current = linkScope;
-    setJourneyLinkMessage(""); setSelectedLead(contact);
+    setJourneyLinkMessage(""); setSelectedLead({ ...contact, active_conversation_id: selectedConversationIdForLead(contact) });
     setFiltroStatus(contact.status_atendimento || "aberto");
     setShowJourney(true);
   }, [empresa_id, journeyLeadId, leads]);
@@ -383,7 +387,7 @@ export default function Inbox() {
       return isNew ? next.sort((a, b) => (new Date(b.ultima_mensagem_data || 0).getTime() || 0) - (new Date(a.ultima_mensagem_data || 0).getTime() || 0)) : next;
     });
     setSelectedLead(previous => leadMatches(previous, data, message)
-      ? patchLeadFromMessage(previous, data, message, { selected: true, isNew }) : previous);
+      ? patchLeadFromMessage(previous, data, message, { selected: isSelected, isNew }) : previous);
     return true;
   }, [recordLeadPatch]);
 
@@ -430,17 +434,22 @@ export default function Inbox() {
   }, [fetchLeads]);
 
   const fetchMessages = useCallback((telefone) => {
-    const key = conversationKey(empresa_id, selectedLeadRef.current);
-    if (!key || !telefone || tenantScopeRef.current !== empresa_id || key !== activeConversationRef.current || telefone !== selectedLeadRef.current?.telefone_contato) return Promise.resolve();
+    const selected = selectedLeadRef.current;
+    const conversationId = selectedConversationIdForLead(selected);
+    const key = conversationKey(empresa_id, selected);
+    if (!key || !telefone || tenantScopeRef.current !== empresa_id || key !== activeConversationRef.current || telefone !== selected?.telefone_contato) return Promise.resolve();
     if (historyRequestRef.current?.key === key && historyRequestRef.current.address === telefone) return historyRequestRef.current.promise;
     historyRequestRef.current?.controller.abort();
-    const request = { key, address: telefone, controller: new AbortController(), revision: revisionRef.current };
+    const request = { key, address: telefone, conversationId, controller: new AbortController(), revision: revisionRef.current };
     historyRequestRef.current = request;
     setMessagesLoading(!(messagesCacheRef.current.get(key) || []).length);
     setMessagesError(false);
-    request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}`, { signal: request.controller.signal })
+    const historyPath = conversationId
+      ? `/empresas/${empresa_id}/inbox/conversas/${encodeURIComponent(conversationId)}/mensagens`
+      : `/empresas/${empresa_id}/inbox/${encodeURIComponent(telefone)}`;
+    request.promise = api.get(historyPath, { signal: request.controller.signal })
       .then(response => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || conversationKey(empresa_id, selectedLeadRef.current) !== key || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || conversationKey(empresa_id, selectedLeadRef.current) !== key || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address || selectedConversationIdForLead(selectedLeadRef.current) !== request.conversationId) return;
         historyLoadedRef.current.add(key);
         setMessages(previous => {
           const next = mergeMessageSnapshot(previous, response.data || [], request.revision, messageRevisionsRef.current.get(key), wsMessagePatchesRef.current.get(key));
@@ -449,7 +458,7 @@ export default function Inbox() {
         });
       })
       .catch(error => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address || selectedConversationIdForLead(selectedLeadRef.current) !== request.conversationId) return;
         console.error("Erro ao buscar mensagens do lead no Inbox:", error);
         setMessagesError(true); // stale-while-revalidate: never erase valid messages
       })
@@ -732,7 +741,7 @@ export default function Inbox() {
           }
 
           if (tipoEventoV2 === "atualizacao_mensagem" || tipoEvento === "mensagem_atualizada") {
-            if (leadMatches(selectedLeadRef.current, data, data.mensagem) && data.mensagem?.id) {
+            if (eventMatchesConversation(selectedLeadRef.current, data, data.mensagem) && data.mensagem?.id) {
               setMessages(previous => upsertMessage(previous, data.mensagem, { allowInsert: false }), activeConversationRef.current, true);
             }
             return;
@@ -764,14 +773,18 @@ export default function Inbox() {
 
           const telefoneEvento = String(data?.telefone || "");
           const novaMensagem = data?.mensagem || data?.message;
-          const conversationIdEvento = String(data?.conversation_id || novaMensagem?.conversation_id || novaMensagem?.channel_conversation_id || "");
-          const isSelectedConversation = leadMatches(selectedLeadRef.current, data, novaMensagem);
+          const conversationIdEvento = eventConversationId(data, novaMensagem);
+          const isSelectedConversation = eventMatchesConversation(selectedLeadRef.current, data, novaMensagem);
+          if (conversationIdEvento && selectedLeadRef.current?.id === data?.lead_id &&
+              !(selectedLeadRef.current?.conversation_options || []).some((item) => item.conversation_id === conversationIdEvento)) {
+            scheduleFetchLeads(10000);
+          }
 
           const isReaction = String(novaMensagem?.tipo_mensagem || "").toLowerCase() === "reaction";
           const eventIdentity = messageIdentity(novaMensagem);
           const eventContact = leadsRef.current.find(lead => leadMatches(lead, data, novaMensagem));
-          const eventConversationKey = conversationKey(activeEmpresaId, eventContact);
-          const eventKey = `${eventContact?.id || data.lead_id || conversationIdEvento || telefoneEvento}:${eventIdentity}`;
+          const eventConversationKey = conversationKey(activeEmpresaId, eventContact ? { ...eventContact, active_conversation_id: conversationIdEvento || eventContact.conversation_id } : eventContact);
+          const eventKey = `${eventContact?.id || data.lead_id || conversationIdEvento || telefoneEvento}:${conversationIdEvento}:${eventIdentity}`;
           const isCreated = tipoEventoV2 !== "inbox.message.updated";
           const knownMessage = (messagesCacheRef.current.get(eventConversationKey) || []).some(message => eventIdentity && (messageIdentity(message) === eventIdentity || String(message.external_message_id || "") === String(novaMensagem?.external_message_id || "_")));
           const isNew = isCreated && !isReaction && Boolean(eventIdentity) && !seenRealtimeRef.current.has(eventKey) && !knownMessage;
@@ -788,7 +801,7 @@ export default function Inbox() {
             setMessages(previous => upsertMessage(previous, novaMensagem, { allowInsert: isCreated }), activeConversationRef.current, true);
           } else if (novaMensagem) {
             const contact = leadsRef.current.find(lead => leadMatches(lead, data, novaMensagem));
-            const key = conversationKey(activeEmpresaId, contact);
+            const key = conversationKey(activeEmpresaId, contact ? { ...contact, active_conversation_id: conversationIdEvento || contact.conversation_id } : contact);
             if (key && messagesCacheRef.current.has(key)) {
               setMessages(previous => upsertMessage(previous, novaMensagem, { allowInsert: isCreated }), key, true);
             }
@@ -1491,7 +1504,7 @@ export default function Inbox() {
     if (!selectedLead) return;
     if (!window.confirm("Certeza que deseja excluir esta conversa e todo o seu histórico de mensagens?")) return;
     try {
-      const conversationId = String(selectedLead.conversation_id || "").trim();
+      const conversationId = selectedConversationIdForLead(selectedLead);
       if (!conversationId) throw new Error("Conversa não identificada");
       await api.delete(`/empresas/${empresa_id}/crm/leads/${selectedLead.id}`, { params: { conversation_id: conversationId } });
       setSelectedLead(null);
@@ -1531,8 +1544,14 @@ export default function Inbox() {
   };
 
   const handleSelectLead = (lead) => {
-    setSelectedLead(lead);
+    setSelectedLead({ ...lead, active_conversation_id: selectedConversationIdForLead(lead) });
     setShowConversationList(false);
+  };
+
+  const handleSelectConversation = (conversationId) => {
+    const selectedId = String(conversationId || "").trim();
+    if (!selectedId || !selectedLead?.conversation_options?.some((item) => item.conversation_id === selectedId)) return;
+    setSelectedLead((previous) => previous ? { ...previous, active_conversation_id: selectedId } : previous);
   };
 
   // Observe the active socket for presentation only. Connection ownership,
@@ -1621,6 +1640,13 @@ export default function Inbox() {
 
   const hasPayload = Boolean(selectedFile || newMessage.trim());
   const manualEnabled = aiEffectiveState?.manual_enabled ?? selectedLead?.ia_ativa ?? true;
+  const selectedConversationOption = (selectedLead?.conversation_options || []).find(
+    (option) => option.conversation_id === selectedConversationIdForLead(selectedLead),
+  );
+  const selectedConversationContactName = selectedConversationOption?.contact_name || selectedLead?.nome_contato;
+  const selectedConversationAddressLabel = selectedConversationOption
+    ? selectedConversationOption.address_label || (String(selectedConversationOption.channel || "").toLowerCase() === "instagram" ? "Instagram Direct" : "Conversa vinculada")
+    : selectedLead?.telefone_contato;
   const selectedLeadPaused = !manualEnabled;
   const aiEffectiveReason = String(aiEffectiveState?.reason_code || "");
   const aiEffectiveBlocked = aiEffectiveState && aiEffectiveState.effective_state !== "authorized";
@@ -1801,17 +1827,42 @@ export default function Inbox() {
                     <ArrowLeft size={18} />
                   </button>
                   <ContactAvatar
-                    name={selectedLead.nome_contato}
+                    name={selectedConversationContactName}
                     photoUrl={selectedLead.foto_url}
                     size="lg"
                     className="flex-shrink-0"
                   />
                   <div className="inbox-contact-identity min-w-0">
-                    <h3 className="truncate text-base font-semibold text-gray-900">{selectedLead.nome_contato}</h3>
-                    <p className="truncate text-sm text-gray-500">{selectedLead.telefone_contato}</p>
+                    <h3 className="truncate text-base font-semibold text-gray-900">{selectedConversationContactName}</h3>
+                    <p className="truncate text-sm text-gray-500">{selectedConversationAddressLabel}</p>
                     {selectedLead.etapa_crm && <p className="inbox-contact-stage" title={selectedLead.etapa_crm}>CRM · {selectedLead.etapa_crm}</p>}
                   </div>
                 </div>
+
+                {(selectedLead.conversation_options || []).length > 1 && (
+                  <label className="flex min-w-0 flex-col gap-1 text-xs font-medium text-gray-600 lg:max-w-64">
+                    <span>Conversa deste contato</span>
+                    <select
+                      aria-label="Selecionar conversa do contato"
+                      value={selectedConversationIdForLead(selectedLead)}
+                      onChange={(event) => handleSelectConversation(event.target.value)}
+                      className="min-w-0 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {selectedLead.conversation_options.map((option) => {
+                        const channelLabel = String(option.channel || "conversa").toUpperCase();
+                        const contactLabel = option.contact_name || option.address_label || channelLabel;
+                        const dateLabel = option.last_message_at
+                          ? new Date(option.last_message_at).toLocaleDateString([], { day: "2-digit", month: "2-digit" })
+                          : "";
+                        return (
+                          <option key={option.conversation_id} value={option.conversation_id}>
+                            {[channelLabel, contactLabel, dateLabel].filter(Boolean).join(" · ")}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                )}
 
                 <div className="inbox-header-actions flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap">
                   <button ref={journeyButtonRef} type="button" onClick={() => setShowJourney(value => !value)} aria-haspopup="dialog" aria-expanded={showJourney} aria-controls="inbox-journey-panel" className="inbox-journey-trigger rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
@@ -1949,7 +2000,7 @@ export default function Inbox() {
                 messages={messages || []}
                 renderMessageContent={renderMensagemConteudo}
                 messagesEndRef={messagesEndRef}
-                contactName={selectedLead?.nome_contato}
+                contactName={selectedConversationContactName}
                 contactPhotoUrl={selectedLead?.foto_url}
                 hideEmptyState={messagesLoading || messagesError}
               />

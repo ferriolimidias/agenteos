@@ -22,6 +22,8 @@ from app.services.mensageria.schemas import StandardOutgoingMessage
 from app.services.channel_factory import despachar_mensagem
 from app.services.rosangela_ai_control import get_conversation_manual_ai_state, resolve_conversation_ai_state
 from app.services.whatsapp_address import normalize_whatsapp_address
+from app.services.channels.resolver import channel_for_provider, provider_for_connection_type
+from app.services.channels.types import normalize_provider
 from app.services.websocket_manager import manager
 from app.services.meta_attribution import dados_adicionais_for_public_response
 from app.api.routers.auth import require_tenant_access
@@ -276,13 +278,20 @@ async def _resolve_inbox_send_context(
     conversation_provider = _provider_canonico(getattr(conversation, "provider", None))
     contact_provider = _provider_canonico(getattr(contact, "provider", None))
     connection_provider = _provider_conexao_canonico(conexao)
+    try:
+        provider_channel = channel_for_provider(normalize_provider(conversation_provider)).value
+        connection_type_provider = _provider_canonico(provider_for_connection_type(getattr(conexao, "tipo", None)).value)
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Provider ou tipo da conexão não suportado para envio manual")
     if (
         not channel
+        or channel != provider_channel
         or channel != contact_channel
         or (connection_channel and connection_channel != channel)
         or not conversation_provider
         or conversation_provider != contact_provider
         or conversation_provider != connection_provider
+        or connection_provider != connection_type_provider
         or str(getattr(conversation, "conexao_id", "")) != str(getattr(conexao, "id", ""))
         or str(getattr(contact, "conexao_id", "")) != str(getattr(conexao, "id", ""))
     ):
@@ -615,6 +624,50 @@ async def listar_inbox(empresa_id: str, _=Depends(require_tenant_access)):
                 .order_by(desc(latest_at).nullslast(), desc(CRMLead.criado_em), desc(CRMLead.id))
             )
             rows = result.all()
+
+            conversation_options_by_lead: dict[uuid.UUID, list[dict[str, Any]]] = {}
+            lead_ids = [row[0].id for row in rows]
+            if lead_ids:
+                conversation_options_result = await session.execute(
+                    select(ChannelConversation, ChannelContact)
+                    .join(
+                        ChannelContact,
+                        and_(
+                            ChannelContact.id == ChannelConversation.contact_id,
+                            ChannelContact.empresa_id == ChannelConversation.empresa_id,
+                        ),
+                    )
+                    .where(
+                        ChannelConversation.empresa_id == empresa_uuid,
+                        ChannelConversation.lead_id.in_(lead_ids),
+                        or_(
+                            ChannelContact.lead_id.is_(None),
+                            ChannelContact.lead_id == ChannelConversation.lead_id,
+                        ),
+                    )
+                    .order_by(
+                        ChannelConversation.lead_id,
+                        desc(ChannelConversation.last_message_at).nullslast(),
+                        desc(ChannelConversation.atualizado_em),
+                        desc(ChannelConversation.id),
+                    )
+                )
+                for conversation, contact in conversation_options_result.all():
+                    conversation_options_by_lead.setdefault(conversation.lead_id, []).append(
+                        {
+                            "conversation_id": str(conversation.id),
+                            "contact_id": str(contact.id),
+                            "channel": str(conversation.channel or ""),
+                            "provider": str(conversation.provider or ""),
+                            "contact_name": str(getattr(contact, "display_name", None) or "").strip() or None,
+                            "address_label": (
+                                str(getattr(contact, "phone_e164", None) or "").strip()
+                                if str(conversation.channel or "").lower() == "whatsapp"
+                                else None
+                            ),
+                            "last_message_at": serialize_utc_timestamp(conversation.last_message_at),
+                        }
+                    )
             
             leads_retorno = []
             now = datetime.utcnow()
@@ -636,6 +689,7 @@ async def listar_inbox(empresa_id: str, _=Depends(require_tenant_access)):
                 leads_retorno.append({
                     "id": str(l.id),
                     "conversation_id": str(conversation_id) if conversation_id else None,
+                    "conversation_options": conversation_options_by_lead.get(l.id, []),
                     "nome_contato": chat_name,
                     "foto_url": l.foto_url,
                     "telefone_contato": l.telefone_contato,
@@ -741,6 +795,7 @@ async def listar_mensagens_conversa_multicanal(
         return [
             {
                 "id": str(msg.id),
+                "texto": str(getattr(msg, "texto", "") or ""),
                 "conversation_id": str(conversation_uuid),
                 "conexao_id": str(msg.conexao_id) if msg.conexao_id else None,
                 "channel": msg.channel,
@@ -748,10 +803,12 @@ async def listar_mensagens_conversa_multicanal(
                 "external_message_id": msg.external_message_id,
                 "direction": msg.direction,
                 "message_status": msg.message_status,
+                "status": msg.message_status,
                 "provider_status": msg.provider_status,
                 "tipo_mensagem": msg.tipo_mensagem,
                 "origem_mensagem": msg.origem_mensagem,
                 "from_me": bool(msg.from_me),
+                "media_url": str(msg.media_url) if msg.media_url else None,
                 "metadata_json": msg.metadata_json or {},
                 "reactions": reaction_index.get(str(msg.external_message_id or ""), []),
                 "criado_em": serialize_utc_timestamp(msg.criado_em),

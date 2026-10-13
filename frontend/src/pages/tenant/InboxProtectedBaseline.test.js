@@ -8,7 +8,8 @@ const header = inbox.match(/<header className="chat-conversation-header[^>]*>[\s
 
 test("Inbox header canonical baseline requires all operational controls", () => {
   assert.match(header, /ContactAvatar/);
-  assert.match(header, /selectedLead\.nome_contato/);
+  assert.match(header, /selectedConversationContactName/);
+  assert.match(inbox, /selectedConversationContactName = selectedConversationOption\?\.contact_name \|\| selectedLead\?\.nome_contato/);
   assert.match(header, /Concluir atendimento|Reabrir atendimento/);
   assert.match(header, /\bTags\b/);
   assert.match(header, /onClick=\{handleToggleBot\}|chat-header-ai/);

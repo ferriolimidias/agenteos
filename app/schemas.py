@@ -405,6 +405,7 @@ class ChannelConversationResponse(BaseModel):
 class ConversaListaResponse(BaseModel):
     id: str | None = None
     conversation_id: str | None = None
+    conversation_options: list[dict[str, Any]] = Field(default_factory=list)
     nome_contato: str | None = None
     foto_url: str | None = None
     telefone_contato: str | None = None

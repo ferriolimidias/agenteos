@@ -25,6 +25,14 @@ def test_meta_webhook_publishes_canonical_inbox_event_after_commit():
     assert "Capture every ORM-derived value needed after commit" in source
 
 
+def test_evolution_webhook_identifies_the_persisted_conversation_in_realtime_events():
+    source = _read("app/api/routers/webhook.py")
+    commit_index = source.index("await session.commit()", source.index('"type": "NOVA_MENSAGEM"') - 2500)
+    broadcast_index = source.index('"type": "NOVA_MENSAGEM"')
+    assert commit_index < broadcast_index
+    assert '"conversation_id": str(nova_msg.channel_conversation_id)' in source
+
+
 def test_ai_gate_state_is_broadcast_for_inbound_processing():
     source = _read("app/api/utils.py")
 
@@ -118,6 +126,9 @@ def test_tags_officials_support_operacional_and_no_infinite_retry_source():
 class InboxRealtimeIAMetaUnittest(unittest.TestCase):
     def test_meta_webhook_publishes_canonical_inbox_event_after_commit_unittest(self):
         test_meta_webhook_publishes_canonical_inbox_event_after_commit()
+
+    def test_evolution_webhook_identifies_the_persisted_conversation_unittest(self):
+        test_evolution_webhook_identifies_the_persisted_conversation_in_realtime_events()
 
     def test_ai_gate_state_is_broadcast_for_inbound_processing_unittest(self):
         test_ai_gate_state_is_broadcast_for_inbound_processing()

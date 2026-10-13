@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  conversationKey, normalizePhone, normalizeLeadId, leadMatches, definedLeadPatch,
+  conversationKey, eventMatchesConversation, normalizePhone, normalizeLeadId, leadMatches, definedLeadPatch,
   patchLeadFromMessage, mergeLeadSnapshot, messageIdentity, upsertMessage,
   mergeMessageSnapshot,
 } from "./inboxRealtime.js";
@@ -27,10 +27,10 @@ const reaction = {
 };
 
 test("conversation keys isolate tenants and contacts and reject incomplete identities", () => {
-  assert.equal(conversationKey("tenant-a", lead), JSON.stringify(["tenant-a", "lead-a"]));
+  assert.equal(conversationKey("tenant-a", lead), JSON.stringify(["tenant-a", "lead-a", "conversation-a"]));
   assert.notEqual(conversationKey("tenant-b", lead), conversationKey("tenant-a", lead));
   assert.notEqual(conversationKey("tenant-a", { ...lead, id: "lead-b" }), conversationKey("tenant-a", lead));
-  assert.equal(conversationKey("tenant-a", { id: "lead-a" }), conversationKey("tenant-a", lead));
+  assert.notEqual(conversationKey("tenant-a", { id: "lead-a" }), conversationKey("tenant-a", lead));
   assert.equal(conversationKey("tenant-a", { telefone_contato: lead.telefone_contato }), "");
   assert.equal(conversationKey("", lead), "");
 });
@@ -49,6 +49,14 @@ test("event matching supports lead, conversation and normalized phone without em
   assert.equal(leadMatches(lead, { lead_id: "lead-b", telefone: "5511999990002" }), false);
   assert.equal(leadMatches(lead, {}), false);
   assert.equal(leadMatches(null, { lead_id: "lead-a" }), false);
+});
+
+test("realtime messages are attributed only to the conversation displayed in the Inbox", () => {
+  const selected = { ...lead, active_conversation_id: "conversation-a" };
+  assert.equal(eventMatchesConversation(selected, { lead_id: "lead-a", conversation_id: "conversation-a" }), true);
+  assert.equal(eventMatchesConversation(selected, { lead_id: "lead-a", conversation_id: "conversation-b" }), false);
+  assert.equal(eventMatchesConversation(selected, { lead_id: "lead-a" }), false);
+  assert.equal(eventMatchesConversation({ id: "lead-a" }, { lead_id: "lead-a" }), true);
 });
 
 test("partial lead payload never erases identity, status, stage or tags with absent values", () => {
@@ -329,12 +337,14 @@ test("a provably later HTTP last-message timestamp can advance the preview", () 
 });
 
 
-test("contact cache survives mutable WhatsApp delivery address and added conversation metadata", () => {
+test("conversation cache survives address patches and isolates an explicitly selected thread", () => {
   const original = { ...lead, telefone_contato: "551198765432" };
   const key = conversationKey("tenant-a", original);
-  const updated = { ...original, telefone_contato: "5511998765432", conversation_id: "added" };
+  const updated = { ...original, telefone_contato: "5511998765432" };
   assert.equal(conversationKey("tenant-a", updated), key);
   assert.equal(conversationKey("tenant-a", { ...updated, telefone_contato: null }), key);
+  assert.notEqual(conversationKey("tenant-a", { ...updated, active_conversation_id: "other-thread" }), key);
+  assert.equal(conversationKey("tenant-a", { ...updated, active_conversation_id: "conversation-a" }), key);
 });
 
 test("UUID case aliases represent the same contact without collapsing opaque IDs or tenants", () => {

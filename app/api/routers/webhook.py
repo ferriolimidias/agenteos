@@ -727,6 +727,7 @@ async def save_history_and_check_pause(
                 "tipo_evento": tipo_evento,
                 "telefone": telefone,
                 "lead_id": str(lead.id),
+                "conversation_id": str(nova_msg.channel_conversation_id) if nova_msg.channel_conversation_id else None,
                 "mensagem": mensagem_payload,
             },
         )

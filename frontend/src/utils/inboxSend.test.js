@@ -16,6 +16,15 @@ test("stable media path uses the same tenant-bound conversation identity", () =>
   );
 });
 
+test("explicitly selected conversation takes precedence over lead's latest thread", () => {
+  assert.equal(
+    stableConversationSendPath("tenant-1", {
+      id: "lead-1", conversation_id: "latest-thread", active_conversation_id: "selected-thread",
+    }),
+    "/empresas/tenant-1/inbox/leads/lead-1/conversations/selected-thread/send",
+  );
+});
+
 test("missing identity and unsupported operations never fall back to a phone path", () => {
   assert.equal(stableConversationSendPath("tenant-1", { id: "lead-1" }), "");
   assert.equal(stableConversationSendPath("tenant-1", { conversation_id: "conversation-1" }), "");

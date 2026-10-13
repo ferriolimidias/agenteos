@@ -16,10 +16,17 @@ export function normalizeLeadId(value) {
 
 export function conversationKey(tenant, lead) {
   const tenantId = identity(tenant);
-  // History is owned by CRMLead.id. A mutable delivery address must never
-  // create another message cache for the same contact during confirmation.
+  // Cache the displayed thread, not every conversation/contact attached to a CRM lead.
+  const conversationId = identity(lead?.active_conversation_id || lead?.conversation_id);
   const leadId = normalizeLeadId(lead?.id);
-  return tenantId && leadId ? JSON.stringify([tenantId, leadId]) : "";
+  return tenantId && leadId ? JSON.stringify([tenantId, leadId, conversationId]) : "";
+}
+
+export function eventMatchesConversation(lead, data, message = {}) {
+  if (!leadMatches(lead, data, message)) return false;
+  const selectedId = identity(lead?.active_conversation_id || lead?.conversation_id);
+  const eventId = identity(data?.conversation_id || message?.conversation_id || message?.channel_conversation_id);
+  return selectedId ? Boolean(eventId && eventId === selectedId) : !eventId;
 }
 
 export function leadMatches(lead, data, message = {}) {

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 from app.api.routers import inbox
+from app.schemas import ConversaListaResponse
 
 
 class _Scalars:
@@ -32,6 +33,20 @@ class _Result:
 
     def first(self):
         return self.rows[0] if self.rows else None
+
+    def all(self):
+        return self.rows
+
+
+class _AsyncSessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 class _EmptySession:
@@ -88,7 +103,7 @@ class _SendSession:
         return None
 
 
-def _send_context(*, provider="evolution", channel="whatsapp", tenant_id=None, lead_id=None):
+def _send_context(*, provider="evolution", channel="whatsapp", tenant_id=None, lead_id=None, connection_type=None):
     tenant_id = tenant_id or uuid.uuid4()
     lead_id = lead_id or uuid.uuid4()
     conversation_id = uuid.uuid4()
@@ -127,7 +142,11 @@ def _send_context(*, provider="evolution", channel="whatsapp", tenant_id=None, l
         empresa_id=tenant_id,
         channel=channel,
         provider=provider,
-        tipo=provider,
+        tipo=connection_type or {
+            "evolution": "evolution",
+            "meta_whatsapp": "meta",
+            "meta_instagram": "instagram",
+        }.get(provider, provider),
         status="connected",
         instagram_business_account_id=None,
     )
@@ -168,6 +187,88 @@ class InboxStableSendBaselineTests(unittest.TestCase):
         expected = "/api/empresas/{empresa_id}/inbox/leads/{lead_id}/conversations/{conversation_id}/send"
         paths = {route.path for route in inbox.router.routes}
         self.assertIn(expected, paths)
+
+    def test_inbox_list_exposes_separate_persisted_conversation_choices(self):
+        tenant_id, lead, selected, contact, _connection, _db = _send_context()
+        other_contact = SimpleNamespace(
+            id=uuid.uuid4(), lead_id=lead.id, display_name="Contato secundário sintético",
+            phone_e164="+5511999900002",
+        )
+        other_conversation = SimpleNamespace(
+            id=uuid.uuid4(), lead_id=lead.id, channel="whatsapp", provider="evolution",
+            last_message_at=datetime.utcnow(), atualizado_em=datetime.utcnow(),
+        )
+        lead.nome_contato = "Lead sintético"
+        lead.foto_url = None
+        lead.historico_resumo = ""
+        lead.status_atendimento = "aberto"
+        lead.bot_pausado_ate = None
+        lead.ia_ativa = True
+        lead.etapa = None
+        lead.tags = []
+        lead.criado_em = datetime.utcnow()
+        lead.dados_adicionais = {}
+        main_row = (lead, None, None, 0, selected.id, {}, None, None)
+
+        class ListSession:
+            def __init__(self):
+                self.calls = []
+
+            async def execute(self, statement):
+                self.calls.append(str(statement))
+                if len(self.calls) == 1:
+                    return _Result([])  # Tenant tags.
+                if len(self.calls) == 2:
+                    return _Result([main_row])
+                return _Result([(selected, contact), (other_conversation, other_contact)])
+
+        session = ListSession()
+
+        async def invoke():
+            with patch.object(inbox, "AsyncSessionLocal", lambda: _AsyncSessionContext(session)):
+                return await inbox.listar_inbox(empresa_id=str(tenant_id))
+
+        response = asyncio.run(invoke())
+        validated = ConversaListaResponse(**response[0])
+        options = response[0]["conversation_options"]
+        self.assertEqual([item["conversation_id"] for item in options], [str(selected.id), str(other_conversation.id)])
+        self.assertEqual(options[1]["contact_id"], str(other_contact.id))
+        self.assertEqual(options[1]["contact_name"], "Contato secundário sintético")
+        self.assertEqual(len(validated.conversation_options), 2)
+        self.assertTrue(any("channel_conversations.empresa_id" in statement for statement in session.calls))
+
+    def test_conversation_history_endpoint_returns_message_content_for_exact_thread(self):
+        tenant, lead, conversation, _contact, _connection, _db = _send_context()
+        message = SimpleNamespace(
+            id=uuid.uuid4(), texto="synthetic history", conexao_id=conversation.conexao_id,
+            channel="whatsapp", provider="evolution", external_message_id="synthetic-id",
+            direction="inbound", message_status="delivered", provider_status="delivered",
+            tipo_mensagem="text", origem_mensagem="humano", from_me=False,
+            media_url=None, metadata_json={}, criado_em=datetime.utcnow(),
+        )
+
+        class HistorySession:
+            def __init__(self):
+                self.calls = []
+
+            async def execute(self, statement):
+                self.calls.append(str(statement))
+                return _Result([conversation] if len(self.calls) == 1 else [message])
+
+        session = HistorySession()
+
+        async def invoke():
+            with patch.object(inbox, "AsyncSessionLocal", lambda: _AsyncSessionContext(session)):
+                return await inbox.listar_mensagens_conversa_multicanal(
+                    empresa_id=str(tenant), conversation_id=str(conversation.id),
+                )
+
+        response = asyncio.run(invoke())
+        self.assertEqual(len(response), 1)
+        self.assertEqual(response[0]["conversation_id"], str(conversation.id))
+        self.assertEqual(response[0]["texto"], "synthetic history")
+        self.assertIn("mensagens_historico.channel_conversation_id", session.calls[1])
+        self.assertIn("mensagens_historico.empresa_id", session.calls[1])
 
     def test_stable_text_send_uses_persisted_contact_and_selected_connection_once(self):
         tenant, lead, conversation, contact, connection, db = _send_context()
@@ -316,6 +417,58 @@ class InboxStableSendBaselineTests(unittest.TestCase):
             ))
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(raised.exception.detail, "IGSID indisponível para esta conversa Direct")
+
+    def test_impossible_provider_channel_pairs_never_reach_any_dispatcher(self):
+        for provider, channel in (
+            ("evolution", "instagram"),
+            ("meta_whatsapp", "instagram"),
+            ("meta_instagram", "whatsapp"),
+        ):
+            with self.subTest(provider=provider, channel=channel):
+                tenant, lead, conversation, _contact, _connection, db = _send_context(
+                    provider=provider, channel=channel,
+                )
+                whatsapp_dispatcher = AsyncMock()
+                official_dispatcher = AsyncMock()
+
+                async def invoke():
+                    with patch.object(inbox, "dispatch_outbound_message", whatsapp_dispatcher), \
+                         patch.object(inbox, "despachar_mensagem", official_dispatcher):
+                        with self.assertRaises(HTTPException) as raised:
+                            await inbox.enviar_mensagem_por_conversa(
+                                empresa_id=str(tenant), lead_id=str(lead.id), conversation_id=str(conversation.id),
+                                payload=inbox.SendMessagePayload(texto="synthetic", client_message_id="pair-check"),
+                                db=db,
+                            )
+                    return raised.exception
+
+                error = asyncio.run(invoke())
+                self.assertEqual(error.status_code, 409)
+                whatsapp_dispatcher.assert_not_awaited()
+                official_dispatcher.assert_not_awaited()
+
+    def test_connection_provider_and_type_mismatch_never_reaches_dispatcher(self):
+        tenant, lead, conversation, _contact, connection, db = _send_context(
+            provider="evolution", channel="whatsapp", connection_type="meta",
+        )
+        whatsapp_dispatcher = AsyncMock()
+        official_dispatcher = AsyncMock()
+
+        async def invoke():
+            with patch.object(inbox, "dispatch_outbound_message", whatsapp_dispatcher), \
+                 patch.object(inbox, "despachar_mensagem", official_dispatcher):
+                with self.assertRaises(HTTPException) as raised:
+                    await inbox.enviar_mensagem_por_conversa(
+                        empresa_id=str(tenant), lead_id=str(lead.id), conversation_id=str(conversation.id),
+                        payload=inbox.SendMessagePayload(texto="synthetic", client_message_id="provider-type-check"),
+                        db=db,
+                    )
+            return raised.exception
+
+        error = asyncio.run(invoke())
+        self.assertEqual(error.status_code, 409)
+        whatsapp_dispatcher.assert_not_awaited()
+        official_dispatcher.assert_not_awaited()
 
     def test_unlinked_conversation_and_contact_lead_mismatch_never_dispatch(self):
         tenant, lead, conversation, contact, _connection, db = _send_context()
