@@ -298,3 +298,13 @@ test("HTTP can fill unknown messages and advance proven delivery without undoing
   assert.equal(merged.find(m => m.id === "m").texto, "editado");
   assert.equal(merged.find(m => m.id === "gap").texto, "recuperado");
 });
+
+
+test("unversioned HTTP acknowledgements do not override observed failed or unknown states", () => {
+  for (const status of ["failed", "error", "UNKNOWN"]) {
+    const current = [{ id: "m", texto: "conteúdo", status }];
+    const observed = new Map([["m", { status }]]);
+    const result = mergeMessageSnapshot(current, [{ id: "m", status: "read" }], 20, new Map(), observed);
+    assert.equal(result[0].status, status);
+  }
+});

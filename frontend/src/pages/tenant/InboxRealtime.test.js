@@ -40,7 +40,7 @@ test("realtime handler keeps payload in scope for every websocket frame", () => 
   assert.match(source, /nova_mensagem_inbound/);
   assert.match(source, /nova_mensagem_outbound/);
   assert.match(source, /const novaMensagem = data\?\.mensagem \|\| data\?\.message/);
-  assert.match(source, /setMessages\(\(prev\) =>/);
+  assert.match(source, /setMessages\(previous => upsertMessage/);
   assert.match(source, /status_ia_changed/);
 });
 

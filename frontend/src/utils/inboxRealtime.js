@@ -205,7 +205,7 @@ export function mergeMessageSnapshot(current = [], remote = [], startRevision = 
       // unversioned snapshot cannot undo an observed realtime edit or reaction.
       const ranks = { pending: 0, sent: 1, delivered: 2, read: 3 };
       for (const candidate of [message.status, existing?.status]) {
-        if (ranks[candidate] !== undefined && ranks[candidate] > (ranks[incoming.status] ?? -1)) incoming.status = candidate;
+        if (ranks[candidate] !== undefined && ranks[incoming.status] !== undefined && ranks[candidate] > ranks[incoming.status]) incoming.status = candidate;
       }
     }
     merged = upsertMessage(merged, incoming);
