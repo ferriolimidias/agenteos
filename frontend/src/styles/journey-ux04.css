@@ -1,23 +1,67 @@
-/* Read-only A04 Journey, docked above the existing composer. */
-.inbox-journey-panel { min-width: 0; height: 100%; color: var(--fm-text); background: var(--fm-raised); border-left: 1px solid var(--fm-border); }
-.inbox-journey-panel .inbox-journey-heading { padding: var(--fm-space-3) var(--fm-space-4); background: var(--fm-surface); border-color: var(--fm-border); }
-.inbox-journey-panel h2, .inbox-journey-panel h3 { color: var(--fm-text); }
-.inbox-journey-panel h2 svg { color: var(--fm-bronze); }
-.inbox-journey-panel p, .inbox-journey-panel label { overflow-wrap: anywhere; }
-.inbox-journey-panel header > p, .inbox-journey-panel .inbox-journey-scroll > p { color: var(--fm-muted); line-height: 1.6; }
-.inbox-journey-panel select { min-width: 0; min-height: 2.5rem; background: var(--fm-raised); color: var(--fm-text); border-color: var(--fm-border-strong); border-radius: var(--fm-radius-md); }
-.inbox-journey-panel .inbox-journey-scroll { padding: var(--fm-space-4); scrollbar-gutter: stable; }
-.inbox-journey-panel .inbox-journey-coverage { background: var(--fm-surface); border-color: var(--fm-border); }
-.inbox-journey-panel .inbox-journey-coverage p { color: var(--fm-muted); line-height: 1.65; }
-.inbox-journey-panel summary { color: var(--fm-primary); }
-.inbox-journey-panel [data-testid="journey-events"] { padding-left: var(--fm-space-3); border-left: 1px solid var(--fm-border-strong); }
-.inbox-journey-panel .inbox-journey-event { position: relative; background: var(--fm-raised); border-color: var(--fm-border); border-radius: var(--fm-radius-md); box-shadow: var(--fm-shadow-card); }
-.inbox-journey-panel .inbox-journey-event::before { position: absolute; content: ""; width: 0.5rem; height: 0.5rem; left: -1.05rem; top: 1rem; border-radius: 50%; background: var(--fm-bronze); }
-.inbox-journey-panel .inbox-journey-event > p { color: var(--fm-muted); line-height: 1.6; }
-.inbox-journey-panel details > summary { min-height: 1.75rem; }
-.inbox-journey-panel dd { overflow-wrap: anywhere; }
+/* Read-only A04 Journey inside the dedicated Inbox workspace. */
+.inbox-journey-panel { min-width: 0; height: 100%; color: var(--fm-text); background: var(--fm-raised); }
+.inbox-journey-heading { padding: var(--fm-space-4) var(--fm-space-6); background: var(--fm-surface); border-bottom: 1px solid var(--fm-border); }
+.inbox-journey-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--fm-space-4); }
+.inbox-journey-title-row h2 { display: flex; align-items: center; gap: var(--fm-space-2); color: var(--fm-text); font-size: var(--fm-text-lg); font-weight: 650; line-height: 1.35; }
+.inbox-journey-title-row h2 svg { flex-shrink: 0; color: var(--fm-bronze); }
+.inbox-journey-title-row button { flex-shrink: 0; }
+.inbox-journey-contact { display: flex; align-items: center; flex-wrap: wrap; gap: var(--fm-space-2); margin-top: var(--fm-space-1); color: var(--fm-secondary); font-size: var(--fm-text-sm); }
+.inbox-journey-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--fm-space-4) var(--fm-space-6); margin-top: var(--fm-space-4); }
+.inbox-journey-filter { flex: 0 1 20rem; min-width: 12rem; }
+.inbox-journey-filter label { display: block; margin-bottom: var(--fm-space-1); font-size: var(--fm-text-sm); font-weight: 600; }
+.inbox-journey-time-policy { flex: 1; min-width: 14rem; color: var(--fm-muted); font-size: var(--fm-text-xs); line-height: 1.6; }
+.inbox-journey-time-policy p:first-child { color: var(--fm-secondary); font-size: var(--fm-text-sm); font-weight: 600; }
+.inbox-journey-section-nav { display: flex; flex-wrap: wrap; gap: var(--fm-space-1); margin-top: var(--fm-space-2); }
+.inbox-journey-section-nav .fm-button { min-height: 2.25rem; padding: var(--fm-space-1) var(--fm-space-2); font-size: var(--fm-text-xs); }
+.inbox-journey-panel p, .inbox-journey-panel h2, .inbox-journey-panel h3, .inbox-journey-panel h4, .inbox-journey-panel dd { overflow-wrap: anywhere; }
+.inbox-journey-panel .inbox-journey-scroll { padding: var(--fm-space-5) var(--fm-space-6); scrollbar-gutter: stable; }
+.inbox-journey-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--fm-space-6); }
+.inbox-journey-history, .inbox-journey-context { min-width: 0; }
+.inbox-journey-section-title { margin-bottom: var(--fm-space-4); }
+.inbox-journey-section-title h3 { color: var(--fm-text); font-size: var(--fm-text-sm); font-weight: 650; }
+.inbox-journey-section-title p { margin-top: var(--fm-space-1); color: var(--fm-muted); font-size: var(--fm-text-sm); line-height: 1.6; }
+.inbox-journey-events { padding-left: var(--fm-space-4); border-left: 1px solid var(--fm-border-strong); }
+.inbox-journey-event { position: relative; padding: var(--fm-space-4); background: var(--fm-raised); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); box-shadow: var(--fm-shadow-card); }
+.inbox-journey-event + .inbox-journey-event { margin-top: var(--fm-space-3); }
+.inbox-journey-event::before { position: absolute; content: ""; width: 0.5rem; height: 0.5rem; left: -1.3rem; top: 1.3rem; border-radius: 50%; background: var(--fm-bronze); }
+.inbox-journey-event-time { color: var(--fm-muted); font-size: var(--fm-text-xs); line-height: 1.6; font-variant-numeric: tabular-nums; }
+.inbox-journey-event h4 { margin-top: var(--fm-space-1); color: var(--fm-text); font-size: var(--fm-text-sm); font-weight: 650; line-height: 1.6; }
+.inbox-journey-event-meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--fm-space-2); margin-top: var(--fm-space-2); }
+.inbox-journey-event-meta p { color: var(--fm-muted); font-size: var(--fm-text-xs); line-height: 1.6; }
+.inbox-journey-evidence { margin-top: var(--fm-space-3); padding-top: var(--fm-space-2); border-top: 1px solid var(--fm-border); font-size: var(--fm-text-sm); line-height: 1.6; }
+.inbox-journey-evidence summary { color: var(--fm-primary); cursor: pointer; font-weight: 600; }
+.inbox-journey-evidence dl { display: grid; gap: var(--fm-space-3); margin-top: var(--fm-space-3); }
+.inbox-journey-evidence dt, .inbox-journey-contact-facts dt { color: var(--fm-secondary); font-weight: 600; }
+.inbox-journey-evidence dd { color: var(--fm-muted); }
+.inbox-journey-more { margin-top: var(--fm-space-4); }
+.inbox-journey-context { display: grid; gap: var(--fm-space-4); }
+.inbox-journey-summary, .inbox-journey-coverage { min-width: 0; background: var(--fm-surface); border: 1px solid var(--fm-border); border-radius: var(--fm-radius-md); font-size: var(--fm-text-sm); line-height: 1.6; }
+.inbox-journey-summary > summary, .inbox-journey-coverage > summary { padding: var(--fm-space-3) var(--fm-space-4); color: var(--fm-text); cursor: pointer; font-weight: 650; }
+.inbox-journey-context-body { display: grid; gap: var(--fm-space-3); padding: 0 var(--fm-space-4) var(--fm-space-4); color: var(--fm-muted); }
+.inbox-journey-contact-facts { display: grid; gap: var(--fm-space-3); }
+.inbox-journey-contact-facts dd { color: var(--fm-text); }
+.inbox-journey-summary-group { border-top: 1px solid var(--fm-border); padding-top: var(--fm-space-2); }
+.inbox-journey-summary-group > summary { color: var(--fm-primary); font-weight: 600; cursor: pointer; }
+.inbox-journey-summary-group > div { display: grid; gap: var(--fm-space-2); margin-top: var(--fm-space-2); }
+.inbox-journey-source { display: grid; gap: var(--fm-space-1); border-top: 1px solid var(--fm-border); padding-top: var(--fm-space-3); }
+.inbox-journey-source h4 { color: var(--fm-secondary); font-weight: 600; }
+.inbox-journey-source .fm-badge { justify-self: start; max-width: 100%; white-space: normal; }
+.inbox-journey-error { margin-bottom: var(--fm-space-4); }
+.inbox-journey-panel summary { min-height: 1.75rem; }
 .inbox-journey-panel button:focus-visible, .inbox-journey-panel select:focus-visible, .inbox-journey-panel summary:focus-visible { outline: 2px solid var(--fm-focus); outline-offset: 2px; }
+.inbox-journey-history:focus-visible { outline: 2px solid var(--fm-focus); outline-offset: 2px; }
+@media (min-width: 1100px) {
+  .inbox-journey-layout { grid-template-columns: minmax(0, 1fr) minmax(18rem, 21rem); }
+  .inbox-journey-section-nav { display: none; }
+}
 @media (max-width: 639px) {
   .inbox-journey-panel .inbox-journey-heading, .inbox-journey-panel .inbox-journey-scroll { padding: var(--fm-space-3); }
+  .inbox-journey-title-row { gap: var(--fm-space-2); }
+  .inbox-journey-title-row h2 { font-size: var(--fm-text-sm); }
+  .inbox-journey-title-row button { padding: var(--fm-space-2); font-size: var(--fm-text-xs); }
+  .inbox-journey-toolbar { gap: var(--fm-space-2); margin-top: var(--fm-space-3); }
+  .inbox-journey-filter { flex-basis: 100%; }
+  .inbox-journey-time-policy { min-width: 0; }
   .inbox-journey-panel select { font-size: 1rem; }
+  .inbox-journey-event { padding: var(--fm-space-3); }
 }

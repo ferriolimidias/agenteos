@@ -22,10 +22,13 @@ export function mergeJourney(previous, incoming) {
   for (const item of incoming) if (!items.has(item.id)) items.set(item.id, item);
   return [...items.values()];
 }
-export function journeyTime(value, zone = "UTC") {
+export const JOURNEY_TIME_ZONE = "America/Sao_Paulo";
+export function journeyTime(value, zone = JOURNEY_TIME_ZONE) {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime())) return "Timestamp não disponível";
-  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium", ...(zone === "UTC" ? { timeZone: "UTC" } : {}) }).format(date);
+  // "local" was browser-dependent. Keep callers compatible while always using
+  // the business timezone; explicit UTC is reserved for technical evidence.
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium", timeZone: zone === "UTC" ? "UTC" : JOURNEY_TIME_ZONE }).format(date);
 }
 // Defense in depth: only named scalar facts are rendered, never arbitrary payloads.
 export const JOURNEY_DETAIL_LABELS = {
@@ -47,5 +50,11 @@ export function safeJourneyDetails(details) {
   return Object.entries(JOURNEY_DETAIL_LABELS).filter(([key]) => {
     const value = details?.[key];
     return value !== null && value !== undefined && ["string", "boolean", "number"].includes(typeof value);
-  }).map(([key, label]) => ({ key, label, value: typeof details[key] === "boolean" ? (details[key] ? "sim" : "não") : String(details[key]).slice(0, 200) }));
+  }).map(([key, label]) => {
+    const value = details[key];
+    if (["scheduled_at", "started_at", "ended_at"].includes(key)) {
+      return { key, label, value: journeyTime(value), ...(typeof value === "string" && !Number.isNaN(new Date(value).getTime()) ? { original: value } : {}) };
+    }
+    return { key, label, value: typeof value === "boolean" ? (value ? "sim" : "não") : String(value).slice(0, 200) };
+  });
 }
