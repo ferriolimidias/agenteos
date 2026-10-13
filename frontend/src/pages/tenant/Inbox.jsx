@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
+import React, { useCallback, useState, useEffect, useMemo, useRef, useLayoutEffect, useSyncExternalStore } from "react";
 import { AlertCircle, ArrowLeft, ArrowRightLeft, Check, FileAudio, FileImage, FileText, FileVideo, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { Link, useLocation } from "react-router-dom";
@@ -12,6 +12,11 @@ import LeadTagsEditor from "../../components/LeadTagsEditor";
 import CommercialJourneyDialog from "../../components/CommercialJourneyDialog";
 import { ActionButton, EmptyState, InfoBanner, LoadingState } from "../../components/ui";
 import "../../styles/inbox-ux04.css";
+
+const subscribeActiveTenant = (notify) => {
+  window.addEventListener("storage", notify);
+  return () => window.removeEventListener("storage", notify);
+};
 
 const STATUS_ATENDIMENTO_ABERTOS = new Set(["aberto", "aguardando_humano", "manual"]);
 const AI_STATE_UI = {
@@ -293,7 +298,7 @@ export default function Inbox() {
   const isFailedMessage = useCallback((msg) => String(msg?.status || "").toLowerCase() === "failed", []);
 
   const user = getStoredUser();
-  const activeEmpresaId = getActiveEmpresaId();
+  const activeEmpresaId = useSyncExternalStore(subscribeActiveTenant, getActiveEmpresaId);
   const empresa_id = activeEmpresaId;
 
   useLayoutEffect(() => {

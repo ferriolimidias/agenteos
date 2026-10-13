@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
+const { expect } = require((process.env.PLAYWRIGHT_MODULE_PATH || 'playwright') + '/test');
 const F = require('./fixtures-ux04-operations.cjs');
 const origin = new URL(process.env.UX_ORIGIN || 'http://127.0.0.1:8080').origin;
 const output = process.env.UX_EVIDENCE_DIR || '/tmp/inbox29-browser';
@@ -58,12 +59,12 @@ async function run(browser, viewport) {
     const second=message(2,F.CONTACTS[0],{external_message_id:'synthetic-wamid-2'});
     await emit(event(second));await emit(event(second));assert.equal(await page.locator(`[data-message-id="${second.id}"]`).count(),1);
     await emit({...event({...second,status:'delivered',texto:'Evento sintético atualizado'}),type:'inbox.message.updated'});
-    assert.match(await page.locator(`[data-message-id="${second.id}"]`).innerText(),/Evento sintético atualizado/);
+    await expect(page.locator(`[data-message-id="${second.id}"]`)).toContainText('Evento sintético atualizado');
     const reaction=message(3,F.CONTACTS[0],{tipo_mensagem:'reaction',external_message_id:'synthetic-reaction-3',metadata_json:{reaction:{message_id:'synthetic-wamid-2',emoji:'🔥'}}});
     await emit(event(reaction));await emit(event(reaction));assert.equal(await page.locator(`[data-message-id="${second.id}"]`).getByLabel('Reações').innerText(),'🔥');
     const media=message(4,F.CONTACTS[0],{from_me:true,tipo_mensagem:'image',media_url:F.MESSAGES[44].media_url,texto:'Mídia sintética em tempo real'});
     await emit({...event(media),tipo_evento:'nova_mensagem_outbound',type:undefined});await page.locator(`[data-message-id="${media.id}"] img`).waitFor();
-    await emit({...event({...media,texto:'Legenda sintética atualizada'}),type:'inbox.message.updated'});assert.match(await page.locator(`[data-message-id="${media.id}"]`).innerText(),/Legenda sintética atualizada/);
+    await emit({...event({...media,texto:'Legenda sintética atualizada'}),type:'inbox.message.updated'});await expect(page.locator(`[data-message-id="${media.id}"]`)).toContainText('Legenda sintética atualizada');
     r.checks.push('inbound-outbound-update-reaction-dedup-image-keeps-existing-fields');
     for(const size of [10,50]){const start=size===10?10:100;for(let i=0;i<size;i++){const m=message(start+i);sockets.at(-1).send(JSON.stringify(event(m)));sockets.at(-1).send(JSON.stringify(event(m)));}await page.locator(`[data-message-id="${F.id(9000+start+size-1)}"]`).waitFor();assert.equal(await page.locator(`[data-message-id="${F.id(9000+start)}"]`).count(),1);}
     assert.equal(r.counts.list,stableCounts.list);assert.equal(r.counts.history,stableCounts.history);assert.equal(r.counts.sockets,stableCounts.sockets);
@@ -84,7 +85,7 @@ async function run(browser, viewport) {
     const latest=message(502);await emit(event(latest));await page.locator(`[data-message-id="${latest.id}"]`).waitFor();
     phase='normal';releases.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(350);
     const latestPresent=await page.locator(`[data-message-id="${latest.id}"]`).count();r.metrics.LATE_FETCH_OVERWRITE+=Number(latestPresent!==1);assert.equal(latestPresent,1,'late HTTP history replaced a newer WS message');await page.locator('.chat-header-ai').filter({hasText:'IA sincronizada após mensagem parcial'}).waitFor();
-    assert.equal(await page.locator(`[data-message-id="${F.id(9149)}"]`).count(),1,'reconnect GET discarded burst');assert.match(await page.locator(`[data-message-id="${second.id}"]`).innerText(),/Evento sintético atualizado/);assert.equal(await page.locator(`[data-message-id="${second.id}"]`).getByLabel('Reações').innerText(),'🔥');
+    assert.equal(await page.locator(`[data-message-id="${F.id(9149)}"]`).count(),1,'reconnect GET discarded burst');await expect(page.locator(`[data-message-id="${second.id}"]`)).toContainText('Evento sintético atualizado');assert.equal(await page.locator(`[data-message-id="${second.id}"]`).getByLabel('Reações').innerText(),'🔥');
     r.checks.push('explicit-reconnect-background-http-late-snapshot-keeps-new-ws-and-existing-history');
     // A real AI-state event supersedes only its own older pending HTTP result.
     phase='delayed-ai';const beforeAi=r.counts.ai;sockets.at(-1).close({code:1012,reason:'synthetic-ai-race'});explicitReconnects++;
@@ -113,7 +114,7 @@ async function run(browser, viewport) {
     assert.equal(await page.locator('.inbox-contact-identity h3').innerText(),F.CONTACTS[0].nome_contato);assert.ok((await page.locator('[data-message-id]').evaluateAll(n=>n.map(n=>n.dataset.messageId))).every(id=>beforeA.includes(id)));assert.equal(await page.locator(`[data-message-id="${latest.id}"]`).count(),1);await composer.waitFor();assert.equal(await composer.inputValue(),'Rascunho sintético restaurado');
     r.checks.push('rapid-contact-switch-aborts-late-other-history-cached-selected-history-draft');
     await select(F.CONTACTS[1]);await page.getByText(histories.get(F.CONTACTS[1].telefone_contato)[47].texto,{exact:true}).waitFor();assert.equal(await page.locator(`[data-message-id="${latest.id}"]`).count(),0);await select(F.CONTACTS[0]);await page.locator(`[data-message-id="${latest.id}"]`).waitFor();r.checks.push('real-selection-loads-correct-contact-without-history-mixing');
-    delayedPhone=F.CONTACTS[1].telefone_contato;await select(F.CONTACTS[1]);await page.evaluate(()=>{const u=JSON.parse(localStorage.getItem('user'));u.empresa_id='00000000-0000-0000-0000-000000000099';localStorage.setItem('user',JSON.stringify(u));window.dispatchEvent(new Event('storage'));});delayedPhone='';releases.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(400);assert.equal(await page.locator('[data-message-id]').count(),0,'previous tenant history leaked after switching');
+    delayedPhone=F.CONTACTS[1].telefone_contato;await select(F.CONTACTS[1]);await page.evaluate(()=>{const u=JSON.parse(localStorage.getItem('user'));u.empresa_id='00000000-0000-0000-0000-000000000099';localStorage.setItem('user',JSON.stringify(u));window.dispatchEvent(new Event('storage'));});delayedPhone='';releases.splice(0).forEach(resolve=>resolve());await expect(page.locator('[data-message-id]')).toHaveCount(0);assert.equal(await page.locator('[data-message-id]').count(),0,'previous tenant history leaked after switching');
     assert.equal((await page.evaluate(()=>window.__inbox29Roots)).length,1);for(const k of ['errors','unexpectedReads','unexpectedWrites','externalRequests','failedAssets'])assert.deepEqual(r[k],[],k);r.checks.push('tenant-switch-old-results-discarded-single-root-zero-real-operations');
     r.status='PASS';
   }catch(e){r.status='FAIL';r.failure=e.message;r.failureStack=e.stack;try{await shot('failure');}catch{}}
