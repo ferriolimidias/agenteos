@@ -376,6 +376,7 @@ async def _tarefa_transcricao_audio_e_opcional_ia(
         lead_id_str = str(row.lead_id)
         payload = {
             "id": str(row.id),
+            "conversation_id": str(row.channel_conversation_id) if row.channel_conversation_id else None,
             "texto": str(row.texto or ""),
             "from_me": bool(row.from_me),
             "tipo_mensagem": "audio",
@@ -390,6 +391,7 @@ async def _tarefa_transcricao_audio_e_opcional_ia(
             "tipo_evento": "mensagem_atualizada",
             "telefone": telefone,
             "lead_id": lead_id_str,
+            "conversation_id": payload["conversation_id"],
             "mensagem": payload,
         },
     )

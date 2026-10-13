@@ -14,6 +14,12 @@ test("inbox accepts canonical realtime message and ai-state events", () => {
   assert.match(source, /const novaMensagem = data\?\.mensagem \|\| data\?\.message/);
 });
 
+test("AI state reads use the selected tenant, lead, and conversation identity", () => {
+  assert.match(source, /\/inbox\/leads\/\$\{encodeURIComponent\(leadId\)\}\/conversations\/\$\{encodeURIComponent\(conversationId\)\}\/ai-state/);
+  assert.match(source, /aiRequestRef\.current\.conversationId === conversationId/);
+  assert.match(source, /selectedConversationIdForLead\(selectedLeadRef\.current\) !== request\.conversationId/);
+});
+
 test("realtime reactions update the target message instead of becoming a bubble", () => {
   assert.match(source, /upsertMessage/);
   const target = { id: "target", external_message_id: "wamid", texto: "Original" };

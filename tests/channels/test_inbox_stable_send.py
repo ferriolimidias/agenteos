@@ -188,6 +188,45 @@ class InboxStableSendBaselineTests(unittest.TestCase):
         paths = {route.path for route in inbox.router.routes}
         self.assertIn(expected, paths)
 
+    def test_ai_state_can_be_resolved_from_tenant_lead_and_conversation_identity(self):
+        tenant, lead, conversation, contact, connection, _db = _send_context()
+        empresa = SimpleNamespace(id=tenant)
+
+        class AiStateSession:
+            def __init__(self):
+                self.calls = []
+
+            async def execute(self, statement):
+                rendered = str(statement)
+                self.calls.append(rendered)
+                if "crm_leads" in rendered:
+                    return _Result([lead])
+                if "channel_conversations" in rendered:
+                    return _Result([(conversation, contact, connection)])
+                return _Result([empresa])
+
+        session = AiStateSession()
+        resolved = SimpleNamespace(
+            state="active", reason="authorized", reason_label="Autorizada",
+            phone_match_state="match", human_state="bot_active",
+        )
+        manual = SimpleNamespace(manual_enabled=True, source="tenant", as_dict=lambda: {"updated_at": None})
+
+        async def invoke():
+            with patch.object(inbox, "resolve_conversation_ai_state", new=AsyncMock(return_value=resolved)), \
+                 patch.object(inbox, "get_conversation_manual_ai_state", return_value=manual), \
+                 patch.object(inbox, "_ai_state_message", return_value=("Autorizada", "Estado sintético")):
+                return await inbox.consultar_estado_efetivo_ia_por_conversa(
+                    empresa_id=str(tenant), lead_id=str(lead.id), conversation_id=str(conversation.id), db=session,
+                )
+
+        response = asyncio.run(invoke())
+        self.assertEqual(response["effective_state"], "authorized")
+        self.assertEqual(response["channel"], conversation.channel)
+        self.assertIn("crm_leads.empresa_id", session.calls[0])
+        self.assertIn("channel_conversations.lead_id", session.calls[1])
+        self.assertIn("channel_conversations.empresa_id", session.calls[1])
+
     def test_inbox_list_exposes_separate_persisted_conversation_choices(self):
         tenant_id, lead, selected, contact, _connection, _db = _send_context()
         other_contact = SimpleNamespace(

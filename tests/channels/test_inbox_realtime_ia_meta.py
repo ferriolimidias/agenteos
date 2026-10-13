@@ -33,6 +33,14 @@ def test_evolution_webhook_identifies_the_persisted_conversation_in_realtime_eve
     assert '"conversation_id": str(nova_msg.channel_conversation_id)' in source
 
 
+def test_audio_transcription_update_identifies_its_persisted_conversation():
+    source = _read("app/api/routers/webhook.py")
+    transcription = source.split("async def _tarefa_transcricao_audio_e_opcional_ia", 1)[1]
+    event = transcription.split('"type": "ATUALIZACAO_MENSAGEM"', 1)[1].split("if disparar_ia", 1)[0]
+    assert '"conversation_id": str(row.channel_conversation_id)' in transcription
+    assert '"conversation_id": payload["conversation_id"]' in event
+
+
 def test_ai_gate_state_is_broadcast_for_inbound_processing():
     source = _read("app/api/utils.py")
 
@@ -129,6 +137,9 @@ class InboxRealtimeIAMetaUnittest(unittest.TestCase):
 
     def test_evolution_webhook_identifies_the_persisted_conversation_unittest(self):
         test_evolution_webhook_identifies_the_persisted_conversation_in_realtime_events()
+
+    def test_audio_transcription_update_identifies_its_persisted_conversation_unittest(self):
+        test_audio_transcription_update_identifies_its_persisted_conversation()
 
     def test_ai_gate_state_is_broadcast_for_inbound_processing_unittest(self):
         test_ai_gate_state_is_broadcast_for_inbound_processing()

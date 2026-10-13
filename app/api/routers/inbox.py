@@ -1033,6 +1033,73 @@ async def consultar_estado_efetivo_ia(
         "evaluated_at": datetime.utcnow().isoformat(),
     }
 
+
+@router.get("/{empresa_id}/inbox/leads/{lead_id}/conversations/{conversation_id}/ai-state")
+async def consultar_estado_efetivo_ia_por_conversa(
+    empresa_id: str,
+    lead_id: str,
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: Any = Depends(require_tenant_access),
+):
+    context = await _resolve_inbox_send_context(
+        db, empresa_id=empresa_id, lead_id=lead_id, conversation_id=conversation_id,
+    )
+    empresa_uuid = context["empresa_id"]
+    lead = context["lead"]
+    conversation = context["conversation"]
+    contact = context["contact"]
+    connection = context["conexao"]
+    result_empresa = await db.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+    empresa = result_empresa.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+
+    provider = _provider_canonico(getattr(conversation, "provider", None)) or "whatsapp"
+    state = await resolve_conversation_ai_state(
+        db,
+        empresa=empresa,
+        lead=lead,
+        conversation=conversation,
+        connection_id=str(getattr(connection, "id", "") or ""),
+        provider=provider,
+        phone=str(getattr(contact, "phone_e164", None) or getattr(contact, "external_contact_id", None) or ""),
+        persist=False,
+    )
+    manual_state = get_conversation_manual_ai_state(lead)
+    logger.info(
+        "ai.manual_state.read empresa_id=%s conversation_id=%s lead_id=%s enabled=%s reason_code=%s provider=%s",
+        empresa_id,
+        str(conversation.id),
+        str(lead.id),
+        manual_state.manual_enabled,
+        state.reason,
+        provider,
+    )
+    effective_state = "authorized" if state.state == "active" else "blocked"
+    label, description = _ai_state_message(state.reason, state.reason_label)
+    if state.reason == "human_takeover":
+        effective_state = "human_takeover"
+    elif state.reason == "ai_manual_disabled":
+        effective_state = "manual_paused"
+    elif state.reason == "campaign_ai_disabled":
+        label, description = "IA desativada pela campanha", "A campanha não autoriza resposta automática da IA."
+
+    return {
+        "manual_enabled": manual_state.manual_enabled,
+        "manual_source": manual_state.source,
+        "manual_updated_at": manual_state.as_dict().get("updated_at"),
+        "effective_state": effective_state,
+        "reason_code": state.reason,
+        "label": label,
+        "description": description,
+        "phone_match_state": state.phone_match_state,
+        "human_takeover": state.human_state in {"human_takeover", "bot_paused"},
+        "provider": "meta_whatsapp" if provider in {"meta_whatsapp", "meta", "meta_official"} else provider,
+        "channel": getattr(conversation, "channel", None) or "whatsapp",
+        "evaluated_at": datetime.utcnow().isoformat(),
+    }
+
 @router.post("/{empresa_id}/inbox/{telefone}/send")
 @router.post("/{empresa_id}/inbox/{telefone}/mensagens")
 async def enviar_mensagem(

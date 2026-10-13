@@ -514,15 +514,21 @@ export default function Inbox() {
   }, [buildPhotoCacheKey, empresa_id, updateLeadInState]);
 
   const fetchAiEffectiveState = useCallback((telefone, leadIdOverride = "", { fresh = false } = {}) => {
-    const key = conversationKey(empresa_id, selectedLeadRef.current);
+    const selected = selectedLeadRef.current;
+    const key = conversationKey(empresa_id, selected);
+    const leadId = String(leadIdOverride || selected?.id || "").trim();
+    const conversationId = selectedConversationIdForLead(selected);
     if (!key || !telefone || telefone !== selectedLeadRef.current?.telefone_contato || (leadIdOverride && normalizeLeadId(leadIdOverride) !== normalizeLeadId(selectedLeadRef.current?.id)) || tenantScopeRef.current !== empresa_id) return Promise.resolve();
-    if (!fresh && aiRequestRef.current?.key === key && aiRequestRef.current.address === telefone) return aiRequestRef.current.promise;
+    if (!fresh && aiRequestRef.current?.key === key && aiRequestRef.current.address === telefone && aiRequestRef.current.conversationId === conversationId) return aiRequestRef.current.promise;
     aiRequestRef.current?.controller.abort();
-    const request = { key, address: telefone, controller: new AbortController(), revision: revisionRef.current };
+    const request = { key, address: telefone, conversationId, controller: new AbortController(), revision: revisionRef.current };
     aiRequestRef.current = request;
-    request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}/ai-state`, { signal: request.controller.signal })
+    const aiStatePath = leadId && conversationId
+      ? `/empresas/${empresa_id}/inbox/leads/${encodeURIComponent(leadId)}/conversations/${encodeURIComponent(conversationId)}/ai-state`
+      : `/empresas/${empresa_id}/inbox/${encodeURIComponent(telefone)}/ai-state`;
+    request.promise = api.get(aiStatePath, { signal: request.controller.signal })
       .then(response => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address || request.revision < (aiRevisionsRef.current.get(normalizeLeadId(selectedLeadRef.current?.id)) || 0)) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address || selectedConversationIdForLead(selectedLeadRef.current) !== request.conversationId || request.revision < (aiRevisionsRef.current.get(normalizeLeadId(selectedLeadRef.current?.id)) || 0)) return;
         const nextState = response.data ? translateAiState(response.data) : null;
         setAiEffectiveState(nextState);
         const leadId = leadIdOverride || selectedLeadRef.current?.id;
@@ -532,7 +538,7 @@ export default function Inbox() {
         }
       })
       .catch(error => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address || selectedConversationIdForLead(selectedLeadRef.current) !== request.conversationId) return;
         console.error("Erro ao buscar estado efetivo da IA:", error);
       })
       .finally(() => { if (aiRequestRef.current === request) aiRequestRef.current = null; });
