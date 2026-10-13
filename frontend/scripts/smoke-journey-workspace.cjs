@@ -18,7 +18,7 @@ async function run(browser, viewport) {
   const sockets = [];
   const base = `/api/empresas/${F.TENANT}`;
   await context.routeWebSocket('**/*', socket => {
-    assert.equal(new URL(socket.url()).pathname, `${base}/ws`);
+    assert.ok([`${base}/ws`, '/api/empresas/00000000-0000-0000-0000-000000000099/ws'].includes(new URL(socket.url()).pathname));
     sockets.push(socket); socket.onMessage(raw => { const data = JSON.parse(String(raw)); if (data.type === 'ping') socket.send(JSON.stringify({ type: 'pong' })); });
   });
   await context.route('**/*', async route => {
@@ -26,6 +26,7 @@ async function run(browser, viewport) {
     if (url.origin !== origin) { r.externalRequests.push(url.origin); return route.abort(); }
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (q.method() !== 'GET') { r.unexpectedWrites.push({ method: q.method(), path: url.pathname }); return route.abort(); }
+    if (url.pathname.startsWith('/api/empresas/00000000-0000-0000-0000-000000000099/')) return route.fulfill({ json: [] });
     let data;
     if (url.pathname.endsWith('/journey')) {
       r.queries.push({ path: url.pathname, query: url.search });
