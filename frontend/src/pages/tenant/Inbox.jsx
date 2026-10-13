@@ -5,7 +5,7 @@ import { Link, useLocation } from "react-router-dom";
 import { allowlistedFunnelFilters, journeyLeadFromSearch } from "../../utils/commercialFunnel";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
-import { conversationKey, definedLeadPatch, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
+import { conversationKey, definedLeadPatch, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, normalizeLeadId, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -166,6 +166,8 @@ export default function Inbox() {
   const messageRevisionsRef = useRef(new Map());
   const wsMessagePatchesRef = useRef(new Map());
   const messagesCacheRef = useRef(new Map());
+  const historyLoadedRef = useRef(new Set());
+  const lastHistorySelectionRef = useRef("");
   const draftsRef = useRef(new Map());
   const scrollCacheRef = useRef(new Map());
   const activeConversationRef = useRef("");
@@ -224,7 +226,7 @@ export default function Inbox() {
   }, []);
 
   const recordLeadPatch = useCallback((id, patch) => {
-    const key = String(id || "");
+    const key = normalizeLeadId(id);
     if (!key) return;
     const revision = ++revisionRef.current;
     const old = leadRevisionsRef.current.get(key);
@@ -319,6 +321,8 @@ export default function Inbox() {
     messageRevisionsRef.current.clear();
     wsMessagePatchesRef.current.clear();
     messagesCacheRef.current.clear();
+    historyLoadedRef.current.clear();
+    lastHistorySelectionRef.current = "";
     draftsRef.current.clear();
     scrollCacheRef.current.clear();
     seenRealtimeRef.current.clear();
@@ -357,11 +361,11 @@ export default function Inbox() {
   }, [empresa_id, journeyLeadId, leads]);
 
   const updateLeadInState = useCallback((leadId, updates) => {
-    const targetId = String(leadId || "");
+    const targetId = normalizeLeadId(leadId);
     if (!targetId) return;
     recordLeadPatch(targetId, updates);
-    setLeads((prev) => (prev || []).map((lead) => (String(lead?.id || "") === targetId ? { ...lead, ...updates } : lead)));
-    setSelectedLead((prev) => (String(prev?.id || "") === targetId ? { ...prev, ...updates } : prev));
+    setLeads((prev) => (prev || []).map((lead) => (leadMatches(lead, { lead_id: targetId }) ? { ...lead, ...updates } : lead)));
+    setSelectedLead((prev) => (leadMatches(prev, { lead_id: targetId }) ? { ...prev, ...updates } : prev));
   }, [recordLeadPatch]);
 
   const upsertLeadFromRealtime = useCallback((data, message, isSelected, isNew) => {
@@ -394,7 +398,7 @@ export default function Inbox() {
         setSelectedLead(previous => {
           if (!previous?.id) return previous;
           return mergeLeadSnapshot([previous], response.data || [], request.revision, leadRevisionsRef.current)
-            .find(lead => String(lead.id) === String(previous.id)) || previous;
+            .find(lead => leadMatches(lead, { lead_id: previous.id })) || previous;
         });
       })
       .catch(error => {
@@ -423,16 +427,17 @@ export default function Inbox() {
 
   const fetchMessages = useCallback((telefone) => {
     const key = conversationKey(empresa_id, selectedLeadRef.current);
-    if (!key || tenantScopeRef.current !== empresa_id || key !== activeConversationRef.current || telefone !== selectedLeadRef.current?.telefone_contato) return Promise.resolve();
-    if (historyRequestRef.current?.key === key) return historyRequestRef.current.promise;
+    if (!key || !telefone || tenantScopeRef.current !== empresa_id || key !== activeConversationRef.current || telefone !== selectedLeadRef.current?.telefone_contato) return Promise.resolve();
+    if (historyRequestRef.current?.key === key && historyRequestRef.current.address === telefone) return historyRequestRef.current.promise;
     historyRequestRef.current?.controller.abort();
-    const request = { key, controller: new AbortController(), revision: revisionRef.current };
+    const request = { key, address: telefone, controller: new AbortController(), revision: revisionRef.current };
     historyRequestRef.current = request;
     setMessagesLoading(!(messagesCacheRef.current.get(key) || []).length);
     setMessagesError(false);
     request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}`, { signal: request.controller.signal })
       .then(response => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || conversationKey(empresa_id, selectedLeadRef.current) !== key || activeConversationRef.current !== key) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || conversationKey(empresa_id, selectedLeadRef.current) !== key || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address) return;
+        historyLoadedRef.current.add(key);
         setMessages(previous => {
           const next = mergeMessageSnapshot(previous, response.data || [], request.revision, messageRevisionsRef.current.get(key), wsMessagePatchesRef.current.get(key));
           if (!previous.length && next.length) requestScrollRef.current = true;
@@ -440,7 +445,7 @@ export default function Inbox() {
         });
       })
       .catch(error => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || activeConversationRef.current !== key) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || activeConversationRef.current !== key || selectedLeadRef.current?.telefone_contato !== request.address) return;
         console.error("Erro ao buscar mensagens do lead no Inbox:", error);
         setMessagesError(true); // stale-while-revalidate: never erase valid messages
       })
@@ -495,16 +500,16 @@ export default function Inbox() {
     return request;
   }, [buildPhotoCacheKey, empresa_id, updateLeadInState]);
 
-  const fetchAiEffectiveState = useCallback((telefone, leadIdOverride = "") => {
+  const fetchAiEffectiveState = useCallback((telefone, leadIdOverride = "", { fresh = false } = {}) => {
     const key = conversationKey(empresa_id, selectedLeadRef.current);
-    if (!key || !telefone || telefone !== selectedLeadRef.current?.telefone_contato || (leadIdOverride && String(leadIdOverride) !== String(selectedLeadRef.current?.id)) || tenantScopeRef.current !== empresa_id) return Promise.resolve();
-    if (aiRequestRef.current?.key === key) return aiRequestRef.current.promise;
+    if (!key || !telefone || telefone !== selectedLeadRef.current?.telefone_contato || (leadIdOverride && normalizeLeadId(leadIdOverride) !== normalizeLeadId(selectedLeadRef.current?.id)) || tenantScopeRef.current !== empresa_id) return Promise.resolve();
+    if (!fresh && aiRequestRef.current?.key === key && aiRequestRef.current.address === telefone) return aiRequestRef.current.promise;
     aiRequestRef.current?.controller.abort();
-    const request = { key, controller: new AbortController(), revision: revisionRef.current };
+    const request = { key, address: telefone, controller: new AbortController(), revision: revisionRef.current };
     aiRequestRef.current = request;
     request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}/ai-state`, { signal: request.controller.signal })
       .then(response => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || request.revision < (aiRevisionsRef.current.get(String(selectedLeadRef.current?.id)) || 0)) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address || request.revision < (aiRevisionsRef.current.get(normalizeLeadId(selectedLeadRef.current?.id)) || 0)) return;
         const nextState = response.data ? translateAiState(response.data) : null;
         setAiEffectiveState(nextState);
         const leadId = leadIdOverride || selectedLeadRef.current?.id;
@@ -514,7 +519,7 @@ export default function Inbox() {
         }
       })
       .catch(error => {
-        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request) return;
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || selectedLeadRef.current?.telefone_contato !== request.address) return;
         console.error("Erro ao buscar estado efetivo da IA:", error);
       })
       .finally(() => { if (aiRequestRef.current === request) aiRequestRef.current = null; });
@@ -570,6 +575,7 @@ export default function Inbox() {
   }, [toast]);
 
   const selectedConversationKey = conversationKey(empresa_id, selectedLead);
+  const selectedAddress = String(selectedLead?.telefone_contato || "");
   useLayoutEffect(() => {
     const key = leadsTenantRef.current === empresa_id ? selectedConversationKey : "";
     if (activeConversationRef.current === key) return;
@@ -587,16 +593,32 @@ export default function Inbox() {
     setMessagesState(messagesCacheRef.current.get(key) || []);
     setNewMessageState(draftsRef.current.get(key) || "");
     setMessagesError(false);
-    setMessagesLoading(Boolean(key && !(messagesCacheRef.current.get(key) || []).length));
+    setMessagesLoading(Boolean(key && selectedLeadRef.current?.telefone_contato && !(messagesCacheRef.current.get(key) || []).length));
     setAiEffectiveState(null);
   }, [empresa_id, selectedConversationKey]);
+
+  useLayoutEffect(() => {
+    // Address changes cancel only transport work, never the contact's cache.
+    if (historyRequestRef.current && historyRequestRef.current.address !== selectedAddress) {
+      historyRequestRef.current.controller.abort();
+      historyLoadedRef.current.delete(historyRequestRef.current.key);
+      historyRequestRef.current = null;
+      setMessagesLoading(false);
+    }
+    if (aiRequestRef.current && aiRequestRef.current.address !== selectedAddress) {
+      aiRequestRef.current.controller.abort();
+      aiRequestRef.current = null;
+    }
+  }, [selectedAddress]);
 
   useEffect(() => {
     const lead = selectedLeadRef.current;
     if (!selectedConversationKey || activeConversationRef.current !== selectedConversationKey || !lead?.telefone_contato) return;
-    void fetchMessages(lead.telefone_contato);
+    const changedContact = lastHistorySelectionRef.current !== selectedConversationKey;
+    lastHistorySelectionRef.current = selectedConversationKey;
+    if (changedContact || !historyLoadedRef.current.has(selectedConversationKey)) void fetchMessages(lead.telefone_contato);
     void fetchAiEffectiveState(lead.telefone_contato, lead.id);
-  }, [selectedConversationKey, fetchMessages, fetchAiEffectiveState]);
+  }, [selectedConversationKey, selectedAddress, fetchMessages, fetchAiEffectiveState]);
 
   useEffect(() => {
     if (!empresa_id || !selectedLead?.id || !selectedLead?.telefone_contato || selectedLead?.foto_url) return;
@@ -669,7 +691,7 @@ export default function Inbox() {
 
           if (tipoEventoV2 === "inbox.ai_state.updated" || tipoEvento === "ai_state_updated") {
             const leadIdEvento = String(data?.lead_id || "");
-            const leadSelecionadoId = String(selectedLeadRef.current?.id || "");
+            const leadSelecionadoId = normalizeLeadId(selectedLeadRef.current?.id);
             const matchesSelected = leadMatches(selectedLeadRef.current, data);
             let manualEnabled;
             if (matchesSelected) {
@@ -695,6 +717,9 @@ export default function Inbox() {
             if (!leadId) return;
             if (typeof payload?.ia_ativa !== "boolean") return;
             const iaAtiva = payload.ia_ativa;
+            if (leadMatches(selectedLeadRef.current, { lead_id: leadId })) {
+              setAiEffectiveState(previous => ({ ...previous, manual_enabled: iaAtiva }));
+            }
             updateLeadInState(leadId, {
               ia_ativa: iaAtiva,
               bot_pausado: !iaAtiva,
@@ -711,8 +736,8 @@ export default function Inbox() {
 
           if (tipoEvento === "atualizacao_lead" || tipoEventoV2 === "atualizacao_lead") {
             const leadPayload = data.lead || payload;
-            const leadId = String(leadPayload.id || data.lead_id || "");
-            const known = leadsRef.current.some(lead => String(lead.id) === leadId);
+            const leadId = normalizeLeadId(leadPayload.id || data.lead_id);
+            const known = leadsRef.current.some(lead => leadMatches(lead, { lead_id: leadId }));
             if (leadId && known) {
               updateLeadInState(leadId, definedLeadPatch(leadPayload));
             } else scheduleFetchLeads(10000);
@@ -910,7 +935,7 @@ export default function Inbox() {
         texto,
       });
       // Mantém UI livre; confirmação deve chegar por websocket.
-      void fetchLeads(); // update `bot_pausado`
+      void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
     } catch (e) {
       console.error("Erro ao enviar mensagem", e);
       setOperationMessages((prev) =>
@@ -988,7 +1013,7 @@ export default function Inbox() {
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send_media`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      void fetchLeads();
+      void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
       return true;
     } catch (e) {
       const status = e?.response?.status;
@@ -1207,7 +1232,7 @@ export default function Inbox() {
 
     try {
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, { texto });
-      void fetchLeads();
+      void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
     } catch (e) {
       setOperationMessages((prev) =>
         (prev || []).map((msg) =>

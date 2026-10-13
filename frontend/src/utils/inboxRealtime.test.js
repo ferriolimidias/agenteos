@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  conversationKey, normalizePhone, leadMatches, definedLeadPatch,
+  conversationKey, normalizePhone, normalizeLeadId, leadMatches, definedLeadPatch,
   patchLeadFromMessage, mergeLeadSnapshot, messageIdentity, upsertMessage,
   mergeMessageSnapshot,
 } from "./inboxRealtime.js";
@@ -27,10 +27,10 @@ const reaction = {
 };
 
 test("conversation keys isolate tenants and contacts and reject incomplete identities", () => {
-  assert.equal(conversationKey("tenant-a", lead), JSON.stringify(["tenant-a", "lead-a", "5511999990001"]));
+  assert.equal(conversationKey("tenant-a", lead), JSON.stringify(["tenant-a", "lead-a"]));
   assert.notEqual(conversationKey("tenant-b", lead), conversationKey("tenant-a", lead));
   assert.notEqual(conversationKey("tenant-a", { ...lead, id: "lead-b" }), conversationKey("tenant-a", lead));
-  assert.equal(conversationKey("tenant-a", { id: "lead-a" }), "");
+  assert.equal(conversationKey("tenant-a", { id: "lead-a" }), conversationKey("tenant-a", lead));
   assert.equal(conversationKey("tenant-a", { telefone_contato: lead.telefone_contato }), "");
   assert.equal(conversationKey("", lead), "");
 });
@@ -326,4 +326,38 @@ test("a provably later HTTP last-message timestamp can advance the preview", () 
   const result = mergeLeadSnapshot(current, [{ id: "a", ultima_mensagem: "recuperado", ultima_mensagem_data: "2026-10-13T12:01:00Z" }], 20, versions);
   assert.equal(result[0].ultima_mensagem, "recuperado");
   assert.equal(result[0].ultima_mensagem_data, "2026-10-13T12:01:00Z");
+});
+
+
+test("contact cache survives mutable WhatsApp delivery address and added conversation metadata", () => {
+  const original = { ...lead, telefone_contato: "551198765432" };
+  const key = conversationKey("tenant-a", original);
+  const updated = { ...original, telefone_contato: "5511998765432", conversation_id: "added" };
+  assert.equal(conversationKey("tenant-a", updated), key);
+  assert.equal(conversationKey("tenant-a", { ...updated, telefone_contato: null }), key);
+});
+
+test("UUID case aliases represent the same contact without collapsing opaque IDs or tenants", () => {
+  const id = "a1000000-0000-0000-0000-000000000001";
+  assert.equal(normalizeLeadId(id.toUpperCase()), id);
+  assert.equal(conversationKey("tenant-a", { id }), conversationKey("tenant-a", { id: id.toUpperCase() }));
+  assert.equal(leadMatches({ id }, { lead_id: id.toUpperCase() }), true);
+  assert.notEqual(conversationKey("tenant-a", { id: "VendorA" }), conversationKey("tenant-a", { id: "vendora" }));
+  assert.notEqual(conversationKey("TenantA", { id }), conversationKey("tenanta", { id }));
+});
+
+test("outbound acknowledgement followed by address patch retains every existing history row in the same cache", () => {
+  const contact = { ...lead, telefone_contato: "551198765432" };
+  const key = conversationKey("tenant-a", contact);
+  const old = Array.from({ length: 36 }, (_, i) => ({ ...message, id: `old-${i}`, criado_em: "2026-10-13T10:00:00Z" }));
+  const optimistic = { id: "temp-send", from_me: true, status: "pending", tipo_mensagem: "text", texto: "Envio sintético", criado_em: "2026-10-13T12:00:00Z" };
+  const confirmed = { ...optimistic, id: "confirmed", status: "sent" };
+  const cache = new Map([[key, upsertMessage([...old, optimistic], confirmed)]]);
+  const event = { lead_id: contact.id, telefone: "5511998765432", direction: "outbound" };
+  const after = patchLeadFromMessage(contact, event, confirmed, { selected: true, isNew: true });
+  assert.equal(conversationKey("tenant-a", after), key);
+  assert.equal(cache.get(conversationKey("tenant-a", after)).length, 37);
+  assert.equal(cache.get(key).filter(m => m.id === "temp-send").length, 0);
+  assert.equal(cache.get(key).filter(m => m.id === "confirmed").length, 1);
+  assert.ok(old.every(m => cache.get(key).some(row => row.id === m.id)));
 });

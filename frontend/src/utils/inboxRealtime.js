@@ -9,19 +9,25 @@ export function normalizePhone(value) {
   return /^[+\d\s().-]+$/.test(raw) ? raw.replace(/\D/g, "") : raw;
 }
 
+export function normalizeLeadId(value) {
+  const raw = identity(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw) ? raw.toLowerCase() : raw;
+}
+
 export function conversationKey(tenant, lead) {
   const tenantId = identity(tenant);
-  const leadId = identity(lead?.id);
-  const phone = normalizePhone(lead?.telefone_contato ?? lead?.telefone);
-  return tenantId && leadId && phone ? JSON.stringify([tenantId, leadId, phone]) : "";
+  // History is owned by CRMLead.id. A mutable delivery address must never
+  // create another message cache for the same contact during confirmation.
+  const leadId = normalizeLeadId(lead?.id);
+  return tenantId && leadId ? JSON.stringify([tenantId, leadId]) : "";
 }
 
 export function leadMatches(lead, data, message = {}) {
   if (!lead) return false;
-  const leadId = identity(data?.lead_id ?? data?.lead?.id);
+  const leadId = normalizeLeadId(data?.lead_id ?? data?.lead?.id);
   const conversationId = identity(data?.conversation_id || message?.conversation_id || message?.channel_conversation_id);
   const phone = normalizePhone(data?.telefone || data?.telefone_contato || message?.telefone);
-  if (leadId && identity(lead.id)) return identity(lead.id) === leadId;
+  if (leadId && normalizeLeadId(lead.id)) return normalizeLeadId(lead.id) === leadId;
   if (conversationId && identity(lead.conversation_id)) return identity(lead.conversation_id) === conversationId;
   return Boolean(phone && normalizePhone(lead.telefone_contato || lead.telefone) === phone);
 }
@@ -113,7 +119,7 @@ export function mergeLeadSnapshot(current = [], remote = [], startRevision = 0, 
     if (index < 0) return patch;
     seen.add(index);
     const previous = current[index];
-    const version = revisions?.get?.(identity(previous.id));
+    const version = revisions?.get?.(normalizeLeadId(previous.id));
     if (version?.fields) {
       const protectedFields = Object.fromEntries(Object.entries(version.fields)
         .filter(([field, revision]) => revision > startRevision || (["nome_contato", "telefone_contato"].includes(field) && revision > 0))
@@ -125,11 +131,11 @@ export function mergeLeadSnapshot(current = [], remote = [], startRevision = 0, 
       }
       return { ...previous, ...patch, ...protectedFields };
     }
-    const changed = revisionFor(revisions, [identity(previous.id)]) > startRevision;
+    const changed = revisionFor(revisions, [normalizeLeadId(previous.id)]) > startRevision;
     return changed ? { ...patch, ...previous } : { ...previous, ...patch };
   });
   current.forEach((lead, index) => {
-    if (!seen.has(index) && revisionFor(revisions, [identity(lead.id)]) > startRevision) merged.push(lead);
+    if (!seen.has(index) && revisionFor(revisions, [normalizeLeadId(lead.id)]) > startRevision) merged.push(lead);
   });
   return merged;
 }
