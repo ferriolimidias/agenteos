@@ -666,15 +666,20 @@ class InstagramSimpleContractTests(unittest.TestCase):
 
     def test_inbox_direct_reply_requires_legitimate_igsid_without_changing_whatsapp_branches(self):
         source = Path("app/api/routers/inbox.py").read_text(encoding="utf-8")
+        recipient_section = source.split("def _recipient_from_conversation_contact", 1)[1].split("async def _resolve_inbox_send_context", 1)[0]
+        resolver_section = source.split("async def _resolve_inbox_send_context", 1)[1].split("async def _resolve_legacy_send_context", 1)[0]
+        send_section = source.split("async def _dispatch_manual_text_message", 1)[1].split("@router.post(", 1)[0]
         self.assertIn('elif provider == "meta_instagram":', source)
-        self.assertIn('igsid = str(getattr(contact, "external_contact_id", "")', source)
         self.assertIn("InstagramGraphClient(connection_token(conexao)).direct_reply(", source)
-        self.assertIn("igsid,", source)
-        self.assertIn('detail="IGSID indisponível para esta conversa Direct"', source)
-        self.assertIn('conversation_provider != "meta_instagram"', source)
-        self.assertIn('getattr(conversation, "channel", "")', source)
+        self.assertIn('external_id = str(getattr(contact, "external_contact_id", "")', recipient_section)
+        self.assertIn('if channel == "instagram":', recipient_section)
+        self.assertIn('identity_type != "IGSID"', resolver_section)
+        self.assertIn('detail="IGSID indisponível para esta conversa Direct"', resolver_section)
+        self.assertIn('conversation_provider != contact_provider', resolver_section)
+        self.assertIn('channel != contact_channel', resolver_section)
+        self.assertNotIn("telefone_contato", recipient_section)
         self.assertIn('if provider == "meta_whatsapp":', source)
-        self.assertIn('elif provider in {"evolution", "evolution_legacy"}:', source)
+        self.assertIn('elif provider == "evolution":', send_section)
 
     def test_webhook_uses_environment_only_settings(self):
         router_source = Path("app/api/routers/instagram_simple_webhook.py").read_text(encoding="utf-8")

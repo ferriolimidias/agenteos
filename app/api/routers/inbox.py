@@ -6,13 +6,13 @@ import traceback
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query
 from typing import Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 from datetime import datetime, timedelta
 
 from db.database import AsyncSessionLocal, get_db
 from db.models import CampaignRecipient, ChannelContact, ChannelConversation, CRMLead, Empresa, MensagemHistorico, Conexao, TagCRM
-from sqlalchemy import select, func, cast, String, desc, or_
+from sqlalchemy import select, func, cast, String, desc, or_, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.schemas import ConversaListaResponse
@@ -96,6 +96,7 @@ def _reaction_index(messages: list[MensagemHistorico]) -> dict[str, list[dict[st
 
 class SendMessagePayload(BaseModel):
     texto: str
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def _inferir_tipo_mensagem(content_type: str | None) -> str:
@@ -173,6 +174,222 @@ def _provider_canonico(provider: str | None) -> str:
     if raw in {"evolution", "evolution_legacy", "whatsapp_evolution"}:
         return "evolution"
     return raw
+
+
+def _provider_conexao_canonico(conexao: Conexao) -> str:
+    provider = _provider_canonico(getattr(conexao, "provider", None))
+    if provider:
+        return provider
+    tipo = str(getattr(getattr(conexao, "tipo", ""), "value", getattr(conexao, "tipo", "")) or "").strip().lower()
+    if tipo in {"meta", "meta_whatsapp"}:
+        return "meta_whatsapp"
+    if "evolution" in tipo:
+        return "evolution"
+    return tipo
+
+
+def _recipient_from_conversation_contact(contact: ChannelContact, channel: str) -> str:
+    """Resolve only the address persisted on the selected conversation contact."""
+    channel = str(channel or "").strip().lower()
+    external_id = str(getattr(contact, "external_contact_id", "") or "").strip()
+    if not external_id:
+        raise HTTPException(status_code=409, detail="Destinatário da conversa indisponível")
+
+    if channel == "whatsapp":
+        primary = normalize_whatsapp_address(external_id, default_country=None)
+        if not primary.valid or not primary.digits:
+            raise HTTPException(status_code=409, detail="Endereço WhatsApp da conversa inválido")
+        # external_contact_id is the identity attached to this conversation.
+        # phone_e164 is a second canonical field and, when present, must agree.
+        # normalized_address is a legacy/display projection and may be stale;
+        # it is never used to choose a different destination.
+        stored_phone = getattr(contact, "phone_e164", None)
+        if stored_phone not in (None, ""):
+            candidate = normalize_whatsapp_address(str(stored_phone), default_country=None)
+            if not candidate.valid or candidate.digits != primary.digits:
+                raise HTTPException(status_code=409, detail="Endereço da conversa inconsistente")
+        return primary.digits
+
+    if channel == "instagram":
+        return external_id
+
+    raise HTTPException(status_code=400, detail="Canal da conversa não suportado para envio manual")
+
+
+async def _resolve_inbox_send_context(
+    db: AsyncSession,
+    *,
+    empresa_id: str | uuid.UUID,
+    lead_id: str | uuid.UUID,
+    conversation_id: str | uuid.UUID,
+) -> dict[str, Any]:
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+        lead_uuid = uuid.UUID(str(lead_id))
+        conversation_uuid = uuid.UUID(str(conversation_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Identidade da conversa inválida")
+
+    result_lead = await db.execute(
+        select(CRMLead).where(CRMLead.empresa_id == empresa_uuid, CRMLead.id == lead_uuid)
+    )
+    lead = result_lead.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+    result_context = await db.execute(
+        select(ChannelConversation, ChannelContact, Conexao)
+        .join(
+            ChannelContact,
+            and_(
+                ChannelContact.id == ChannelConversation.contact_id,
+                ChannelContact.empresa_id == ChannelConversation.empresa_id,
+            ),
+        )
+        .join(
+            Conexao,
+            and_(
+                Conexao.id == ChannelConversation.conexao_id,
+                Conexao.empresa_id == ChannelConversation.empresa_id,
+            ),
+        )
+        .where(
+            ChannelConversation.empresa_id == empresa_uuid,
+            ChannelConversation.id == conversation_uuid,
+            ChannelConversation.lead_id == lead_uuid,
+            ChannelContact.empresa_id == empresa_uuid,
+            Conexao.empresa_id == empresa_uuid,
+        )
+        .limit(2)
+    )
+    row = result_context.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada para este lead")
+    conversation, contact, conexao = row[0], row[1], row[2]
+
+    if getattr(contact, "lead_id", None) not in (None, lead_uuid):
+        raise HTTPException(status_code=409, detail="Associação do contato com a conversa inconsistente")
+
+    channel = str(getattr(conversation, "channel", "") or "").strip().lower()
+    contact_channel = str(getattr(contact, "channel", "") or "").strip().lower()
+    connection_channel = str(getattr(conexao, "channel", "") or "").strip().lower()
+    conversation_provider = _provider_canonico(getattr(conversation, "provider", None))
+    contact_provider = _provider_canonico(getattr(contact, "provider", None))
+    connection_provider = _provider_conexao_canonico(conexao)
+    if (
+        not channel
+        or channel != contact_channel
+        or (connection_channel and connection_channel != channel)
+        or not conversation_provider
+        or conversation_provider != contact_provider
+        or conversation_provider != connection_provider
+        or str(getattr(conversation, "conexao_id", "")) != str(getattr(conexao, "id", ""))
+        or str(getattr(contact, "conexao_id", "")) != str(getattr(conexao, "id", ""))
+    ):
+        raise HTTPException(status_code=409, detail="Canal ou conexão da conversa inconsistente")
+
+    destination = _recipient_from_conversation_contact(contact, channel)
+    if channel == "instagram":
+        contact_metadata = getattr(contact, "metadata_json", None) or {}
+        identity_type = str(contact_metadata.get("identity_type") or "").strip()
+        persisted_lead_igsid = str((lead.dados_adicionais or {}).get("instagram_igsid") or "").strip()
+        if identity_type != "IGSID" and persisted_lead_igsid != destination:
+            raise HTTPException(
+                status_code=409,
+                detail="IGSID indisponível para esta conversa Direct",
+            )
+    return {
+        "empresa_id": empresa_uuid,
+        "lead": lead,
+        "conversation": conversation,
+        "contact": contact,
+        "conexao": conexao,
+        "provider": conversation_provider,
+        "channel": channel,
+        "destination": destination,
+    }
+
+
+async def _resolve_legacy_send_context(
+    db: AsyncSession,
+    *,
+    empresa_id: str | uuid.UUID,
+    telefone: str,
+) -> dict[str, Any]:
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="ID da empresa inválido")
+
+    result_lead = await db.execute(
+        select(CRMLead).where(
+            CRMLead.empresa_id == empresa_uuid,
+            CRMLead.telefone_contato == telefone,
+        )
+    )
+    lead = result_lead.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+    result_conversations = await db.execute(
+        select(ChannelConversation).where(
+            ChannelConversation.empresa_id == empresa_uuid,
+            ChannelConversation.lead_id == lead.id,
+        ).limit(2)
+    )
+    conversations = result_conversations.scalars().all()
+    if len(conversations) != 1:
+        raise HTTPException(status_code=409, detail="Selecione uma conversa vinculada antes de enviar")
+    return await _resolve_inbox_send_context(
+        db,
+        empresa_id=empresa_uuid,
+        lead_id=lead.id,
+        conversation_id=conversations[0].id,
+    )
+
+
+async def _lock_and_find_duplicate_inbox_message(
+    db: AsyncSession,
+    *,
+    context: dict[str, Any],
+    client_message_id: str | None,
+) -> MensagemHistorico | None:
+    key = str(client_message_id or "").strip()
+    if not key:
+        return None
+    lock_scope = ":".join((
+        "inbox-send",
+        str(context["empresa_id"]),
+        str(context["lead"].id),
+        str(context["conversation"].id),
+        key,
+    ))
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_scope, 0))"), {"lock_scope": lock_scope})
+    result = await db.execute(
+        select(MensagemHistorico)
+        .where(
+            MensagemHistorico.empresa_id == context["empresa_id"],
+            MensagemHistorico.lead_id == context["lead"].id,
+            MensagemHistorico.channel_conversation_id == context["conversation"].id,
+            MensagemHistorico.metadata_json["inbox_client_message_id"].astext == key,
+        )
+        .order_by(desc(MensagemHistorico.criado_em), desc(MensagemHistorico.id))
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+def _serialize_manual_outbound_message(message: MensagemHistorico) -> dict[str, Any]:
+    return {
+        "id": str(message.id),
+        "texto": str(message.texto or ""),
+        "from_me": bool(message.from_me),
+        "tipo_mensagem": str(message.tipo_mensagem or "text"),
+        "origem_mensagem": message.origem_mensagem,
+        "media_url": str(message.media_url) if message.media_url else None,
+        "criado_em": serialize_utc_timestamp(message.criado_em) or "",
+        "status": str(message.message_status or "sent"),
+    }
 
 
 AI_STATE_MESSAGES = {
@@ -770,194 +987,8 @@ async def enviar_mensagem(
     if _telefone_eh_simulador(telefone):
         return {"status": "success"}
     try:
-        empresa_uuid = uuid.UUID(empresa_id)
-        result_lead = await db.execute(
-            select(CRMLead).where(
-                CRMLead.empresa_id == empresa_uuid,
-                CRMLead.telefone_contato == telefone
-            )
-        )
-        lead = result_lead.scalars().first()
-        if not lead:
-            raise HTTPException(status_code=404, detail="Lead não encontrado")
-
-        conversation = await _buscar_conversa_principal_lead(db, empresa_uuid, lead.id)
-        conexao = None
-        if conversation:
-            result_conexao = await db.execute(
-                select(Conexao).where(
-                    Conexao.id == conversation.conexao_id,
-                    Conexao.empresa_id == empresa_uuid,
-                )
-            )
-            conexao = result_conexao.scalars().first()
-        if str((lead.dados_adicionais or {}).get("origem") or "") == "instagram_comment":
-            conversation_provider = _provider_canonico(getattr(conversation, "provider", None))
-            if (
-                not conversation
-                or str(getattr(conversation, "channel", "") or "").lower() != "instagram"
-                or conversation_provider != "meta_instagram"
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Aguarde uma mensagem real no Direct para obter o IGSID antes de responder.",
-                )
-        if not conexao:
-            conexao = await _buscar_conexao_historico_lead(db, empresa_uuid, lead.id)
-        if not conexao:
-            conexao = await _buscar_conexao_evolution_ativa(db, empresa_uuid)
-        if not conexao:
-            raise HTTPException(status_code=400, detail="Conexão da conversa não encontrada para esta empresa")
-
-        provider = _provider_canonico(getattr(conexao, "provider", None))
-        if not provider:
-            tipo_raw = str(getattr(getattr(conexao, "tipo", ""), "value", getattr(conexao, "tipo", "")) or "").lower()
-            provider = "meta_whatsapp" if tipo_raw == "meta" else ("evolution" if "evolution" in tipo_raw else tipo_raw)
-        channel = str(getattr(conversation, "channel", None) or getattr(conexao, "channel", None) or "whatsapp")
-        destino = normalize_whatsapp_address(telefone, default_country="BR").digits or str(telefone or "").strip()
-
-        outbound_payload = StandardOutgoingMessage(
-            identificador_contato=destino,
-            canal="whatsapp",
-            texto=payload.texto,
-            tipo="text",
-            media_url=None,
-        )
-        if provider == "meta_whatsapp":
-            enviado = await despachar_mensagem(
-                canal="whatsapp",
-                identificador_origem=destino,
-                texto=payload.texto,
-                conexao_id=str(conexao.id),
-                empresa_id=str(empresa_uuid),
-            )
-            if not enviado:
-                raise HTTPException(status_code=502, detail="Mensagem não despachada pela API Oficial da Meta")
-        elif provider in {"evolution", "evolution_legacy"}:
-            await dispatch_outbound_message(
-                empresa_id=empresa_uuid,
-                conexao=conexao,
-                payload=outbound_payload,
-            )
-        elif provider == "meta_instagram":
-            if not conversation or channel != "instagram":
-                raise HTTPException(status_code=400, detail="Conversa Direct do Instagram não encontrada")
-            result_contact = await db.execute(select(ChannelContact).where(
-                ChannelContact.id == conversation.contact_id,
-                ChannelContact.empresa_id == empresa_uuid,
-                ChannelContact.conexao_id == conexao.id,
-                ChannelContact.channel == "instagram",
-                ChannelContact.provider == "meta_instagram",
-            ))
-            contact = result_contact.scalars().first()
-            igsid = str(getattr(contact, "external_contact_id", "") or "").strip()
-            if not igsid:
-                raise HTTPException(status_code=400, detail="IGSID indisponível para esta conversa Direct")
-            from app.services.instagram_simple import InstagramGraphClient, connection_token
-
-            graph_response = await InstagramGraphClient(connection_token(conexao)).direct_reply(
-                str(conexao.instagram_business_account_id or "").strip(),
-                igsid,
-                payload.texto,
-            )
-            external_message_id = str(
-                graph_response.get("message_id") or graph_response.get("id") or ""
-            ).strip() or None
-            destino = igsid
-            message_origin = "instagram_message"
-            conversation.last_message_at = datetime.utcnow()
-            conversation.last_outbound_at = conversation.last_message_at
-        else:
-            raise HTTPException(status_code=400, detail="Provider da conversa não suportado para envio manual")
-
-        instagram_history_fields = (
-            {
-                "external_message_id": external_message_id,
-                "external_conversation_id": f"instagram:{destino}",
-                "provider_status": "sent",
-                "metadata_json": {"origin": message_origin, "instagram_igsid": destino},
-            }
-            if provider == "meta_instagram"
-            else {}
-        )
-
-        # Só persiste no histórico local após envio outbound com sucesso
-        nova_msg = MensagemHistorico(
-            empresa_id=empresa_uuid,
-            lead_id=lead.id,
-            conexao_id=conexao.id if conexao else None,
-            channel_conversation_id=getattr(conversation, "id", None),
-            channel=channel,
-            provider="meta_whatsapp" if provider == "meta_whatsapp" else provider,
-            direction="outbound",
-            message_status="sent",
-            texto=payload.texto,
-            tipo_mensagem="text",
-            media_url=None,
-            origem_mensagem="humano",
-            from_me=True,
-            **instagram_history_fields,
-        )
-        db.add(nova_msg)
-        lead.ia_ativa = False
-        await db.flush()
-        try:
-            from app.services.followup_engine import registrar_followup_message_event
-
-            await registrar_followup_message_event(
-                db,
-                empresa_id=empresa_uuid,
-                lead=lead,
-                contact=None,
-                conversation=conversation,
-                conexao_id=conexao.id,
-                provider="meta_whatsapp" if provider == "meta_whatsapp" else provider,
-                channel=channel,
-                from_me=True,
-                message=nova_msg,
-                message_at=nova_msg.criado_em or datetime.utcnow(),
-            )
-        except Exception as followup_exc:
-            logger.debug("Follow-up inbox text skipped: %s", followup_exc)
-        await db.commit()
-        await db.refresh(nova_msg)
-        mensagem_payload = {
-            "id": str(nova_msg.id),
-            "texto": str(nova_msg.texto or ""),
-            "from_me": bool(nova_msg.from_me),
-            "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
-            "origem_mensagem": nova_msg.origem_mensagem,
-            "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
-            "criado_em": serialize_utc_timestamp(nova_msg.criado_em) or "",
-        }
-        await manager.broadcast_to_empresa(
-            empresa_id,
-            {
-                "type": "inbox.message.created",
-                "tipo_evento": "nova_mensagem_outbound",
-                "empresa_id": empresa_id,
-                "lead_id": str(lead.id),
-                "conversation_id": str(conversation.id) if conversation else None,
-                "telefone": telefone,
-                "direction": "outbound",
-                "created_at": mensagem_payload["criado_em"],
-                "last_message_preview": mensagem_payload["texto"][:240],
-                "last_message_at": mensagem_payload["criado_em"],
-                "mensagem": mensagem_payload,
-            },
-        )
-        await manager.broadcast_to_empresa(
-            empresa_id,
-            {
-                "type": "STATUS_IA_CHANGED",
-                "payload": {
-                    "lead_id": str(lead.id),
-                    "ia_ativa": False,
-                },
-            },
-        )
-        
-        return {"status": "success"}
+        context = await _resolve_legacy_send_context(db, empresa_id=empresa_id, telefone=telefone)
+        return await _dispatch_manual_text_message(db, context=context, payload=payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -967,6 +998,197 @@ async def enviar_mensagem(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{empresa_id}/inbox/leads/{lead_id}/conversations/{conversation_id}/send")
+async def enviar_mensagem_por_conversa(
+    empresa_id: str,
+    lead_id: str,
+    conversation_id: str,
+    payload: SendMessagePayload,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        context = await _resolve_inbox_send_context(
+            db,
+            empresa_id=empresa_id,
+            lead_id=lead_id,
+            conversation_id=conversation_id,
+        )
+        return await _dispatch_manual_text_message(
+            db, context=context, payload=payload, require_client_message_id=True,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Inbox manual text send failed")
+        raise HTTPException(status_code=500, detail="Não foi possível enviar a mensagem") from e
+
+
+async def _dispatch_manual_text_message(
+    db: AsyncSession,
+    *,
+    context: dict[str, Any],
+    payload: SendMessagePayload,
+    require_client_message_id: bool = False,
+) -> dict[str, Any]:
+    empresa_uuid = context["empresa_id"]
+    lead = context["lead"]
+    conversation = context["conversation"]
+    contact = context["contact"]
+    conexao = context["conexao"]
+    provider = context["provider"]
+    channel = context["channel"]
+    destino = context["destination"]
+
+    if str((lead.dados_adicionais or {}).get("origem") or "") == "instagram_comment" and (
+        channel != "instagram" or provider != "meta_instagram"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Aguarde uma mensagem real no Direct para obter o IGSID antes de responder.",
+        )
+
+    if require_client_message_id and not str(payload.client_message_id or "").strip():
+        raise HTTPException(status_code=400, detail="Identificador da mensagem obrigatório")
+
+    duplicate = await _lock_and_find_duplicate_inbox_message(
+        db,
+        context=context,
+        client_message_id=payload.client_message_id,
+    )
+    if duplicate:
+        return {
+            "status": "success",
+            "deduplicated": True,
+            "mensagem": _serialize_manual_outbound_message(duplicate),
+        }
+
+    external_message_id = None
+    message_origin = None
+    outbound_payload = StandardOutgoingMessage(
+        identificador_contato=destino,
+        canal="whatsapp",
+        texto=payload.texto,
+        tipo="text",
+        media_url=None,
+    )
+    if provider == "meta_whatsapp":
+        enviado = await despachar_mensagem(
+            canal="whatsapp",
+            identificador_origem=destino,
+            texto=payload.texto,
+            conexao_id=str(conexao.id),
+            empresa_id=str(empresa_uuid),
+        )
+        if not enviado:
+            raise HTTPException(status_code=502, detail="Mensagem não despachada pela API Oficial da Meta")
+    elif provider == "evolution":
+        await dispatch_outbound_message(
+            empresa_id=empresa_uuid,
+            conexao=conexao,
+            payload=outbound_payload,
+        )
+    elif provider == "meta_instagram":
+        if channel != "instagram":
+            raise HTTPException(status_code=400, detail="Conversa Direct do Instagram não encontrada")
+        from app.services.instagram_simple import InstagramGraphClient, connection_token
+
+        graph_response = await InstagramGraphClient(connection_token(conexao)).direct_reply(
+            str(conexao.instagram_business_account_id or "").strip(),
+            destino,
+            payload.texto,
+        )
+        external_message_id = str(
+            graph_response.get("message_id") or graph_response.get("id") or ""
+        ).strip() or None
+        message_origin = "instagram_message"
+        conversation.last_message_at = datetime.utcnow()
+        conversation.last_outbound_at = conversation.last_message_at
+    else:
+        raise HTTPException(status_code=400, detail="Provider da conversa não suportado para envio manual")
+
+    instagram_history_fields = (
+        {
+            "external_message_id": external_message_id,
+            "external_conversation_id": f"instagram:{destino}",
+            "provider_status": "sent",
+            "metadata_json": {"origin": message_origin, "instagram_igsid": destino},
+        }
+        if provider == "meta_instagram"
+        else {}
+    )
+    message_metadata = dict(instagram_history_fields.get("metadata_json") or {})
+    if payload.client_message_id:
+        message_metadata["inbox_client_message_id"] = payload.client_message_id
+    if message_metadata:
+        instagram_history_fields["metadata_json"] = message_metadata
+
+    # Persist only after the existing dispatcher confirms successful delivery.
+    nova_msg = MensagemHistorico(
+        empresa_id=empresa_uuid,
+        lead_id=lead.id,
+        conexao_id=conexao.id,
+        channel_conversation_id=conversation.id,
+        channel=channel,
+        provider="meta_whatsapp" if provider == "meta_whatsapp" else provider,
+        direction="outbound",
+        message_status="sent",
+        texto=payload.texto,
+        tipo_mensagem="text",
+        media_url=None,
+        origem_mensagem="humano",
+        from_me=True,
+        **instagram_history_fields,
+    )
+    db.add(nova_msg)
+    lead.ia_ativa = False
+    await db.flush()
+    try:
+        from app.services.followup_engine import registrar_followup_message_event
+
+        await registrar_followup_message_event(
+            db,
+            empresa_id=empresa_uuid,
+            lead=lead,
+            contact=contact,
+            conversation=conversation,
+            conexao_id=conexao.id,
+            provider="meta_whatsapp" if provider == "meta_whatsapp" else provider,
+            channel=channel,
+            from_me=True,
+            message=nova_msg,
+            message_at=nova_msg.criado_em or datetime.utcnow(),
+        )
+    except Exception as followup_exc:
+        logger.debug("Follow-up inbox text skipped: %s", followup_exc)
+    await db.commit()
+    await db.refresh(nova_msg)
+    mensagem_payload = _serialize_manual_outbound_message(nova_msg)
+    await manager.broadcast_to_empresa(
+        str(empresa_uuid),
+        {
+            "type": "inbox.message.created",
+            "tipo_evento": "nova_mensagem_outbound",
+            "empresa_id": str(empresa_uuid),
+            "lead_id": str(lead.id),
+            "conversation_id": str(conversation.id),
+            "telefone": str(lead.telefone_contato or ""),
+            "direction": "outbound",
+            "created_at": mensagem_payload["criado_em"],
+            "last_message_preview": mensagem_payload["texto"][:240],
+            "last_message_at": mensagem_payload["criado_em"],
+            "mensagem": mensagem_payload,
+        },
+    )
+    await manager.broadcast_to_empresa(
+        str(empresa_uuid),
+        {
+            "type": "STATUS_IA_CHANGED",
+            "payload": {"lead_id": str(lead.id), "ia_ativa": False},
+        },
+    )
+    return {"status": "success", "mensagem": mensagem_payload}
+
+
 @router.post("/{empresa_id}/inbox/{telefone}/send_media")
 async def enviar_midia(
     empresa_id: str,
@@ -974,179 +1196,215 @@ async def enviar_midia(
     file: UploadFile = File(...),
     caption: str = Form(""),
     tipo_mensagem: str = Form(""),
+    client_message_id: str | None = Form(None, min_length=1, max_length=128),
 ):
     if _telefone_eh_simulador(telefone):
         return {"status": "success", "tipo_mensagem": "document"}
-
     try:
-        empresa_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="ID da empresa inválido")
+        async with AsyncSessionLocal() as session:
+            context = await _resolve_legacy_send_context(
+                session,
+                empresa_id=empresa_id,
+                telefone=telefone,
+            )
+            return await _dispatch_manual_media(
+                session,
+                context=context,
+                file=file,
+                caption=caption,
+                tipo_mensagem=tipo_mensagem,
+                client_message_id=client_message_id,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Inbox manual media send failed")
+        raise HTTPException(status_code=500, detail="Não foi possível enviar a mídia") from e
 
+
+@router.post("/{empresa_id}/inbox/leads/{lead_id}/conversations/{conversation_id}/send_media")
+async def enviar_midia_por_conversa(
+    empresa_id: str,
+    lead_id: str,
+    conversation_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    tipo_mensagem: str = Form(""),
+    client_message_id: str | None = Form(None, min_length=1, max_length=128),
+):
+    try:
+        async with AsyncSessionLocal() as session:
+            context = await _resolve_inbox_send_context(
+                session,
+                empresa_id=empresa_id,
+                lead_id=lead_id,
+                conversation_id=conversation_id,
+            )
+            return await _dispatch_manual_media(
+                session,
+                context=context,
+                file=file,
+                caption=caption,
+                tipo_mensagem=tipo_mensagem,
+                client_message_id=client_message_id,
+                require_client_message_id=True,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Inbox manual media send failed")
+        raise HTTPException(status_code=500, detail="Não foi possível enviar a mídia") from e
+
+
+async def _dispatch_manual_media(
+    session: AsyncSession,
+    *,
+    context: dict[str, Any],
+    file: UploadFile,
+    caption: str = "",
+    tipo_mensagem: str = "",
+    client_message_id: str | None = None,
+    require_client_message_id: bool = False,
+) -> dict[str, Any]:
     if not file:
         raise HTTPException(status_code=400, detail="Arquivo não informado")
+    if context["provider"] != "evolution" or context["channel"] != "whatsapp":
+        raise HTTPException(status_code=400, detail="Envio de mídia não disponível para a conexão desta conversa")
+    if str(getattr(context["conexao"], "status", "") or "").strip().lower() not in {"ativo", "connected", "conectado", "open"}:
+        raise HTTPException(status_code=400, detail="A conexão da conversa não está ativa")
+    if require_client_message_id and not str(client_message_id or "").strip():
+        raise HTTPException(status_code=400, detail="Identificador da mensagem obrigatório")
 
     override = str(tipo_mensagem or "").strip().lower()
     permitidos = {"image", "audio", "video", "document"}
     if override in permitidos:
-        tipo_mensagem_resolvido = override
+        tipo_resolvido = override
     else:
-        tipo_mensagem_resolvido = _inferir_tipo_mensagem(file.content_type)
-    tipo_mensagem = tipo_mensagem_resolvido
+        tipo_resolvido = _inferir_tipo_mensagem(file.content_type)
     mimetype = (file.content_type or "").strip() or "application/octet-stream"
-    if tipo_mensagem == "audio":
+    if tipo_resolvido == "audio":
         mt = mimetype.lower()
-        fn = (file.filename or "").lower()
-        if mt.startswith("audio/") and "octet-stream" not in mt:
-            pass
-        elif mt == "video/webm" or fn.endswith(".webm"):
-            mimetype = "audio/webm"
-        elif fn.endswith(".ogg") or fn.endswith(".opus") or "ogg" in mt:
-            mimetype = "audio/ogg"
-        elif not mt.startswith("audio/") or "octet-stream" in mt:
-            mimetype = "audio/webm"
+        filename = (file.filename or "").lower()
+        if not (mt.startswith("audio/") and "octet-stream" not in mt):
+            if mt == "video/webm" or filename.endswith(".webm"):
+                mimetype = "audio/webm"
+            elif filename.endswith((".ogg", ".opus")) or "ogg" in mt:
+                mimetype = "audio/ogg"
+            elif not mt.startswith("audio/") or "octet-stream" in mt:
+                mimetype = "audio/webm"
+
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
     media_b64 = base64.b64encode(file_bytes).decode("utf-8")
 
+    duplicate = await _lock_and_find_duplicate_inbox_message(
+        session,
+        context=context,
+        client_message_id=client_message_id,
+    )
+    if duplicate:
+        return {
+            "status": "success",
+            "tipo_mensagem": str(duplicate.tipo_mensagem or tipo_resolvido),
+            "deduplicated": True,
+            "mensagem": _serialize_manual_outbound_message(duplicate),
+        }
+
+    from app.services.evolution_service import enviar_midia_base64
+    resposta_envio = await enviar_midia_base64(
+        conexao=context["conexao"],
+        numero=context["destination"],
+        base64_data=media_b64,
+        tipo=tipo_resolvido,
+        mimetype=mimetype,
+        caption=caption or "",
+    )
+    if not resposta_envio:
+        raise HTTPException(status_code=502, detail="Falha ao enviar mídia para a Evolution API")
+
+    lead = context["lead"]
+    conversation = context["conversation"]
+    contact = context["contact"]
+    conexao = context["conexao"]
+    empresa_uuid = context["empresa_id"]
+    text_value = (caption or "").strip()
+    if not text_value:
+        text_value = {
+            "image": "Imagem enviada",
+            "audio": "Áudio enviado",
+            "video": "Vídeo enviado",
+        }.get(tipo_resolvido, f"Documento enviado: {file.filename or 'arquivo'}")
+    metadata = {"inbox_client_message_id": client_message_id} if client_message_id else {}
+    nova_msg = MensagemHistorico(
+        empresa_id=empresa_uuid,
+        lead_id=lead.id,
+        conexao_id=conexao.id,
+        channel_conversation_id=conversation.id,
+        channel=context["channel"],
+        provider=str(getattr(conexao, "provider", None) or "evolution_legacy"),
+        direction="outbound",
+        message_status="sent",
+        texto=text_value,
+        tipo_mensagem=tipo_resolvido,
+        media_url=media_b64,
+        metadata_json=metadata,
+        origem_mensagem="humano",
+        from_me=True,
+    )
+    session.add(nova_msg)
+    lead.ia_ativa = False
+    await session.flush()
     try:
-        async with AsyncSessionLocal() as session:
-            tipos_aceitos = ["evolution", "EVOLUTION"]
-            status_aceitos = ["ativo", "connected", "conectado", "open"]
-            result_conexao = await session.execute(
-                select(Conexao).where(
-                    Conexao.empresa_id == empresa_uuid,
-                    cast(Conexao.tipo, String).in_(tipos_aceitos),
-                    func.lower(Conexao.status).in_(status_aceitos),
-                )
-            )
-            conexao = result_conexao.scalars().first()
-            if not conexao:
-                raise HTTPException(status_code=400, detail="Nenhuma conexão Evolution ativa encontrada")
+        from app.services.followup_engine import registrar_followup_message_event
+        from app.services.outbound_origin_tracker import extrair_message_id_resposta_evolution, marcar_outbound_backend
 
-            result_lead = await session.execute(
-                select(CRMLead).where(
-                    CRMLead.empresa_id == empresa_uuid,
-                    CRMLead.telefone_contato == telefone
-                )
-            )
-            lead = result_lead.scalars().first()
-            if not lead:
-                raise HTTPException(status_code=404, detail="Lead não encontrado")
-            conversation = await _buscar_conversa_principal_lead(session, empresa_uuid, lead.id)
+        await marcar_outbound_backend(
+            str(empresa_uuid),
+            context["destination"],
+            message_id=extrair_message_id_resposta_evolution(resposta_envio if isinstance(resposta_envio, dict) else None),
+            texto=text_value,
+        )
+        await registrar_followup_message_event(
+            session,
+            empresa_id=empresa_uuid,
+            lead=lead,
+            contact=contact,
+            conversation=conversation,
+            conexao_id=conexao.id,
+            provider=str(getattr(conexao, "provider", None) or "evolution_legacy"),
+            channel=context["channel"],
+            from_me=True,
+            message=nova_msg,
+            message_at=nova_msg.criado_em or datetime.utcnow(),
+        )
+    except Exception as followup_exc:
+        logger.debug("Follow-up inbox media skipped: %s", followup_exc)
+    await session.commit()
+    await session.refresh(nova_msg)
 
-            from app.services.evolution_service import enviar_midia_base64
-            resposta_envio = await enviar_midia_base64(
-                conexao=conexao,
-                numero=telefone,
-                base64_data=media_b64,
-                tipo=tipo_mensagem,
-                mimetype=mimetype,
-                caption=caption or "",
-            )
-            if not resposta_envio:
-                raise HTTPException(status_code=502, detail="Falha ao enviar mídia para a Evolution API")
-
-            texto = (caption or "").strip()
-            if not texto:
-                if tipo_mensagem == "image":
-                    texto = "Imagem enviada"
-                elif tipo_mensagem == "audio":
-                    texto = "Áudio enviado"
-                elif tipo_mensagem == "video":
-                    texto = "Vídeo enviado"
-                else:
-                    texto = f"Documento enviado: {file.filename or 'arquivo'}"
-
-            nova_msg = MensagemHistorico(
-                empresa_id=empresa_uuid,
-                lead_id=lead.id,
-                conexao_id=conexao.id,
-                channel=str(getattr(conexao, "channel", None) or "whatsapp"),
-                provider=str(getattr(conexao, "provider", None) or "evolution_legacy"),
-                direction="outbound",
-                message_status="sent",
-                texto=texto,
-                tipo_mensagem=tipo_mensagem,
-                media_url=media_b64,
-                origem_mensagem="humano",
-                from_me=True,
-            )
-            session.add(nova_msg)
-
-            lead.ia_ativa = False
-            await session.flush()
-            try:
-                from app.services.followup_engine import registrar_followup_message_event
-                from app.services.outbound_origin_tracker import extrair_message_id_resposta_evolution, marcar_outbound_backend
-
-                await marcar_outbound_backend(
-                    str(empresa_uuid),
-                    telefone,
-                    message_id=extrair_message_id_resposta_evolution(resposta_envio if isinstance(resposta_envio, dict) else None),
-                    texto=texto,
-                )
-
-                await registrar_followup_message_event(
-                    session,
-                    empresa_id=empresa_uuid,
-                    lead=lead,
-                    contact=None,
-                    conversation=conversation,
-                    conexao_id=conexao.id,
-                    provider=str(getattr(conexao, "provider", None) or "evolution_legacy"),
-                    channel=str(getattr(conexao, "channel", None) or "whatsapp"),
-                    from_me=True,
-                    message=nova_msg,
-                    message_at=nova_msg.criado_em or datetime.utcnow(),
-                )
-            except Exception as followup_exc:
-                logger.debug("Follow-up inbox media skipped: %s", followup_exc)
-            await session.commit()
-            await session.refresh(nova_msg)
-
-            mensagem_payload = {
-                "id": str(nova_msg.id),
-                "texto": str(nova_msg.texto or ""),
-                "from_me": bool(nova_msg.from_me),
-                "tipo_mensagem": str(nova_msg.tipo_mensagem or "text"),
-                "origem_mensagem": nova_msg.origem_mensagem,
-                "media_url": str(nova_msg.media_url) if nova_msg.media_url else None,
-                "criado_em": serialize_utc_timestamp(nova_msg.criado_em) or "",
-            }
-            await manager.broadcast_to_empresa(
-                empresa_id,
-                {
-                    "type": "inbox.message.created",
-                    "tipo_evento": "nova_mensagem_outbound",
-                    "empresa_id": empresa_id,
-                    "lead_id": str(lead.id),
-                    "telefone": telefone,
-                    "direction": "outbound",
-                    "created_at": mensagem_payload["criado_em"],
-                    "last_message_preview": mensagem_payload["texto"][:240],
-                    "last_message_at": mensagem_payload["criado_em"],
-                    "mensagem": mensagem_payload,
-                },
-            )
-
-            await manager.broadcast_to_empresa(
-                empresa_id,
-                {
-                    "type": "STATUS_IA_CHANGED",
-                    "payload": {
-                        "lead_id": str(lead.id),
-                        "ia_ativa": False,
-                    },
-                },
-            )
-
-            return {"status": "success", "tipo_mensagem": tipo_mensagem}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    mensagem_payload = _serialize_manual_outbound_message(nova_msg)
+    await manager.broadcast_to_empresa(
+        str(empresa_uuid),
+        {
+            "type": "inbox.message.created",
+            "tipo_evento": "nova_mensagem_outbound",
+            "empresa_id": str(empresa_uuid),
+            "lead_id": str(lead.id),
+            "conversation_id": str(conversation.id),
+            "telefone": str(lead.telefone_contato or ""),
+            "direction": "outbound",
+            "created_at": mensagem_payload["criado_em"],
+            "last_message_preview": mensagem_payload["texto"][:240],
+            "last_message_at": mensagem_payload["criado_em"],
+            "mensagem": mensagem_payload,
+        },
+    )
+    await manager.broadcast_to_empresa(
+        str(empresa_uuid),
+        {"type": "STATUS_IA_CHANGED", "payload": {"lead_id": str(lead.id), "ia_ativa": False}},
+    )
+    return {"status": "success", "tipo_mensagem": tipo_resolvido, "mensagem": mensagem_payload}
 
 @router.post("/{empresa_id}/inbox/{telefone}/reativar_bot")
 async def reativar_bot(empresa_id: str, telefone: str):

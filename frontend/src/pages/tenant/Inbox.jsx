@@ -5,6 +5,7 @@ import { Link, useLocation } from "react-router-dom";
 import { allowlistedFunnelFilters, journeyLeadFromSearch } from "../../utils/commercialFunnel";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
+import { stableConversationSendPath } from "../../utils/inboxSend";
 import { conversationKey, definedLeadPatch, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, normalizeLeadId, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
@@ -155,6 +156,9 @@ export default function Inbox() {
   const connectedTenantRef = useRef(null);
   const selectedLeadTelefoneRef = useRef(null);
   const selectedLeadRef = useRef(null);
+  const textSendInFlightRef = useRef(false);
+  const mediaSendInFlightRef = useRef(false);
+  const retrySendInFlightRef = useRef(new Set());
   const tenantScopeRef = useRef(null);
   const leadsRef = useRef([]);
   const leadsRequestRef = useRef(null);
@@ -909,6 +913,13 @@ export default function Inbox() {
     e.preventDefault();
     const texto = newMessage.trim();
     if (!texto || !selectedLead) return;
+    if (textSendInFlightRef.current) return;
+
+    const sendPath = stableConversationSendPath(empresa_id, selectedLead, "send");
+    if (!sendPath) {
+      setToast({ type: "error", message: "Esta conversa ainda não está vinculada a um lead e uma conversa válidos." });
+      return;
+    }
 
     const operationKey = conversationKey(empresa_id, selectedLead);
     const setOperationMessages = updater => setMessages(updater, operationKey);
@@ -922,18 +933,24 @@ export default function Inbox() {
       tipo_mensagem: "text",
       media_url: null,
       telefone_contato: telefone,
+      client_message_id: tempId,
       retry_type: "text",
       status: "pending",
       criado_em: new Date().toISOString(),
     };
 
+    textSendInFlightRef.current = true;
     setOperationMessages((prev) => [...(prev || []), optimisticMessage]);
     setNewMessage("");
     scrollToBottom();
     try {
-      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, {
+      const response = await api.post(sendPath, {
         texto,
+        client_message_id: tempId,
       });
+      if (response.data?.mensagem) {
+        setOperationMessages((prev) => upsertMessage(prev, response.data.mensagem));
+      }
       // Mantém UI livre; confirmação deve chegar por websocket.
       void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
     } catch (e) {
@@ -953,6 +970,8 @@ export default function Inbox() {
         type: "error",
         message: e.response?.data?.detail || "Não foi possível enviar a mensagem.",
       });
+    } finally {
+      textSendInFlightRef.current = false;
     }
   };
 
@@ -961,6 +980,12 @@ export default function Inbox() {
       const det = !selectedLead ? "Nenhum contacto selecionado." : "Ficheiro em falta.";
       console.error("[Inbox sendMediaFile] Abortado:", det);
       setToast({ type: "error", message: det });
+      return false;
+    }
+    if (mediaSendInFlightRef.current) return false;
+    const sendPath = stableConversationSendPath(empresa_id, selectedLead, "send_media");
+    if (!sendPath) {
+      setToast({ type: "error", message: "Esta conversa ainda não está vinculada a um lead e uma conversa válidos." });
       return false;
     }
     const operationKey = conversationKey(empresa_id, selectedLead);
@@ -997,6 +1022,7 @@ export default function Inbox() {
       tipo_mensagem: tipoMidia,
       media_url: null,
       telefone_contato: telefone,
+      client_message_id: tempId,
       retry_type: "media",
       status: "pending",
       criado_em: new Date().toISOString(),
@@ -1004,15 +1030,20 @@ export default function Inbox() {
 
     setOperationMessages((prev) => [...(prev || []), optimisticMediaMessage]);
     scrollToBottom();
+    mediaSendInFlightRef.current = true;
     setIsSendingMedia(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("caption", caption || "");
       formData.append("tipo_mensagem", tipoMidia);
-      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send_media`, formData, {
+      formData.append("client_message_id", tempId);
+      const response = await api.post(sendPath, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      if (response.data?.mensagem) {
+        setOperationMessages((prev) => upsertMessage(prev, response.data.mensagem));
+      }
       void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
       return true;
     } catch (e) {
@@ -1052,6 +1083,7 @@ export default function Inbox() {
       });
       return false;
     } finally {
+      mediaSendInFlightRef.current = false;
       setIsSendingMedia(false);
     }
   };
@@ -1214,15 +1246,19 @@ export default function Inbox() {
 
     const operationKey = conversationKey(empresa_id, selectedLead);
     const setOperationMessages = updater => setMessages(updater, operationKey);
-    const telefone = String(mensagemFalha?.telefone_contato || selectedLead?.telefone_contato || "").trim();
+    const sendPath = stableConversationSendPath(empresa_id, selectedLead, "send");
     const texto = String(mensagemFalha?.texto || "").trim();
-    if (!telefone || !texto) return;
+    if (!sendPath || !texto) return;
+    const retryKey = String(mensagemFalha?.client_message_id || mensagemFalha?.id || "").trim();
+    if (!retryKey || retrySendInFlightRef.current.has(retryKey)) return;
+    retrySendInFlightRef.current.add(retryKey);
 
     setOperationMessages((prev) =>
       (prev || []).map((msg) =>
         msg?.id === mensagemFalha.id
           ? {
               ...msg,
+              client_message_id: retryKey,
               status: "pending",
               erro_envio: null,
             }
@@ -1231,8 +1267,11 @@ export default function Inbox() {
     );
 
     try {
-      await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, { texto });
-      void fetchAiEffectiveState(telefone, selectedLead.id, { fresh: true });
+      const response = await api.post(sendPath, { texto, client_message_id: retryKey });
+      if (response.data?.mensagem) {
+        setOperationMessages((prev) => upsertMessage(prev, response.data.mensagem));
+      }
+      void fetchAiEffectiveState(selectedLead.telefone_contato, selectedLead.id, { fresh: true });
     } catch (e) {
       setOperationMessages((prev) =>
         (prev || []).map((msg) =>
@@ -1249,6 +1288,8 @@ export default function Inbox() {
         type: "error",
         message: e.response?.data?.detail || "Não foi possível reenviar a mensagem.",
       });
+    } finally {
+      retrySendInFlightRef.current.delete(retryKey);
     }
   };
 

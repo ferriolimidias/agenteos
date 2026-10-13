@@ -16,8 +16,8 @@ class MensagemHistoricoEmpresaIdTests(unittest.TestCase):
         by_function = {str(call["function"]) for call in calls}
 
         self.assertIn("_salvar_historico_saida_ia", by_function)
-        self.assertIn("enviar_mensagem", by_function)
-        self.assertIn("enviar_midia", by_function)
+        self.assertIn("_dispatch_manual_text_message", by_function)
+        self.assertIn("_dispatch_manual_media", by_function)
         self.assertIn("save_history_and_check_pause", by_function)
         self.assertIn("_persist_event", by_function)
         self.assertIn("_materialize_campaign_history", by_function)

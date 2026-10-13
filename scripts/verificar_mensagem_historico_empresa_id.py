@@ -90,8 +90,8 @@ def main() -> int:
 
     required_functions = {
         "_salvar_historico_saida_ia",
-        "enviar_mensagem",
-        "enviar_midia",
+        "_dispatch_manual_text_message",
+        "_dispatch_manual_media",
         "save_history_and_check_pause",
         "_persist_event",
         "_materialize_campaign_history",
