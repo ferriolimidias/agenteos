@@ -302,6 +302,7 @@ async function main() {
         await page.getByRole('button', { name: 'Ver contatos', exact: true }).click();
         await page.getByRole('link', { name: 'Abrir jornada A04', exact: true }).first().click();
         await page.getByTestId('commercial-journey').getByTestId('journey-events').waitFor();
+        await page.getByTestId('commercial-journey').getByRole('button', { name: 'Fechar jornada comercial', exact: true }).click();
         await page.getByRole('link', { name: '← Voltar ao funil com os filtros', exact: true }).click();
         await page.getByTestId('funnel-total').filter({ hasText: '45' }).waitFor(); assert.equal(await page.getByLabel('Etapa comercial', { exact: true }).inputValue(), 'qualified');
         result.checks.push(`${viewport.name}:Funil-Jornada-return-filter-state`);
