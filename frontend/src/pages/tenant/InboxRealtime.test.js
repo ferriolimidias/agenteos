@@ -1,25 +1,12 @@
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { upsertMessage, mergeMessageSnapshot } from "../../utils/inboxRealtime.js";
 
 const source = readFileSync(new URL("./Inbox.jsx", import.meta.url), "utf8");
 const layoutSource = readFileSync(new URL("../../layouts/TenantLayout.jsx", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
 const shellStylesSource = readFileSync(new URL("../../styles/shell.css", import.meta.url), "utf8");
-
-function sortChronologically(messages) {
-  return [...messages].sort((a, b) => {
-    const timeA = new Date(a?.criado_em || 0).getTime() || 0;
-    const timeB = new Date(b?.criado_em || 0).getTime() || 0;
-    if (timeA !== timeB) return timeA - timeB;
-    return String(a?.id || "").localeCompare(String(b?.id || ""));
-  });
-}
-
-function appendRealtime(messages, incoming) {
-  if (incoming?.id && messages.some((message) => message?.id === incoming.id)) return messages;
-  return sortChronologically([...messages, incoming]);
-}
 
 test("inbox accepts canonical realtime message and ai-state events", () => {
   assert.match(source, /tipoEventoV2 === "inbox\.message\.created"/);
@@ -28,9 +15,13 @@ test("inbox accepts canonical realtime message and ai-state events", () => {
 });
 
 test("realtime reactions update the target message instead of becoming a bubble", () => {
-  assert.match(source, /applyRealtimeReaction/);
-  assert.match(source, /tipo_mensagem \\|\\| \"\"\)\.toLowerCase\(\) === \"reaction\"/);
-  assert.match(source, /if \(isReaction\) return prev/);
+  assert.match(source, /upsertMessage/);
+  const target = { id: "target", external_message_id: "wamid", texto: "Original" };
+  const reaction = { id: "reaction", tipo_mensagem: "reaction", metadata_json: { reaction: { message_id: "wamid", emoji: "👍" } } };
+  const messages = upsertMessage([target], reaction);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].texto, "Original");
+  assert.equal(messages[0].reactions[0].emoji, "👍");
 });
 
 test("realtime handler keeps payload in scope for every websocket frame", () => {
@@ -84,23 +75,24 @@ test("history and realtime keep oldest at top and latest at bottom", () => {
   const m1 = { id: "1", criado_em: "2026-08-14T10:00:00Z", texto: "M1" };
   const m2 = { id: "2", criado_em: "2026-08-14T10:01:00Z", texto: "M2" };
   const m3 = { id: "3", criado_em: "2026-08-14T10:02:00Z", texto: "M3" };
-  assert.deepEqual(sortChronologically([m3, m1, m2]).map((item) => item.texto), ["M1", "M2", "M3"]);
-  assert.deepEqual(appendRealtime([m1, m2], m3).map((item) => item.texto), ["M1", "M2", "M3"]);
-  assert.deepEqual(sortChronologically([m1, m2, m3]).map((item) => item.texto), ["M1", "M2", "M3"]);
+  assert.deepEqual(mergeMessageSnapshot([], [m3, m1, m2]).map((item) => item.texto), ["M1", "M2", "M3"]);
+  assert.deepEqual(upsertMessage([m1, m2], m3).map((item) => item.texto), ["M1", "M2", "M3"]);
+  assert.deepEqual(mergeMessageSnapshot([], [m1, m2, m3]).map((item) => item.texto), ["M1", "M2", "M3"]);
 });
 
 test("mixed client and AI messages remain chronological and duplicate realtime IDs are ignored", () => {
   const m1 = { id: "1", criado_em: "2026-08-14T10:00:00Z", from_me: false };
   const m2 = { id: "2", criado_em: "2026-08-14T10:01:00Z", from_me: true, origem_mensagem: "ia" };
   const m3 = { id: "3", criado_em: "2026-08-14T10:02:00Z", from_me: false };
-  const ordered = appendRealtime(appendRealtime([m1], m2), m3);
+  const ordered = upsertMessage(upsertMessage([m1], m2), m3);
   assert.deepEqual(ordered.map((item) => item.id), ["1", "2", "3"]);
-  assert.strictEqual(appendRealtime(ordered, m3), ordered);
+  assert.deepEqual(upsertMessage(ordered, m3), ordered);
 });
 
-test("Inbox source appends realtime at the end, sorts ascending, and auto-scrolls to the bottom", () => {
-  assert.match(source, /return \[\.\.\.lista, novaMensagem\]\.sort/);
-  assert.match(source, /return timeA - timeB/);
+test("Inbox uses incremental chronological merge and conditional autoscroll", () => {
+  assert.match(source, /upsertMessage\(previous, novaMensagem/);
+  assert.match(source, /mergeMessageSnapshot/);
+  assert.match(source, /scrollHeight - scroll\.clientHeight - scroll\.scrollTop <= 96/);
   assert.doesNotMatch(source, /flex-col-reverse/);
   assert.doesNotMatch(source, /\.reverse\(/);
   assert.match(source, /messagesEndRef\.current\?\.scrollIntoView/);

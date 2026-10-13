@@ -26,7 +26,9 @@ test("Inbox core UI and Conversion Monitor contracts remain present", () => {
   assert.match(inbox, /<textarea/);
   assert.match(inbox, /\/inbox/);
   assert.match(inbox, /new WebSocket/);
-  assert.match(inbox, /applyRealtimeReaction/);
+  assert.match(inbox, /upsertMessage/);
+  const realtime = fs.readFileSync(new URL("../../utils/inboxRealtime.js", import.meta.url), "utf8");
+  assert.match(realtime, /applyRealtimeReaction/);
   assert.match(monitor, /conversion_monitor_prompt/);
   assert.match(monitor, /Monitor de conversão/);
 });

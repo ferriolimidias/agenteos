@@ -1,11 +1,11 @@
-import React, { useCallback, useState, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { AlertCircle, ArrowLeft, ArrowRightLeft, Check, FileAudio, FileImage, FileText, FileVideo, MessageSquare, Mic, Paperclip, RefreshCw, Search, Send, Trash2, X } from "lucide-react";
 import api from "../../services/api";
 import { Link, useLocation } from "react-router-dom";
 import { allowlistedFunnelFilters, journeyLeadFromSearch } from "../../utils/commercialFunnel";
 import { getActiveEmpresaId, getStoredUser } from "../../utils/auth";
 import { normalizeLeadTags } from "../../utils/leadTags";
-import { applyRealtimeReaction } from "../../utils/reactions";
+import { conversationKey, definedLeadPatch, leadMatches, mergeLeadSnapshot, mergeMessageSnapshot, messageIdentity, patchLeadFromMessage, upsertMessage } from "../../utils/inboxRealtime";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
@@ -115,8 +115,8 @@ export default function Inbox() {
   const [messagesError, setMessagesError] = useState(false);
   const [connectionState, setConnectionState] = useState(0);
   const journeyButtonRef = useRef(null);
-  const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState("");
+  const [messages, setMessagesState] = useState([]);
+  const [newMessage, setNewMessageState] = useState("");
   const [isSendingMedia, setIsSendingMedia] = useState(false);
   const [destinos, setDestinos] = useState([]);
   const [grupos, setGrupos] = useState([]);
@@ -147,10 +147,28 @@ export default function Inbox() {
   const failedReconnectTimestampsRef = useRef([]);
   const reconnectBlockedUntilRef = useRef(0);
   const socketOpenedRef = useRef(false);
+  const connectedTenantRef = useRef(null);
   const selectedLeadTelefoneRef = useRef(null);
   const selectedLeadRef = useRef(null);
-  const leadsFetchInFlightRef = useRef(false);
-  const leadsFetchQueuedRef = useRef(false);
+  const tenantScopeRef = useRef(null);
+  const leadsRef = useRef([]);
+  const leadsRequestRef = useRef(null);
+  const historyRequestRef = useRef(null);
+  const aiRequestRef = useRef(null);
+  const revisionRef = useRef(0);
+  const leadRevisionsRef = useRef(new Map());
+  const aiRevisionsRef = useRef(new Map());
+  const messageRevisionsRef = useRef(new Map());
+  const wsMessagePatchesRef = useRef(new Map());
+  const messagesCacheRef = useRef(new Map());
+  const draftsRef = useRef(new Map());
+  const scrollCacheRef = useRef(new Map());
+  const activeConversationRef = useRef("");
+  const seenRealtimeRef = useRef(new Set());
+  const stickToBottomRef = useRef(true);
+  const readingScrollRef = useRef(0);
+  const requestScrollRef = useRef(false);
+  const historyScrollRef = useRef(null);
   const leadsRefreshTimerRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
   const photoCacheRef = useRef(new Map());
@@ -164,7 +182,61 @@ export default function Inbox() {
   /** Por id de mensagem: transcrição de áudio expandida no chat */
   const [transcriptVisibleByMsgId, setTranscriptVisibleByMsgId] = useState({});
 
+  // These setters bind work to the conversation that scheduled it, including
+  // optimistic messages; delayed work cannot mutate a newly selected history.
+  const setMessages = useCallback((updater, boundKey = activeConversationRef.current, realtime = false) => {
+    const key = boundKey;
+    if (!key || JSON.parse(key)[0] !== String(tenantScopeRef.current)) return;
+    const revision = ++revisionRef.current;
+    const apply = previous => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      const versions = messageRevisionsRef.current.get(key) || new Map();
+      const observed = wsMessagePatchesRef.current.get(key) || new Map();
+      const previousById = new Map(previous.map(message => [messageIdentity(message), message]));
+      for (const message of next) {
+        const before = previousById.get(messageIdentity(message));
+        if (before !== message) {
+          versions.set(messageIdentity(message), revision);
+          if (message.external_message_id) versions.set(String(message.external_message_id), revision);
+          if (realtime) {
+            const patch = { ...(observed.get(messageIdentity(message)) || {}) };
+            for (const [field, value] of Object.entries(message)) if (!before || before[field] !== value) patch[field] = value;
+            observed.set(messageIdentity(message), patch);
+            if (message.external_message_id) observed.set(String(message.external_message_id), patch);
+          }
+        }
+      }
+      messageRevisionsRef.current.set(key, versions);
+      wsMessagePatchesRef.current.set(key, observed);
+      messagesCacheRef.current.set(key, next);
+      return next;
+    };
+    if (activeConversationRef.current !== key) {
+      apply(messagesCacheRef.current.get(key) || []);
+      return;
+    }
+    setMessagesState(previous => activeConversationRef.current === key ? apply(previous) : previous);
+  }, []);
+
+  const recordLeadPatch = useCallback((id, patch) => {
+    const key = String(id || "");
+    if (!key) return;
+    const revision = ++revisionRef.current;
+    const old = leadRevisionsRef.current.get(key);
+    const fields = { ...(old?.fields || {}) };
+    for (const field of Object.keys(patch)) fields[field] = revision;
+    leadRevisionsRef.current.set(key, { revision, fields });
+    if (typeof patch.ia_ativa === "boolean" || typeof patch.bot_pausado === "boolean") aiRevisionsRef.current.set(key, revision);
+  }, []);
+
+  const setNewMessage = useCallback((value) => {
+    if (activeConversationRef.current) draftsRef.current.set(activeConversationRef.current, value);
+    setNewMessageState(value);
+  }, []);
+
   const scrollToBottom = () => {
+    stickToBottomRef.current = true;
+    requestScrollRef.current = true;
     window.setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 0);
@@ -224,7 +296,43 @@ export default function Inbox() {
   const activeEmpresaId = getActiveEmpresaId();
   const empresa_id = activeEmpresaId;
 
-  useEffect(() => { setShowJourney(false); }, [empresa_id]);
+  useLayoutEffect(() => {
+    tenantScopeRef.current = empresa_id;
+    leadsRequestRef.current?.controller.abort();
+    historyRequestRef.current?.controller.abort();
+    aiRequestRef.current?.controller.abort();
+    leadsRequestRef.current = null;
+    historyRequestRef.current = null;
+    aiRequestRef.current = null;
+    leadsTenantRef.current = null;
+    activeConversationRef.current = "";
+    leadsRef.current = [];
+    selectedLeadRef.current = null;
+    selectedLeadTelefoneRef.current = null;
+    leadRevisionsRef.current.clear();
+    aiRevisionsRef.current.clear();
+    messageRevisionsRef.current.clear();
+    wsMessagePatchesRef.current.clear();
+    messagesCacheRef.current.clear();
+    draftsRef.current.clear();
+    scrollCacheRef.current.clear();
+    seenRealtimeRef.current.clear();
+    setSelectedLead(null);
+    setLeads([]);
+    setMessagesState([]);
+    setNewMessageState("");
+    setAiEffectiveState(null);
+    setLeadsLoading(true);
+    setMessagesLoading(false);
+    setMessagesError(false);
+    setShowJourney(false);
+  }, [empresa_id]);
+
+  useLayoutEffect(() => {
+    leadsRef.current = leads;
+    selectedLeadRef.current = leadsTenantRef.current === empresa_id ? selectedLead : null;
+    selectedLeadTelefoneRef.current = selectedLeadRef.current?.telefone_contato || null;
+  }, [empresa_id, leads, selectedLead]);
 
   const funnelContext = location.state?.funnelContext?.tenant === empresa_id
     ? { tenant: empresa_id, filters: allowlistedFunnelFilters(location.state.funnelContext.filters) } : null;
@@ -245,80 +353,56 @@ export default function Inbox() {
 
   const updateLeadInState = useCallback((leadId, updates) => {
     const targetId = String(leadId || "");
+    if (!targetId) return;
+    recordLeadPatch(targetId, updates);
     setLeads((prev) => (prev || []).map((lead) => (String(lead?.id || "") === targetId ? { ...lead, ...updates } : lead)));
     setSelectedLead((prev) => (String(prev?.id || "") === targetId ? { ...prev, ...updates } : prev));
-  }, []);
+  }, [recordLeadPatch]);
 
-  const upsertLeadFromRealtime = useCallback((data, message, isSelected) => {
-    const leadId = String(data?.lead_id || "");
-    const conversationId = String(data?.conversation_id || message?.conversation_id || message?.channel_conversation_id || "");
-    if (!leadId && !conversationId) return;
-    const createdAt = data?.last_message_at || data?.created_at || message?.criado_em || null;
-    const isInbound = String(data?.direction || "").toLowerCase() === "inbound";
-    const updates = {
-      conversation_id: conversationId || undefined,
-      ultima_mensagem: data?.last_message_preview ?? message?.texto ?? undefined,
-      ultima_mensagem_data: createdAt,
-      nao_lidas: isSelected ? 0 : undefined,
-      nome_contato: data?.contact_display_name || undefined,
-      telefone_contato: data?.telefone || undefined,
-    };
-    setLeads((prev) => {
-      const lista = prev || [];
-      const index = lista.findIndex((lead) => (
-        (leadId && String(lead?.id || "") === leadId) ||
-        (conversationId && String(lead?.conversation_id || "") === conversationId)
-      ));
-      if (index < 0) return lista;
-      const next = {
-        ...lista[index],
-        ...updates,
-        nao_lidas: isSelected
-          ? 0
-          : isInbound
-            ? Math.max(Number(lista[index]?.nao_lidas || 0) + 1, Number(data?.unread_count || 0))
-            : Number(lista[index]?.nao_lidas || 0),
-      };
-      return [next, ...lista.filter((_, itemIndex) => itemIndex !== index)];
+  const upsertLeadFromRealtime = useCallback((data, message, isSelected, isNew) => {
+    const known = leadsRef.current.find(lead => leadMatches(lead, data, message));
+    if (!known) return false;
+    const patched = patchLeadFromMessage(known, data, message, { selected: isSelected, isNew });
+    recordLeadPatch(known.id, Object.fromEntries(Object.entries(patched).filter(([field, value]) => value !== known[field])));
+    setLeads(previous => {
+      const next = previous.map(lead => leadMatches(lead, data, message)
+        ? patchLeadFromMessage(lead, data, message, { selected: isSelected, isNew }) : lead);
+      return isNew ? next.sort((a, b) => (new Date(b.ultima_mensagem_data || 0).getTime() || 0) - (new Date(a.ultima_mensagem_data || 0).getTime() || 0)) : next;
     });
-    setSelectedLead((prev) => {
-      const matchesLead = leadId && String(prev?.id || "") === leadId;
-      const matchesConversation = conversationId && String(prev?.conversation_id || "") === conversationId;
-      return matchesLead || matchesConversation ? { ...prev, ...updates, conversation_id: conversationId || prev.conversation_id } : prev;
-    });
-  }, []);
+    setSelectedLead(previous => leadMatches(previous, data, message)
+      ? patchLeadFromMessage(previous, data, message, { selected: true, isNew }) : previous);
+    return true;
+  }, [recordLeadPatch]);
 
-  const fetchLeads = useCallback(async () => {
-    if (!empresa_id) return;
-    if (leadsFetchInFlightRef.current) {
-      leadsFetchQueuedRef.current = true;
-      return;
-    }
-
-    leadsFetchInFlightRef.current = true;
-    setLeadsLoading(true);
+  const fetchLeads = useCallback(() => {
+    if (!empresa_id || tenantScopeRef.current !== empresa_id) return Promise.resolve();
+    if (leadsRequestRef.current?.tenant === empresa_id) return leadsRequestRef.current.promise;
+    const request = { tenant: empresa_id, controller: new AbortController(), revision: revisionRef.current };
+    leadsRequestRef.current = request;
+    setLeadsLoading(!leadsRef.current.length);
     setLeadsError(false);
-    try {
-      const res = await api.get(`/empresas/${empresa_id}/inbox`);
-      const nextLeads = res.data || [];
-      leadsTenantRef.current = empresa_id;
-      setLeads(nextLeads);
-      setSelectedLead((prev) => {
-        if (!prev?.id) return prev;
-        return nextLeads.find((lead) => lead.id === prev.id) || prev;
+    request.promise = api.get(`/empresas/${empresa_id}/inbox`, { signal: request.controller.signal })
+      .then(response => {
+        if (tenantScopeRef.current !== empresa_id || leadsRequestRef.current !== request) return;
+        leadsTenantRef.current = empresa_id;
+        setLeads(previous => mergeLeadSnapshot(previous, response.data || [], request.revision, leadRevisionsRef.current));
+        setSelectedLead(previous => {
+          if (!previous?.id) return previous;
+          return mergeLeadSnapshot([previous], response.data || [], request.revision, leadRevisionsRef.current)
+            .find(lead => String(lead.id) === String(previous.id)) || previous;
+        });
+      })
+      .catch(error => {
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || leadsRequestRef.current !== request) return;
+        console.error("Erro ao buscar leads no Inbox:", error);
+        setLeadsError(true); // keep the valid list and current identity on temporary failure
+      })
+      .finally(() => {
+        if (leadsRequestRef.current !== request) return;
+        leadsRequestRef.current = null;
+        if (tenantScopeRef.current === empresa_id) setLeadsLoading(false);
       });
-    } catch (e) {
-      console.error("Erro ao buscar leads no Inbox:", e);
-      setLeadsError(true);
-      setLeads([]);
-    } finally {
-      setLeadsLoading(false);
-      leadsFetchInFlightRef.current = false;
-      if (leadsFetchQueuedRef.current) {
-        leadsFetchQueuedRef.current = false;
-        void fetchLeads();
-      }
-    }
+    return request.promise;
   }, [empresa_id]);
 
   const scheduleFetchLeads = useCallback((delayMs = 15000) => {
@@ -332,21 +416,36 @@ export default function Inbox() {
     }, safeDelay);
   }, [fetchLeads]);
 
-  const fetchMessages = useCallback(async (telefone) => {
-    if (!empresa_id || !telefone) return;
-    setMessagesLoading(true);
+  const fetchMessages = useCallback((telefone) => {
+    const key = conversationKey(empresa_id, selectedLeadRef.current);
+    if (!key || tenantScopeRef.current !== empresa_id || key !== activeConversationRef.current || telefone !== selectedLeadRef.current?.telefone_contato) return Promise.resolve();
+    if (historyRequestRef.current?.key === key) return historyRequestRef.current.promise;
+    historyRequestRef.current?.controller.abort();
+    const request = { key, controller: new AbortController(), revision: revisionRef.current };
+    historyRequestRef.current = request;
+    setMessagesLoading(!(messagesCacheRef.current.get(key) || []).length);
     setMessagesError(false);
-    try {
-      const res = await api.get(`/empresas/${empresa_id}/inbox/${telefone}`);
-      setMessages(res.data || []);
-    } catch (e) {
-      console.error("Erro ao buscar mensagens do lead no Inbox:", e);
-      setMessagesError(true);
-      setMessages([]);
-    } finally {
-      setMessagesLoading(false);
-    }
-  }, [empresa_id]);
+    request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}`, { signal: request.controller.signal })
+      .then(response => {
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || conversationKey(empresa_id, selectedLeadRef.current) !== key || activeConversationRef.current !== key) return;
+        setMessages(previous => {
+          const next = mergeMessageSnapshot(previous, response.data || [], request.revision, messageRevisionsRef.current.get(key), wsMessagePatchesRef.current.get(key));
+          if (!previous.length && next.length) requestScrollRef.current = true;
+          return next;
+        });
+      })
+      .catch(error => {
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || historyRequestRef.current !== request || activeConversationRef.current !== key) return;
+        console.error("Erro ao buscar mensagens do lead no Inbox:", error);
+        setMessagesError(true); // stale-while-revalidate: never erase valid messages
+      })
+      .finally(() => {
+        if (historyRequestRef.current !== request) return;
+        historyRequestRef.current = null;
+        if (activeConversationRef.current === key && tenantScopeRef.current === empresa_id) setMessagesLoading(false);
+      });
+    return request.promise;
+  }, [empresa_id, setMessages]);
 
   const buildPhotoCacheKey = useCallback((lead) => {
     const contactIdentity = lead?.contact_id || lead?.id || lead?.telefone_contato;
@@ -370,6 +469,7 @@ export default function Inbox() {
     const request = api
       .get(`/empresas/${empresa_id}/inbox/${telefone}/foto`, { signal: controller.signal })
       .then((res) => {
+        if (tenantScopeRef.current !== empresa_id || controller.signal.aborted) return null;
         const fotoUrl = res.data?.foto_url || null;
         photoCacheRef.current.set(cacheKey, fotoUrl);
         updateLeadInState(leadId, { foto_url: fotoUrl });
@@ -390,37 +490,40 @@ export default function Inbox() {
     return request;
   }, [buildPhotoCacheKey, empresa_id, updateLeadInState]);
 
-  const fetchAiEffectiveState = useCallback(async (telefone, leadIdOverride = "") => {
-    if (!empresa_id || !telefone) {
-      setAiEffectiveState(null);
-      return;
-    }
-    try {
-      const res = await api.get(`/empresas/${empresa_id}/inbox/${telefone}/ai-state`);
-      const nextState = res.data ? translateAiState(res.data) : null;
-      setAiEffectiveState(nextState);
-      const leadId = leadIdOverride || selectedLeadRef.current?.id;
-      if (leadId && nextState?.manual_enabled !== undefined) {
-        const iaAtiva = Boolean(nextState.manual_enabled);
-        updateLeadInState(leadId, {
-          ia_ativa: iaAtiva,
-          bot_pausado: !iaAtiva,
-        });
-      }
-    } catch (e) {
-      console.error("Erro ao buscar estado efetivo da IA:", e);
-      setAiEffectiveState(null);
-    }
+  const fetchAiEffectiveState = useCallback((telefone, leadIdOverride = "") => {
+    const key = conversationKey(empresa_id, selectedLeadRef.current);
+    if (!key || !telefone || telefone !== selectedLeadRef.current?.telefone_contato || (leadIdOverride && String(leadIdOverride) !== String(selectedLeadRef.current?.id)) || tenantScopeRef.current !== empresa_id) return Promise.resolve();
+    if (aiRequestRef.current?.key === key) return aiRequestRef.current.promise;
+    aiRequestRef.current?.controller.abort();
+    const request = { key, controller: new AbortController(), revision: revisionRef.current };
+    aiRequestRef.current = request;
+    request.promise = api.get(`/empresas/${empresa_id}/inbox/${telefone}/ai-state`, { signal: request.controller.signal })
+      .then(response => {
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request || request.revision < (aiRevisionsRef.current.get(String(selectedLeadRef.current?.id)) || 0)) return;
+        const nextState = response.data ? translateAiState(response.data) : null;
+        setAiEffectiveState(nextState);
+        const leadId = leadIdOverride || selectedLeadRef.current?.id;
+        if (leadId && nextState?.manual_enabled !== undefined) {
+          const iaAtiva = Boolean(nextState.manual_enabled);
+          updateLeadInState(leadId, { ia_ativa: iaAtiva, bot_pausado: !iaAtiva });
+        }
+      })
+      .catch(error => {
+        if (request.controller.signal.aborted || tenantScopeRef.current !== empresa_id || activeConversationRef.current !== key || aiRequestRef.current !== request) return;
+        console.error("Erro ao buscar estado efetivo da IA:", error);
+      })
+      .finally(() => { if (aiRequestRef.current === request) aiRequestRef.current = null; });
+    return request.promise;
   }, [empresa_id, updateLeadInState]);
 
   const fetchDestinos = useCallback(async () => {
     if (!empresa_id) return;
     try {
       const res = await api.get(`/empresas/${empresa_id}/transferencias/destinos`);
-      setDestinos(res.data || []);
+      if (tenantScopeRef.current === empresa_id) setDestinos(res.data || []);
     } catch (e) {
       console.error("Erro ao buscar destinos de transferência:", e);
-      setDestinos([]);
+      if (tenantScopeRef.current === empresa_id) setDestinos([]);
     }
   }, [empresa_id]);
 
@@ -431,10 +534,12 @@ export default function Inbox() {
         api.get(`/empresas/${empresa_id}/crm/tags/grupos`),
         api.get(`/empresas/${empresa_id}/crm/tags/oficiais`),
       ]);
+      if (tenantScopeRef.current !== empresa_id) return;
       setGrupos(gruposRes.data || []);
       setTagsOficiais(tagsRes.data || []);
     } catch (e) {
       console.error("Erro ao buscar grupos e tags oficiais:", e);
+      if (tenantScopeRef.current !== empresa_id) return;
       setGrupos([]);
       setTagsOficiais([]);
     }
@@ -459,15 +564,34 @@ export default function Inbox() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  useEffect(() => {
-  }, [selectedLead?.id]);
+  const selectedConversationKey = conversationKey(empresa_id, selectedLead);
+  useLayoutEffect(() => {
+    const key = leadsTenantRef.current === empresa_id ? selectedConversationKey : "";
+    if (activeConversationRef.current === key) return;
+    const oldKey = activeConversationRef.current;
+    if (oldKey) scrollCacheRef.current.set(oldKey, { top: readingScrollRef.current, stick: stickToBottomRef.current });
+    historyRequestRef.current?.controller.abort();
+    aiRequestRef.current?.controller.abort();
+    historyRequestRef.current = null;
+    aiRequestRef.current = null;
+    activeConversationRef.current = key;
+    const cachedScroll = scrollCacheRef.current.get(key);
+    stickToBottomRef.current = cachedScroll?.stick ?? true;
+    readingScrollRef.current = cachedScroll?.top ?? 0;
+    requestScrollRef.current = !cachedScroll || cachedScroll.stick;
+    setMessagesState(messagesCacheRef.current.get(key) || []);
+    setNewMessageState(draftsRef.current.get(key) || "");
+    setMessagesError(false);
+    setMessagesLoading(Boolean(key && !(messagesCacheRef.current.get(key) || []).length));
+    setAiEffectiveState(null);
+  }, [empresa_id, selectedConversationKey]);
 
   useEffect(() => {
-    const telefone = selectedLead?.telefone_contato;
-    if (!empresa_id || !telefone) return;
-    fetchMessages(telefone);
-    fetchAiEffectiveState(telefone, selectedLead?.id);
-  }, [empresa_id, fetchAiEffectiveState, fetchMessages, selectedLead?.id, selectedLead?.telefone_contato]);
+    const lead = selectedLeadRef.current;
+    if (!selectedConversationKey || activeConversationRef.current !== selectedConversationKey || !lead?.telefone_contato) return;
+    void fetchMessages(lead.telefone_contato);
+    void fetchAiEffectiveState(lead.telefone_contato, lead.id);
+  }, [selectedConversationKey, fetchMessages, fetchAiEffectiveState]);
 
   useEffect(() => {
     if (!empresa_id || !selectedLead?.id || !selectedLead?.telefone_contato || selectedLead?.foto_url) return;
@@ -477,11 +601,6 @@ export default function Inbox() {
       telefone_contato: selectedLead.telefone_contato,
     });
   }, [empresa_id, fetchLeadPhoto, selectedLead?.contact_id, selectedLead?.foto_url, selectedLead?.id, selectedLead?.telefone_contato]);
-
-  useEffect(() => {
-    selectedLeadTelefoneRef.current = selectedLead?.telefone_contato || null;
-    selectedLeadRef.current = selectedLead || null;
-  }, [selectedLead]);
 
   useEffect(() => {
     if (!activeEmpresaId) return undefined;
@@ -505,14 +624,21 @@ export default function Inbox() {
       socketOpenedRef.current = false;
 
       ws.onopen = () => {
-        if (!isActive) return;
+        if (!isActive || tenantScopeRef.current !== activeEmpresaId || wsRef.current !== ws) return;
         reconnectAttempts.current = 0;
         failedReconnectTimestampsRef.current = [];
         reconnectBlockedUntilRef.current = 0;
         socketOpenedRef.current = true;
-        void fetchLeads();
-        const selectedTelefone = selectedLeadTelefoneRef.current;
-        if (selectedTelefone) void fetchMessages(selectedTelefone);
+        const reconnecting = connectedTenantRef.current === activeEmpresaId;
+        connectedTenantRef.current = activeEmpresaId;
+        if (reconnecting) {
+          void fetchLeads();
+          const selectedTelefone = selectedLeadTelefoneRef.current;
+          if (selectedTelefone) {
+            void fetchMessages(selectedTelefone);
+            void fetchAiEffectiveState(selectedTelefone, selectedLeadRef.current?.id);
+          }
+        }
         if (heartbeatIntervalRef.current) {
           window.clearInterval(heartbeatIntervalRef.current);
         }
@@ -528,23 +654,21 @@ export default function Inbox() {
       };
 
       ws.onmessage = (event) => {
+        if (!isActive || tenantScopeRef.current !== activeEmpresaId || wsRef.current !== ws) return;
         try {
           const data = JSON.parse(event.data || "{}");
+          if (data.empresa_id !== undefined && String(data.empresa_id) !== String(activeEmpresaId)) return;
           const payload = data?.payload || {};
           const tipoEvento = String(data?.tipo_evento || "").toLowerCase();
           const tipoEventoV2 = String(data?.type || "").toLowerCase();
 
           if (tipoEventoV2 === "inbox.ai_state.updated" || tipoEvento === "ai_state_updated") {
-            const telefoneEvento = String(data?.telefone || "");
             const leadIdEvento = String(data?.lead_id || "");
-            const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
             const leadSelecionadoId = String(selectedLeadRef.current?.id || "");
-            const matchesSelected = (
-              (telefoneSelecionado && telefoneEvento && telefoneSelecionado === telefoneEvento) ||
-              (leadSelecionadoId && leadIdEvento && leadSelecionadoId === leadIdEvento)
-            );
+            const matchesSelected = leadMatches(selectedLeadRef.current, data);
             let manualEnabled;
             if (matchesSelected) {
+              aiRevisionsRef.current.set(leadSelecionadoId, ++revisionRef.current);
               if (data?.ai_state) {
                 setAiEffectiveState(translateAiState(data.ai_state));
               }
@@ -555,8 +679,7 @@ export default function Inbox() {
               updateLeadInState(leadIdEvento, {
                 ia_ativa: iaAtiva,
                 bot_pausado: !iaAtiva,
-                status_atendimento: payload?.status_atendimento || "aberto",
-                bot_pausado_ate: payload?.bot_pausado_ate || null,
+                ...definedLeadPatch(payload),
               });
             }
             return;
@@ -565,7 +688,8 @@ export default function Inbox() {
           if (tipoEventoV2 === "status_ia_changed" || tipoEvento === "status_ia_changed") {
             const leadId = String(payload?.lead_id || data?.lead_id || "");
             if (!leadId) return;
-            const iaAtiva = Boolean(payload?.ia_ativa);
+            if (typeof payload?.ia_ativa !== "boolean") return;
+            const iaAtiva = payload.ia_ativa;
             updateLeadInState(leadId, {
               ia_ativa: iaAtiva,
               bot_pausado: !iaAtiva,
@@ -574,77 +698,26 @@ export default function Inbox() {
           }
 
           if (tipoEventoV2 === "atualizacao_mensagem" || tipoEvento === "mensagem_atualizada") {
-            const telefoneEvento = String(data?.telefone || "");
-            const atual = data?.mensagem;
-            const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
-            if (
-              telefoneSelecionado &&
-              telefoneEvento &&
-              telefoneSelecionado === telefoneEvento &&
-              atual?.id
-            ) {
-              setMessages((prev) =>
-                (prev || []).map((msg) =>
-                  String(msg?.id) === String(atual.id)
-                    ? {
-                        ...msg,
-                        texto: atual.texto !== undefined ? atual.texto : msg.texto,
-                        media_url: atual.media_url !== undefined ? atual.media_url : msg.media_url,
-                        tipo_mensagem: atual.tipo_mensagem || msg.tipo_mensagem,
-                        origem_mensagem: atual.origem_mensagem !== undefined ? atual.origem_mensagem : msg.origem_mensagem,
-                        from_me: atual.from_me !== undefined ? atual.from_me : msg.from_me,
-                        criado_em: atual.criado_em || msg.criado_em,
-                      }
-                    : msg
-                )
-              );
+            if (leadMatches(selectedLeadRef.current, data, data.mensagem) && data.mensagem?.id) {
+              setMessages(previous => upsertMessage(previous, data.mensagem, { allowInsert: false }), activeConversationRef.current, true);
             }
             return;
           }
 
-          if (tipoEvento === "atualizacao_lead") {
-            const leadPayload = data?.lead || {};
-            const leadId = String(leadPayload?.id || data?.lead_id || "");
-            if (!leadId) {
-              scheduleFetchLeads(10000);
-              return;
-            }
-            setLeads((prev) => {
-              const lista = prev || [];
-              const jaExiste = lista.some((lead) => String(lead?.id || "") === leadId);
-              const leadAtualizado = {
-                id: leadId,
-                nome_contato: String(leadPayload?.nome || ""),
-                telefone_contato: String(leadPayload?.telefone || ""),
-                foto_url: leadPayload?.foto_url || null,
-                status_atendimento: "aberto",
-                bot_pausado: false,
-                bot_pausado_ate: null,
-                ia_ativa: true,
-                tags: [],
-                historico_resumo: "",
-                dados_adicionais: {},
-              };
-              if (!jaExiste) return [leadAtualizado, ...lista];
-              return lista.map((lead) => (String(lead?.id || "") === leadId ? { ...lead, ...leadAtualizado } : lead));
-            });
-            setSelectedLead((prev) => {
-              if (!prev?.id || String(prev.id) !== leadId) return prev;
-              return {
-                ...prev,
-                nome_contato: String(leadPayload?.nome || prev.nome_contato || ""),
-                telefone_contato: String(leadPayload?.telefone || prev.telefone_contato || ""),
-                foto_url: leadPayload?.foto_url || prev.foto_url || null,
-              };
-            });
-            scheduleFetchLeads(10000);
+          if (tipoEvento === "atualizacao_lead" || tipoEventoV2 === "atualizacao_lead") {
+            const leadPayload = data.lead || payload;
+            const leadId = String(leadPayload.id || data.lead_id || "");
+            const known = leadsRef.current.some(lead => String(lead.id) === leadId);
+            if (leadId && known) {
+              updateLeadInState(leadId, definedLeadPatch(leadPayload));
+            } else scheduleFetchLeads(10000);
             return;
           }
 
           if (tipoEventoV2 === "inbox.lead.tags.updated" || tipoEvento === "lead_tags_updated") {
             const leadId = String(data?.lead_id || "");
-            if (!leadId) return;
-            updateLeadInState(leadId, { tags: data?.tags || [] });
+            if (!leadId || !Array.isArray(data.tags)) return;
+            updateLeadInState(leadId, { tags: data.tags });
             return;
           }
 
@@ -658,57 +731,37 @@ export default function Inbox() {
           const telefoneEvento = String(data?.telefone || "");
           const novaMensagem = data?.mensagem || data?.message;
           const conversationIdEvento = String(data?.conversation_id || novaMensagem?.conversation_id || novaMensagem?.channel_conversation_id || "");
-          const telefoneSelecionado = String(selectedLeadTelefoneRef.current || "");
-          const leadSelecionadoId = String(selectedLeadRef.current?.id || "");
-          const isSelectedConversation = Boolean(
-            (data?.lead_id && leadSelecionadoId && String(data.lead_id) === leadSelecionadoId) ||
-            (conversationIdEvento && String(selectedLeadRef.current?.conversation_id || "") === conversationIdEvento) ||
-            (telefoneEvento && telefoneSelecionado && telefoneEvento === telefoneSelecionado)
-          );
+          const isSelectedConversation = leadMatches(selectedLeadRef.current, data, novaMensagem);
 
-          if (isSelectedConversation && novaMensagem) {
-            const isReaction = String(novaMensagem?.tipo_mensagem || "").toLowerCase() === "reaction";
-            if (isReaction) {
-              setMessages((prev) => applyRealtimeReaction(prev, novaMensagem));
-            }
-            setMessages((prev) => {
-              if (isReaction) return prev;
-              let lista = prev || [];
-              const novaId = novaMensagem?.id;
-              if (novaId && lista.some((msg) => msg?.id === novaId)) return lista;
-
-              // Concilia mensagem otimista pendente com confirmação real para evitar duplicação.
-              if (novaMensagem?.from_me) {
-                const textoNovo = String(novaMensagem?.texto || "").trim();
-                const tipoNovo = String(novaMensagem?.tipo_mensagem || "text").toLowerCase();
-                const tiposMidia = new Set(["image", "audio", "video", "document"]);
-                const idxTemp = lista.findIndex((msg) => {
-                  if (!isPendingMessage(msg) || !msg?.from_me) return false;
-                  const tipoMsg = String(msg?.tipo_mensagem || "text").toLowerCase();
-                  if (tipoMsg !== tipoNovo) return false;
-                  if (tipoNovo === "text" || !tiposMidia.has(tipoNovo)) {
-                    return String(msg?.texto || "").trim() === textoNovo;
-                  }
-                  // Mídia: o texto otimista ("Enviando…") não coincide com o persistido ("Áudio enviado", etc.).
-                  return true;
-                });
-                if (idxTemp >= 0) {
-                  lista = lista.filter((_, idx) => idx !== idxTemp);
-                }
-              }
-
-              return [...lista, novaMensagem].sort((a, b) => {
-                const timeA = new Date(a?.criado_em || 0).getTime() || 0;
-                const timeB = new Date(b?.criado_em || 0).getTime() || 0;
-                if (timeA !== timeB) return timeA - timeB;
-                return String(a?.id || "").localeCompare(String(b?.id || ""));
-              });
-            });
-            void fetchAiEffectiveState(telefoneSelecionado, data?.lead_id);
+          const isReaction = String(novaMensagem?.tipo_mensagem || "").toLowerCase() === "reaction";
+          const eventIdentity = messageIdentity(novaMensagem);
+          const eventContact = leadsRef.current.find(lead => leadMatches(lead, data, novaMensagem));
+          const eventConversationKey = conversationKey(activeEmpresaId, eventContact);
+          const eventKey = `${eventContact?.id || data.lead_id || conversationIdEvento || telefoneEvento}:${eventIdentity}`;
+          const isCreated = tipoEventoV2 !== "inbox.message.updated";
+          const knownMessage = (messagesCacheRef.current.get(eventConversationKey) || []).some(message => eventIdentity && (messageIdentity(message) === eventIdentity || String(message.external_message_id || "") === String(novaMensagem?.external_message_id || "_")));
+          const isNew = isCreated && !isReaction && Boolean(eventIdentity) && !seenRealtimeRef.current.has(eventKey) && !knownMessage;
+          if (eventIdentity) {
+            seenRealtimeRef.current.add(eventKey);
+            if (seenRealtimeRef.current.size > 2000) seenRealtimeRef.current.delete(seenRealtimeRef.current.values().next().value);
           }
-
-          upsertLeadFromRealtime(data, novaMensagem, isSelectedConversation);
-          void fetchLeads();
+          if (isSelectedConversation && novaMensagem) {
+            const scroll = historyScrollRef.current;
+            if (isNew && scroll && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 96) {
+              stickToBottomRef.current = true;
+              requestScrollRef.current = true;
+            }
+            setMessages(previous => upsertMessage(previous, novaMensagem, { allowInsert: isCreated }), activeConversationRef.current, true);
+          } else if (novaMensagem) {
+            const contact = leadsRef.current.find(lead => leadMatches(lead, data, novaMensagem));
+            const key = conversationKey(activeEmpresaId, contact);
+            if (key && messagesCacheRef.current.has(key)) {
+              setMessages(previous => upsertMessage(previous, novaMensagem, { allowInsert: isCreated }), key, true);
+            }
+          }
+          // Known contacts are patched in place. Only insufficient/unknown
+          // identities request a bounded background reconciliation.
+          if (!upsertLeadFromRealtime(data, novaMensagem, isSelectedConversation, isNew)) scheduleFetchLeads(10000);
         } catch (err) {
           console.error("Erro ao processar evento websocket do Inbox:", err);
         }
@@ -786,7 +839,7 @@ export default function Inbox() {
       socketOpenedRef.current = false;
       wsRef.current = null;
     };
-  }, [activeEmpresaId, fetchAiEffectiveState, fetchLeads, fetchMessages, isPendingMessage, scheduleFetchLeads, updateLeadInState, upsertLeadFromRealtime]);
+  }, [activeEmpresaId, fetchAiEffectiveState, fetchLeads, fetchMessages, isPendingMessage, scheduleFetchLeads, setMessages, updateLeadInState, upsertLeadFromRealtime]);
 
   useEffect(() => () => {
     if (recordingIntervalRef.current) {
@@ -807,15 +860,28 @@ export default function Inbox() {
     };
   }, [recordedAudioUrl]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    if (requestScrollRef.current) {
+      requestScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    } else if (!stickToBottomRef.current && historyScrollRef.current) {
+      historyScrollRef.current.scrollTop = readingScrollRef.current;
+    }
   }, [messages]);
+
+  useEffect(() => () => {
+    leadsRequestRef.current?.controller.abort();
+    historyRequestRef.current?.controller.abort();
+    aiRequestRef.current?.controller.abort();
+  }, []);
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const texto = newMessage.trim();
     if (!texto || !selectedLead) return;
 
+    const operationKey = conversationKey(empresa_id, selectedLead);
+    const setOperationMessages = updater => setMessages(updater, operationKey);
     const telefone = selectedLead.telefone_contato;
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const optimisticMessage = {
@@ -831,7 +897,7 @@ export default function Inbox() {
       criado_em: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...(prev || []), optimisticMessage]);
+    setOperationMessages((prev) => [...(prev || []), optimisticMessage]);
     setNewMessage("");
     scrollToBottom();
     try {
@@ -842,7 +908,7 @@ export default function Inbox() {
       void fetchLeads(); // update `bot_pausado`
     } catch (e) {
       console.error("Erro ao enviar mensagem", e);
-      setMessages((prev) =>
+      setOperationMessages((prev) =>
         (prev || []).map((msg) =>
           msg?.id === tempId
             ? {
@@ -867,6 +933,8 @@ export default function Inbox() {
       setToast({ type: "error", message: det });
       return false;
     }
+    const operationKey = conversationKey(empresa_id, selectedLead);
+    const setOperationMessages = updater => setMessages(updater, operationKey);
     const telefone = selectedLead.telefone_contato;
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const forcedTipo = String(options?.tipoMensagem || "").trim().toLowerCase();
@@ -904,7 +972,7 @@ export default function Inbox() {
       criado_em: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...(prev || []), optimisticMediaMessage]);
+    setOperationMessages((prev) => [...(prev || []), optimisticMediaMessage]);
     scrollToBottom();
     setIsSendingMedia(true);
     try {
@@ -929,7 +997,7 @@ export default function Inbox() {
         fileType: file?.type,
         tipoMidia,
       });
-      setMessages((prev) =>
+      setOperationMessages((prev) =>
         (prev || []).map((msg) =>
           msg?.id === tempId
             ? {
@@ -1114,11 +1182,13 @@ export default function Inbox() {
       return;
     }
 
+    const operationKey = conversationKey(empresa_id, selectedLead);
+    const setOperationMessages = updater => setMessages(updater, operationKey);
     const telefone = String(mensagemFalha?.telefone_contato || selectedLead?.telefone_contato || "").trim();
     const texto = String(mensagemFalha?.texto || "").trim();
     if (!telefone || !texto) return;
 
-    setMessages((prev) =>
+    setOperationMessages((prev) =>
       (prev || []).map((msg) =>
         msg?.id === mensagemFalha.id
           ? {
@@ -1134,7 +1204,7 @@ export default function Inbox() {
       await api.post(`/empresas/${empresa_id}/inbox/${telefone}/send`, { texto });
       void fetchLeads();
     } catch (e) {
-      setMessages((prev) =>
+      setOperationMessages((prev) =>
         (prev || []).map((msg) =>
           msg?.id === mensagemFalha.id
             ? {
@@ -1796,7 +1866,11 @@ export default function Inbox() {
             </header>
 
             <div className="inbox-workspace min-h-0 flex-1">
-            <div data-testid="inbox-message-scroll" aria-label="Histórico de mensagens" aria-busy={messagesLoading} className="inbox-message-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 xl:px-8">
+            <div ref={historyScrollRef} onScroll={event => {
+              const node = event.currentTarget;
+              readingScrollRef.current = node.scrollTop;
+              stickToBottomRef.current = node.scrollHeight - node.clientHeight - node.scrollTop <= 96;
+            }} data-testid="inbox-message-scroll" aria-label="Histórico de mensagens" aria-busy={messagesLoading} className="inbox-message-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 xl:px-8">
               {connectionState > 1 && <p role="status" className="inbox-reconnect-notice">Conexão interrompida. Aguardando reconexão para receber novas atualizações.</p>}
               {messagesError && <div role="alert" className="inbox-history-state"><InfoBanner tone="danger">Não foi possível carregar o histórico.</InfoBanner><ActionButton variant="secondary" onClick={() => fetchMessages(selectedLead.telefone_contato)}>Tentar novamente</ActionButton></div>}
               {messagesLoading && !messages.length && <div className="inbox-history-state"><LoadingState label="Carregando histórico…" /></div>}
