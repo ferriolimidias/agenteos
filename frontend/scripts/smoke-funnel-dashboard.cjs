@@ -150,6 +150,7 @@ async function main() {
     assert.equal(await timeline.locator('[data-event-id]').count(), journeyResponses.at(-1).items.length);
     assert.ok(await page.getByPlaceholder('Digite uma mensagem').isVisible());
     assert.ok(allowedLeads.has(selectedLeadId)); await shot('a04-journey-sanitized');
+    await timeline.getByRole('button', { name: 'Fechar jornada comercial', exact: true }).click();
     await page.getByRole('link', { name: '← Voltar ao funil com os filtros', exact: true }).click(); await ready();
     assert.equal(dashboards.at(-1).window.observed_at, first.window.observed_at);
     result.checks.push('a04-deeplink-selects-returned-inbox-contact-including-closed', 'a04-real-or-synthetic-timeline-rendered', 'inbox-composer-preserved', 'return-to-funnel-retains-filters-and-horizon');

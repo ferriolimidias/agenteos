@@ -113,10 +113,11 @@ async function main() {
     const timeline = page.getByTestId('commercial-journey');
     await timeline.getByTestId('journey-events').waitFor();
     assert.ok(await page.getByPlaceholder('Digite uma mensagem').isVisible(), 'Timeline obstructed the existing composer');
-    assert.match(await timeline.innerText(), /UTC/);
+    assert.match(await timeline.innerText(), /Horário de Brasília/);
+    assert.equal(await timeline.getByLabel('Fuso horário').count(), 0);
     await timeline.getByText('Ver evidência', { exact: true }).first().click();
     assert.ok(await timeline.getByText('Fonte / registro', { exact: true }).first().isVisible());
-    result.checks.push('timeline-in-inbox', 'chat-composer-preserved', 'utc-explicit', 'evidence-details');
+    result.checks.push('timeline-in-inbox', 'chat-composer-preserved', 'brasilia-explicit', 'evidence-details');
     if (real) {
       assert.ok(realResponses.length > 0 && realResponses[0].items.length > 0, 'No real persisted journey observed');
       const data = realResponses[0];
@@ -148,7 +149,8 @@ async function main() {
       result.checks.push(captured ? 'real-persisted-events-from-read-only-capture' : 'real-persisted-events-from-live-api', 'real-rendering-order-and-count-match');
     } else {
       assert.ok(!(await timeline.innerText()).includes('NEVER_RENDER_PRIVATE'));
-      await timeline.getByText('Estado atual e cobertura', { exact: true }).click();
+      await timeline.getByText('Resumo do contato', { exact: true }).click();
+      await timeline.getByText('Cobertura das fontes', { exact: true }).click();
       assert.match(await timeline.innerText(), /Snapshots atuais não comprovam transições/);
       assert.match(await timeline.innerText(), /Desconhecido · não observado nesta fonte/);
       await timeline.getByRole('button', { name: 'Carregar mais fatos' }).click();
@@ -164,8 +166,13 @@ async function main() {
       await page.waitForTimeout(700);
       assert.equal(await timeline.locator('[data-event-id]').count(), 1);
       result.checks.push('category-filter', 'obsolete-filter-response-rejected');
+      await timeline.getByRole('button', { name: 'Fechar jornada comercial', exact: true }).click();
       await page.getByText('Contato sintético B', { exact: true }).click();
+      await page.getByRole('button', { name: 'Jornada comercial', exact: true }).click();
+      await timeline.getByRole('button', { name: 'Fechar jornada comercial', exact: true }).click();
       await page.getByText('Contato sintético A', { exact: true }).first().click();
+      await page.getByRole('button', { name: 'Jornada comercial', exact: true }).click();
+      await timeline.getByLabel('Categoria', { exact: true }).selectOption('message');
       await timeline.getByText('Mensagem registrada', { exact: true }).waitFor();
       await page.waitForTimeout(700);
       assert.equal(await timeline.locator('[data-event-id]').count(), 1);
@@ -183,7 +190,7 @@ async function main() {
       await timeline.getByRole('button', { name: 'Atualizar jornada' }).click();
       await timeline.getByText('Pagamento em andamento', { exact: true }).waitFor();
       await page.evaluate(empresa => { const user = JSON.parse(localStorage.getItem('user')); user.empresa_id = empresa; localStorage.setItem('user', JSON.stringify(user)); window.dispatchEvent(new Event('storage')); }, otherTenant);
-      await timeline.getByText('Tenant alterado. Selecione um contato no tenant atual para consultar sua jornada.', { exact: true }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('[data-testid="commercial-journey"]') || document.querySelector('[data-testid="commercial-journey"]').textContent.includes('Tenant alterado.'));
       assert.equal(await timeline.locator('[data-event-id]').count(), 0);
       result.checks.push('tenant-switch-hides-old-facts');
     }

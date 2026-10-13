@@ -1,0 +1,30 @@
+/* Dedicated read-only workspace; the conversation keeps its original size. */
+.journey-reader {
+  box-sizing: border-box;
+  width: min(76rem, calc(100vw - 3rem));
+  height: min(58rem, calc(100dvh - 3rem));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--fm-text);
+  background: var(--fm-raised);
+  border: 1px solid var(--fm-border);
+  border-radius: var(--fm-radius-lg);
+  box-shadow: var(--fm-shadow-raised);
+  font-family: var(--fm-font);
+}
+.journey-reader::backdrop { background: rgb(25 45 53 / 52%); }
+.journey-reader > .inbox-journey-panel { border: 0; }
+@media (max-width: 1023px) {
+  .journey-reader {
+    width: 100vw;
+    height: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+  .journey-reader .inbox-journey-heading { padding-top: max(var(--fm-space-3), env(safe-area-inset-top)); }
+  .journey-reader .inbox-journey-scroll { padding-bottom: max(var(--fm-space-4), env(safe-area-inset-bottom)); }
+}

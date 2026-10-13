@@ -9,7 +9,7 @@ import { applyRealtimeReaction } from "../../utils/reactions";
 import MessageList from "../../components/MessageList";
 import ContactAvatar from "../../components/ContactAvatar";
 import LeadTagsEditor from "../../components/LeadTagsEditor";
-import CommercialJourneyTimeline from "../../components/CommercialJourneyTimeline";
+import CommercialJourneyDialog from "../../components/CommercialJourneyDialog";
 import { ActionButton, EmptyState, InfoBanner, LoadingState } from "../../components/ui";
 import "../../styles/inbox-ux04.css";
 
@@ -223,6 +223,8 @@ export default function Inbox() {
   const user = getStoredUser();
   const activeEmpresaId = getActiveEmpresaId();
   const empresa_id = activeEmpresaId;
+
+  useEffect(() => { setShowJourney(false); }, [empresa_id]);
 
   const funnelContext = location.state?.funnelContext?.tenant === empresa_id
     ? { tenant: empresa_id, filters: allowlistedFunnelFilters(location.state.funnelContext.filters) } : null;
@@ -1409,10 +1411,7 @@ export default function Inbox() {
     };
   });
 
-  const closeJourney = () => {
-    setShowJourney(false);
-    journeyButtonRef.current?.focus({ preventScroll: true });
-  };
+  const closeJourney = useCallback(() => setShowJourney(false), []);
 
   const tagsOficiaisLookup = useMemo(() => {
     const porNome = new Map();
@@ -1674,7 +1673,7 @@ export default function Inbox() {
                 </div>
 
                 <div className="inbox-header-actions flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto lg:flex-nowrap">
-                  <button ref={journeyButtonRef} type="button" onClick={() => setShowJourney(value => !value)} aria-expanded={showJourney} aria-controls="inbox-journey-panel" className="inbox-journey-trigger rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
+                  <button ref={journeyButtonRef} type="button" onClick={() => setShowJourney(value => !value)} aria-haspopup="dialog" aria-expanded={showJourney} aria-controls="inbox-journey-panel" className="inbox-journey-trigger rounded-lg px-2.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50">Jornada comercial</button>
                   <button
                     type="button"
                     onClick={handleToggleStatus}
@@ -1796,7 +1795,7 @@ export default function Inbox() {
               ) : null}
             </header>
 
-            <div className={`inbox-workspace min-h-0 flex-1 ${showJourney ? "inbox-workspace-with-journey" : ""}`}>
+            <div className="inbox-workspace min-h-0 flex-1">
             <div data-testid="inbox-message-scroll" aria-label="Histórico de mensagens" aria-busy={messagesLoading} className="inbox-message-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 xl:px-8">
               {connectionState > 1 && <p role="status" className="inbox-reconnect-notice">Conexão interrompida. Aguardando reconexão para receber novas atualizações.</p>}
               {messagesError && <div role="alert" className="inbox-history-state"><InfoBanner tone="danger">Não foi possível carregar o histórico.</InfoBanner><ActionButton variant="secondary" onClick={() => fetchMessages(selectedLead.telefone_contato)}>Tentar novamente</ActionButton></div>}
@@ -1810,7 +1809,6 @@ export default function Inbox() {
                 hideEmptyState={messagesLoading || messagesError}
               />
             </div>
-            {showJourney && selectedLead?.id && <CommercialJourneyTimeline empresaId={empresa_id} leadId={selectedLead.id} onClose={closeJourney} />}
             </div>
 
             <footer className="inbox-composer shrink-0 border-t border-gray-200 bg-gray-100 p-4">
@@ -1964,6 +1962,7 @@ export default function Inbox() {
           </div>
         )}
       </section>
+      {showJourney && selectedLead?.id && <CommercialJourneyDialog empresaId={empresa_id} leadId={selectedLead.id} contactName={selectedLead.nome_contato} onClose={closeJourney} returnFocusRef={journeyButtonRef} />}
       </div>
     </div>
   );

@@ -192,13 +192,19 @@ async function runViewport(browser, viewport) {
     state.pending = 'journey'; await page.getByRole('button', { name: 'Jornada comercial', exact: true }).click();
     await timeline().getByText('Consultando fatos da jornada...', { exact: true }).waitFor(); await screenshot('journey-loading'); await release();
     await timeline().getByTestId('journey-events').waitFor(); assert.ok(await composer().isVisible());
-    await ux('journey-keeps-composer-visible-and-usable', async () => { await expect(composer()).toBeInViewport(); await composer().click(); await expect(composer()).toBeFocused(); });
-    await timeline().getByText('Estado atual e cobertura', { exact: true }).click(); assert.match(await timeline().innerText(), /Snapshots atuais não comprovam transições/); assert.match(await timeline().innerText(), /Desconhecido/);
+    await ux('journey-preserves-composer-and-isolates-reader', async () => {
+      const dialog = page.getByTestId('journey-dialog'); await expect(dialog).toBeVisible();
+      await expect(composer()).toBeInViewport();
+      assert.ok(await dialog.evaluate(node => node.matches(':modal')));
+      await closeJourney(); await expect(composer()).toBeVisible(); await composer().click(); await expect(composer()).toBeFocused();
+      await page.getByRole('button', { name: 'Jornada comercial', exact: true }).click(); await timeline().getByTestId('journey-events').waitFor();
+    });
+    await timeline().getByText('Resumo do contato', { exact: true }).click(); await timeline().getByText('Cobertura das fontes', { exact: true }).click(); assert.match(await timeline().innerText(), /Snapshots atuais não comprovam transições/); assert.match(await timeline().innerText(), /Desconhecido/);
     assert.ok(!(await timeline().innerText()).includes('NEVER_RENDER_PRIVATE'));
     await timeline().getByText('Ver evidência', { exact: true }).first().click(); await timeline().getByText('Fonte / registro', { exact: true }).first().waitFor();
     await timeline().getByRole('button', { name: 'Carregar mais fatos', exact: true }).click(); await timeline().getByText('Follow-up bloqueado', { exact: true }).waitFor(); assert.equal(await timeline().locator('[data-event-id]').count(), 3);
     await timeline().getByLabel('Categoria', { exact: true }).selectOption('payment'); await timeline().getByText('Pagamento em andamento', { exact: true }).waitFor(); assert.equal(await timeline().locator('[data-event-id]').count(), 1);
-    await timeline().getByLabel('Fuso horário', { exact: true }).selectOption('local'); await screenshot('journey-context');
+    assert.equal(await timeline().getByLabel('Fuso horário', { exact: true }).count(), 0); assert.match(await timeline().innerText(), /Horário de Brasília/); await screenshot('journey-context');
     await timeline().getByLabel('Categoria', { exact: true }).selectOption('checkout'); await timeline().getByText('Nenhum fato observado neste filtro', { exact: true }).waitFor();
     state.journeyError = true; await timeline().getByLabel('Categoria', { exact: true }).selectOption('message'); await timeline().getByRole('alert').waitFor(); await screenshot('journey-error'); assert.ok(await composer().isVisible());
     state.journeyError = false; await timeline().getByRole('button', { name: 'Atualizar jornada', exact: true }).click(); await timeline().getByText('Mensagem registrada', { exact: true }).waitFor();
@@ -249,7 +255,7 @@ async function runViewport(browser, viewport) {
     const link = dashboard.getByRole('link', { name: 'Abrir jornada A04' }).first(); assert.match(await link.getAttribute('href'), /^\/painel\/inbox\?lead=[0-9a-f-]+&journey=1$/i);
     const horizon = result.api.filter(item => item.path.endsWith('/commercial-funnel/leads')).at(-1).query;
     await link.click(); await timeline().getByTestId('journey-events').waitFor(); await expect(composer()).toBeVisible(); await screenshot('funnel-journey-inbox');
-    await page.getByRole('link', { name: '← Voltar ao funil com os filtros', exact: true }).click(); await dashboard.getByTestId('funnel-total').waitFor();
+    await closeJourney(); await page.getByRole('link', { name: '← Voltar ao funil com os filtros', exact: true }).click(); await dashboard.getByTestId('funnel-total').waitFor();
     const observedAt = new URLSearchParams(horizon).get('observed_at'); assert.ok(observedAt);
     assert.equal(new URLSearchParams(result.api.filter(item => item.path.endsWith('/commercial-funnel')).at(-1).query).get('observed_at'), observedAt, 'Return to funnel changed observation horizon');
     check('funnel-to-journey-inbox-deeplink-and-return');

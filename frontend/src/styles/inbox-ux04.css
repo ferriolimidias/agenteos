@@ -71,12 +71,6 @@
 .inbox-ux04 .inbox-toast { max-width: calc(100vw - 2rem); }
 .inbox-ux04 .inbox-toast > div { min-width: 0; }
 .inbox-ux04 button:focus-visible, .inbox-ux04 input:focus-visible, .inbox-ux04 select:focus-visible { outline: 2px solid var(--fm-focus); outline-offset: 2px; }
-@media (max-width: 1279px) {
-  .inbox-workspace-with-journey > .inbox-message-scroll { display: none; }
-}
-@media (min-width: 1280px) {
-  .inbox-workspace-with-journey > .inbox-journey-panel { width: 20rem; max-width: 44%; flex-shrink: 0; }
-}
 @media (max-width: 639px) {
   .inbox-ux04 .chat-conversation-header { padding: var(--fm-space-2) var(--fm-space-3); }
   .inbox-ux04 .chat-conversation-header > div:first-child { gap: var(--fm-space-2); }
