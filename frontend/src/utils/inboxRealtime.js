@@ -116,7 +116,13 @@ export function mergeLeadSnapshot(current = [], remote = [], startRevision = 0, 
     const version = revisions?.get?.(identity(previous.id));
     if (version?.fields) {
       const protectedFields = Object.fromEntries(Object.entries(version.fields)
-        .filter(([, revision]) => revision > startRevision).map(([field]) => [field, previous[field]]));
+        .filter(([field, revision]) => revision > startRevision || (["nome_contato", "telefone_contato"].includes(field) && revision > 0))
+        .map(([field]) => [field, previous[field]]));
+      if (timestamp(previous.ultima_mensagem_data) > timestamp(patch.ultima_mensagem_data) ||
+          (version.fields.ultima_mensagem && timestamp(previous.ultima_mensagem_data) >= timestamp(patch.ultima_mensagem_data))) {
+        protectedFields.ultima_mensagem = previous.ultima_mensagem;
+        protectedFields.ultima_mensagem_data = previous.ultima_mensagem_data;
+      }
       return { ...previous, ...patch, ...protectedFields };
     }
     const changed = revisionFor(revisions, [identity(previous.id)]) > startRevision;

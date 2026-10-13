@@ -308,3 +308,22 @@ test("unversioned HTTP acknowledgements do not override observed failed or unkno
     assert.equal(result[0].status, status);
   }
 });
+
+
+test("HTTP list started after a realtime rename cannot revert observed identity or newer preview", () => {
+  const current = [{ id: "a", nome_contato: "Nome canônico WS", telefone_contato: "NEWPHONE", ultima_mensagem: "novo", ultima_mensagem_data: "2026-10-13T12:00:00Z", tags: ["old"] }];
+  const versions = new Map([["a", { revision: 10, fields: { nome_contato: 10, telefone_contato: 10, ultima_mensagem: 10, ultima_mensagem_data: 10 } }]]);
+  const result = mergeLeadSnapshot(current, [{ id: "a", nome_contato: "Nome antigo", telefone_contato: "OLDPHONE", ultima_mensagem: "antigo", ultima_mensagem_data: "2026-10-13T11:00:00Z", tags: ["new"] }], 20, versions);
+  assert.equal(result[0].nome_contato, current[0].nome_contato);
+  assert.equal(result[0].telefone_contato, current[0].telefone_contato);
+  assert.equal(result[0].ultima_mensagem, "novo");
+  assert.deepEqual(result[0].tags, ["new"]);
+});
+
+test("a provably later HTTP last-message timestamp can advance the preview", () => {
+  const current = [{ id: "a", ultima_mensagem: "anterior", ultima_mensagem_data: "2026-10-13T12:00:00Z" }];
+  const versions = new Map([["a", { revision: 10, fields: { ultima_mensagem: 10, ultima_mensagem_data: 10 } }]]);
+  const result = mergeLeadSnapshot(current, [{ id: "a", ultima_mensagem: "recuperado", ultima_mensagem_data: "2026-10-13T12:01:00Z" }], 20, versions);
+  assert.equal(result[0].ultima_mensagem, "recuperado");
+  assert.equal(result[0].ultima_mensagem_data, "2026-10-13T12:01:00Z");
+});
