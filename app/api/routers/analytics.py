@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.auth import require_tenant_access
 from app.services.commercial_analytics import attribution_quality, event_signal_status, funnel, performance
+from app.services.followup_analytics import dashboard as followup_analytics_dashboard
+from app.services.followup_analytics import drilldown as followup_analytics_drilldown
+from app.services.followup_analytics import enabled as followup_analytics_enabled
 from app.services.meta.canonical_conversion_shadow import shadow_status
 from app.services.meta.sender_operations import enabled as sender_operations_enabled, sender_operations, sender_attempt_detail
 from db.database import get_db
@@ -351,3 +354,74 @@ async def attendance_quality_evidence_get(
         raise HTTPException(status_code=404, detail='Diagnóstico de qualidade indisponível.') from exc
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail='Filtro de qualidade inválido.') from exc
+
+
+async def _followup_analytics_read(service, db, empresa_id, filters):
+    if not followup_analytics_enabled():
+        raise HTTPException(status_code=404, detail="Painel de follow-ups indisponível.")
+    try:
+        return await service(db, empresa_id=empresa_id, **filters)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Painel de follow-ups indisponível.") from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Filtro de follow-up inválido.") from exc
+
+
+async def _followup_analytics_filters(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    observed_at: datetime | None = Query(default=None),
+    response_window_days: int = Query(default=7, ge=1, le=90),
+    reactivation_days: int = Query(default=7, ge=1, le=90),
+    mode: str | None = Query(default=None, pattern="^(conversation_resume|scheduled_message)$"),
+    channel: str | None = Query(default=None, pattern="^(whatsapp|instagram|web|sms|telegram)$"),
+    status: str | None = Query(default=None, pattern="^(scheduled|retry|processing|locked|sent|delivered|read|cancelled|stopped|failed)$"),
+    stop_reason: str | None = Query(default=None, max_length=120),
+):
+    return {
+        "start": start,
+        "end": end,
+        "observed_at": observed_at,
+        "response_window_days": response_window_days,
+        "reactivation_days": reactivation_days,
+        "mode": mode,
+        "channel": channel,
+        "status": status,
+        "stop_reason": stop_reason,
+    }
+
+
+@router.get("/followup-analytics")
+async def followup_analytics_get(
+    empresa_id: uuid.UUID,
+    filters: dict = Depends(_followup_analytics_filters),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    result = await _followup_analytics_read(followup_analytics_dashboard, db, empresa_id, filters)
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
+
+
+@router.get("/followup-analytics/evidence")
+async def followup_analytics_evidence_get(
+    empresa_id: uuid.UUID,
+    kind: str = Query(default="all", pattern="^(all|scheduled|eligible|initiated|sent|delivered|replied|reactivated|converted|stopped|failed|stage_advanced)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    filters: dict = Depends(_followup_analytics_filters),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    result = await _followup_analytics_read(
+        followup_analytics_drilldown, db, empresa_id,
+        filters | {"kind": kind, "limit": limit, "offset": offset},
+    )
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
