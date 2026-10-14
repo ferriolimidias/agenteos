@@ -15,7 +15,7 @@ function storage(initial = {}) {
 }
 
 test("every declared Tenant route family resolves to a reachable module", () => {
-  assert.equal(patterns.length, 32, "new routes need an explicit navigation audit");
+  assert.equal(patterns.length, 33, "new routes need an explicit navigation audit");
   for (const pattern of patterns) {
     const concrete = `/painel${pattern ? `/${pattern.replace(/:id/g, "synthetic-id").replace(/\*/g, "legacy-detail")}` : ""}`;
     assert.ok(resolveTenantNavigation(concrete, role), `route missing from map: ${pattern || "index"}`);

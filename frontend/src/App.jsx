@@ -12,6 +12,7 @@ const ConfiguracoesGlobais = lazy(() => import("./pages/super-admin/Configuracoe
 const JevIntegration = lazy(() => import("./pages/super-admin/JevIntegration"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
 const FunnelDashboard = lazy(() => import("./pages/tenant/FunnelDashboard"));
+const QualityDashboard = lazy(() => import("./pages/tenant/QualityDashboard"));
 const JevDiagnostics = lazy(() => import("./pages/tenant/JevDiagnostics"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
 const TenantAgentes = lazy(() => import("./pages/tenant/TenantAgentes"));
@@ -93,6 +94,7 @@ function App() {
         <Route path="/painel" element={<TenantLayout />}>
           <Route index element={<TenantDashboard />} />
           <Route path="funil" element={<FunnelDashboard />} />
+          <Route path="qualidade" element={<QualityDashboard />} />
           <Route path="inteligencia" element={<JevDiagnostics />} />
           <Route path="agentes" element={<TenantAgentes />} />
           <Route path="followups" element={<TenantFollowUps />} />

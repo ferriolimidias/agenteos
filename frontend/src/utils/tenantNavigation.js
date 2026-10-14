@@ -5,6 +5,7 @@ export const TENANT_NAVIGATION_GROUPS = [
   { id: "overview", label: "Visão geral e resultados", items: [
     item("dashboard", "Dashboard", "/painel", "dashboard"),
     item("funnel", "Funil e gargalos", "/painel/funil", "chart"),
+    item("quality", "Qualidade do atendimento", "/painel/qualidade", "chart"),
     item("results", "Resultados de campanhas", "/painel/campanhas/resultados", "chart"),
     item("costs", "Custos de campanhas", "/painel/campanhas/resultados/custos", "costs"),
     item("campaign-conversions", "Conversões de campanhas", "/painel/campanhas/resultados/conversoes", "chart"),

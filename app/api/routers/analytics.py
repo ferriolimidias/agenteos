@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.auth import require_tenant_access
@@ -205,12 +205,16 @@ async def meta_sender_attempt_detail(
 
 
 # A05 is read-only and additive; A01 and legacy analytics stay unchanged.
-from fastapi.responses import Response
 from app.services.commercial_funnel_dashboard import (
     enabled as commercial_funnel_dashboard_enabled,
     dashboard as commercial_funnel_dashboard,
     drilldown as commercial_funnel_leads,
     export_csv as commercial_funnel_export,
+)
+from app.services.attendance_quality import (
+    dashboard as attendance_quality_dashboard,
+    drilldown as attendance_quality_drilldown,
+    enabled as attendance_quality_enabled,
 )
 
 
@@ -276,3 +280,74 @@ async def commercial_funnel_export_get(
     return Response(content=content,media_type='text/csv; charset=utf-8',headers={
         'Content-Disposition':'attachment; filename="commercial-funnel-aggregated.csv"',
         'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
+
+def _attendance_quality_filters(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    observed_at: datetime | None = Query(default=None),
+    response_window_hours: int = Query(default=24, ge=1, le=168),
+    continuity_window_days: int = Query(default=7, ge=1, le=30),
+    channel: str | None = Query(default=None, pattern=r'^(whatsapp|instagram|web|sms|telegram)$'),
+    stage: str | None = Query(default=None, min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_:-]+$'),
+    ad_id: str | None = Query(default=None, min_length=1, max_length=40, pattern=r'^[0-9]+$'),
+    offer_signal: str | None = Query(default=None, pattern=r'^(price|offer)$'),
+    composition_version: str | None = Query(default=None, min_length=1, max_length=120, pattern=r'^[A-Za-z0-9_.:-]+$'),
+):
+    return dict(start=start, end=end, observed_at=observed_at,
+                response_window_hours=response_window_hours,
+                continuity_window_days=continuity_window_days, channel=channel,
+                stage=stage, ad_id=ad_id, offer_signal=offer_signal,
+                composition_version=composition_version)
+
+
+async def _attendance_quality_read(service, db, empresa_id, filters):
+    if not attendance_quality_enabled():
+        raise HTTPException(status_code=404, detail='Diagnóstico de qualidade indisponível.')
+    try:
+        return await service(db, empresa_id=empresa_id, **filters)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Diagnóstico de qualidade indisponível.') from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Filtro de qualidade inválido.') from exc
+
+
+@router.get('/attendance-quality')
+async def attendance_quality_get(
+    empresa_id: uuid.UUID,
+    filters: dict = Depends(_attendance_quality_filters),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    result = await _attendance_quality_read(attendance_quality_dashboard, db, empresa_id, filters)
+    if response is not None:
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+    return result
+
+
+@router.get('/attendance-quality/evidence')
+async def attendance_quality_evidence_get(
+    empresa_id: uuid.UUID,
+    category: str = Query(..., pattern=r'^(question_without_observed_response|price_offer_without_observed_continuity)$'),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    filters: dict = Depends(_attendance_quality_filters),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db),
+    _current_user: Usuario = Depends(require_tenant_access),
+):
+    if not attendance_quality_enabled():
+        raise HTTPException(status_code=404, detail='Diagnóstico de qualidade indisponível.')
+    try:
+        result = await attendance_quality_drilldown(db, empresa_id=empresa_id, category=category,
+                                                    limit=limit, offset=offset, **filters)
+        if response is not None:
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+        return result
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Diagnóstico de qualidade indisponível.') from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Filtro de qualidade inválido.') from exc
