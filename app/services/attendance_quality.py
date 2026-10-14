@@ -47,6 +47,11 @@ def _utc(value: datetime | str | None) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
+def _legacy_utc_naive(value: datetime) -> datetime:
+    """Match UTC bounds to legacy ``timestamp without time zone`` columns."""
+    return _utc(value).replace(tzinfo=None)
+
+
 def filters(*, empresa_id, start=None, end=None, observed_at=None, response_window_hours=24,
             continuity_window_days=7, channel=None, stage=None, ad_id=None, offer_signal=None,
             composition_version=None, now=None):
@@ -121,10 +126,12 @@ async def _stage_options(session, tenant):
 
 async def _message_rows(session, p):
     upper = min(p["observed"], p["end"] + timedelta(days=max(p["continuity_window_days"], p["response_window_hours"] / 24)))
+    message_start = _legacy_utc_naive(p["start"])
+    message_upper = _legacy_utc_naive(upper)
     conditions = [
         MensagemHistorico.empresa_id == p["tenant"],
-        MensagemHistorico.criado_em >= p["start"],
-        MensagemHistorico.criado_em < upper,
+        MensagemHistorico.criado_em >= message_start,
+        MensagemHistorico.criado_em < message_upper,
         func.lower(func.coalesce(MensagemHistorico.tipo_mensagem, "")).notin_(("status", "reaction")),
         func.lower(func.coalesce(MensagemHistorico.metadata_json["event_kind"].astext, "")).notin_(("status", "reaction")),
     ]
@@ -333,7 +340,9 @@ def _offer_sql_pattern(signal: str | None) -> str:
 
 
 async def _objection_metrics(session, p):
-    conditions = [TagCRM.empresa_id == p["tenant"], CRMTagEvent.occurred_at >= p["start"], CRMTagEvent.occurred_at < p["end"],
+    event_start = _legacy_utc_naive(p["start"])
+    event_end = _legacy_utc_naive(p["end"])
+    conditions = [TagCRM.empresa_id == p["tenant"], CRMTagEvent.occurred_at >= event_start, CRMTagEvent.occurred_at < event_end,
                   or_(func.lower(TagCRM.nome).like("%objeção%"), func.lower(TagCRM.nome).like("%objecao%"))]
     stmt = (
         select(TagCRM.id, TagCRM.nome, CRMTagEvent.lead_id, ChannelConversation.id,

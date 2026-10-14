@@ -128,6 +128,54 @@ async def test_message_query_is_tenant_scoped_and_validates_lead_conversation_jo
     assert "metadata_json" not in statement.selected_columns.keys()
 
 
+@pytest.mark.asyncio
+async def test_message_query_binds_utc_naive_for_legacy_timestamp_column():
+    session = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])))
+    p = service.filters(
+        empresa_id=uuid4(),
+        start="2026-01-01T01:00:00+01:00",
+        end="2026-01-02T01:00:00+01:00",
+        observed_at="2026-01-10T13:00:00+01:00",
+        now=NOW,
+    )
+
+    await service._message_rows(session, p)
+
+    statement = session.execute.await_args.args[0]
+    timestamp_values = [
+        value for value in statement.compile(dialect=postgresql.dialect()).params.values()
+        if isinstance(value, datetime)
+    ]
+    assert timestamp_values
+    assert all(value.tzinfo is None for value in timestamp_values)
+    assert datetime(2026, 1, 1) in timestamp_values
+    assert datetime(2026, 1, 9) in timestamp_values
+
+
+@pytest.mark.asyncio
+async def test_objection_query_binds_utc_naive_for_legacy_timestamp_column():
+    session = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])))
+    p = service.filters(
+        empresa_id=uuid4(),
+        start="2026-01-01T01:00:00+01:00",
+        end="2026-01-02T01:00:00+01:00",
+        observed_at="2026-01-10T13:00:00+01:00",
+        now=NOW,
+    )
+
+    await service._objection_metrics(session, p)
+
+    statement = session.execute.await_args.args[0]
+    timestamp_values = [
+        value for value in statement.compile(dialect=postgresql.dialect()).params.values()
+        if isinstance(value, datetime)
+    ]
+    assert timestamp_values
+    assert all(value.tzinfo is None for value in timestamp_values)
+    assert datetime(2026, 1, 1) in timestamp_values
+    assert datetime(2026, 1, 2) in timestamp_values
+
+
 @pytest.mark.parametrize("kwargs", [
     {"channel": "email"}, {"ad_id": "1 OR 1=1"}, {"offer_signal": "invented"},
     {"response_window_hours": 0}, {"continuity_window_days": 31},
