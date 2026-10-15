@@ -300,7 +300,7 @@ class MetaMarketingApiClient:
     ) -> dict[str, Any]:
         """Read one bounded page of published Page posts; never follows a Graph URL."""
         params: dict[str, Any] = {
-            "fields": "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,media,url,subattachments{media_type,media,url}}",
+            "fields": "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,url,media{image{src},source},subattachments{media_type,url,media{image{src},source}}}",
             "limit": max(1, min(int(limit or 25), 50)),
         }
         if after:
@@ -322,7 +322,7 @@ class MetaMarketingApiClient:
         return sanitize_graph_payload(body)
 
     async def get_page_published_post(self, post_id: str) -> dict[str, Any]:
-        fields = "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,media,url}"
+        fields = "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,url,media{image{src},source}}"
         return sanitize_graph_payload(await self._client()._request("GET", str(post_id).strip(), params={"fields": fields}))
 
     async def get_instagram_media(self, media_id: str) -> dict[str, Any]:

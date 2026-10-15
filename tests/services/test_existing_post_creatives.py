@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 from app.api.routers.traffic_meta import (
+    TrafficMetaExistingPostCampaignPreviewRequest,
     TrafficMetaExistingPostPreviewRequest,
     list_existing_ad_posts,
+    preview_existing_post_campaign,
     preview_existing_post_ad_creative,
 )
 from app.services.meta.existing_post_creatives import (
@@ -165,6 +167,82 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as raised:
                 await preview_existing_post_ad_creative(str(self.other_tenant_id), request, db=object(), current_user=other_admin)
         self.assertEqual(raised.exception.status_code, 403)
+
+    async def test_existing_post_uses_current_campaign_builder_in_local_mock_without_writes(self):
+        connection_id = uuid.uuid4()
+        calls = []
+        page = {
+            "id": self.page_id,
+            "name": "Página de teste",
+            "instagram_business_account": {"id": self.ig_account_id, "username": "brand_test"},
+        }
+
+        class Client:
+            async def validate_ad_account(inner_self, account_id):
+                calls.append(("GET", "validate_ad_account", account_id))
+                return {"id": account_id, "business": {"id": "business_test"}}
+
+            async def list_pages(inner_self):
+                calls.append(("GET", "list_pages"))
+                return [page]
+
+            async def get_instagram_media(inner_self, media_id):
+                calls.append(("GET", "get_instagram_media", media_id))
+                return {"id": media_id, "media_type": "VIDEO", "media_product_type": "REELS"}
+
+        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False):
+            token = issue_existing_post_selection_token(
+                empresa_id=self.tenant_id, ad_account_id="987654", page_id=self.page_id,
+                instagram_account_id=self.ig_account_id, platform="instagram", source_id="ig_media_456",
+                media_type="VIDEO", media_product_type="REELS",
+            )
+        request = TrafficMetaExistingPostCampaignPreviewRequest(
+            selection_token=token, page_id=self.page_id, whatsapp_connection_id=str(connection_id),
+            daily_budget_brl="30,00", location_type="brazil", gender_mode="all",
+        )
+        assets = {
+            "page_id": self.page_id,
+            "whatsapp_connection_id": str(connection_id),
+            "phone_number_id": "phone_789",
+            "whatsapp_phone_number": "+55 11 90000-0000",
+        }
+        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False), \
+             patch("app.api.routers.traffic_meta._get_config", AsyncMock(return_value=self.config)), \
+             patch("app.api.routers.traffic_meta._client", AsyncMock(return_value=(Client(), {"graph_version": "v26.0"}))), \
+             patch("app.api.routers.traffic_meta._resolve_campaign_assets_for_write", AsyncMock(return_value=assets)) as resolve_assets:
+            result = await preview_existing_post_campaign(
+                str(self.tenant_id), request, db=object(), current_user=self.admin,
+            )
+
+        self.assertEqual(result["creation_mode"], "local_mock")
+        self.assertFalse(result["meta_write_performed"])
+        self.assertFalse(result["database_write_performed"])
+        self.assertFalse(result["external_side_effects"])
+        self.assertEqual(result["builder_preview"]["campaign"]["objective"], "OUTCOME_SALES")
+        self.assertEqual(result["builder_preview"]["adset"]["daily_budget"], "3000")
+        self.assertEqual(result["builder_preview"]["creative"]["source_instagram_media_id"], "ig_media_456")
+        self.assertEqual(result["builder_preview"]["ad"]["creative"]["creative_id"], "PREVIEW_CREATIVE_ID")
+        self.assertEqual(result["builder_preview"]["phone_number"], "[redigido na prévia]")
+        self.assertEqual(result["graph_api_version"], "v26.0")
+        self.assertEqual(resolve_assets.await_count, 1)
+        self.assertTrue(calls)
+        self.assertTrue(all(call[0] == "GET" for call in calls))
+
+    async def test_facebook_video_preview_never_uses_thumbnail_as_video_source(self):
+        from app.api.routers.traffic_meta import _post_preview_urls
+
+        video_url, thumbnail_url = _post_preview_urls(
+            {"attachments": {"data": [{"media": {"image": {"src": "https://cdn.example.test/poster.jpg"}}}]}},
+            platform="facebook", media_type="VIDEO",
+        )
+        self.assertIsNone(video_url)
+        self.assertEqual(thumbnail_url, "https://cdn.example.test/poster.jpg")
+        video_url, thumbnail_url = _post_preview_urls(
+            {"attachments": {"data": [{"media": {"source": "https://cdn.example.test/video.mp4", "image": {"src": "https://cdn.example.test/poster.jpg"}}}]}},
+            platform="facebook", media_type="VIDEO",
+        )
+        self.assertEqual(video_url, "https://cdn.example.test/video.mp4")
+        self.assertEqual(thumbnail_url, "https://cdn.example.test/poster.jpg")
 
 
 if __name__ == "__main__":

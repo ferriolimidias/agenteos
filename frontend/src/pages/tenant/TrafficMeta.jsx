@@ -1486,7 +1486,23 @@ export default function TrafficMeta() {
                       <ActionButton onClick={() => setConfirmingCampaign(true)} disabled={!writesEnabled || !campaignReadiness?.ready || !campaignForm.daily_budget_brl || !campaignForm.page_id || !compatibleWhatsapps.length || (compatibleWhatsapps.length > 1 && !campaignForm.whatsapp_connection_id) || !campaignForm.ads.length || (campaignForm.location_type === "radius" && (!campaignForm.latitude || !campaignForm.longitude || !campaignForm.location_display_name || !campaignForm.radius_km)) || campaignForm.ads.some((ad) => !ad.media_data_url || !analysisReady(ad) || analysisBusy(ad))}>Criar campanha e anúncios</ActionButton>
                     </div>
                   </>
-                ) : <ExistingPostPicker empresaId={empresaId} pages={assetPages} adAccountId={configuredAdAccountId} objective="OUTCOME_SALES" initialPageId={campaignForm.page_id || config.page_id || ""} />}
+                ) : <ExistingPostPicker
+                  empresaId={empresaId}
+                  pages={assetPages}
+                  adAccountId={configuredAdAccountId}
+                  initialPageId={campaignForm.page_id || config.page_id || ""}
+                  campaignDraft={{
+                    daily_budget_brl: campaignForm.daily_budget_brl,
+                    location_type: campaignForm.location_type,
+                    latitude: campaignForm.latitude,
+                    longitude: campaignForm.longitude,
+                    radius_km: campaignForm.radius_km,
+                    gender_mode: campaignForm.gender_mode,
+                    page_id: campaignForm.page_id,
+                    whatsapp_connection_id: campaignForm.whatsapp_connection_id,
+                  }}
+                  onPageChange={(pageId) => setCampaignForm((current) => ({ ...current, page_id: pageId }))}
+                />}
               </>
             ) : (
               <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">

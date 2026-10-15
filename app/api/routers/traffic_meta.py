@@ -7,6 +7,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -148,6 +149,19 @@ class TrafficMetaExistingPostPreviewRequest(BaseModel):
     selection_token: str = Field(min_length=20, max_length=2048)
     objective: str = Field(default=CAMPAIGN_OBJECTIVE, max_length=40)
     creative_name: str = Field(default="Criativo de publicação existente", min_length=1, max_length=120)
+
+
+class TrafficMetaExistingPostCampaignPreviewRequest(BaseModel):
+    selection_token: str = Field(min_length=20, max_length=2048)
+    creative_name: str = Field(default="Criativo de publicação existente", min_length=1, max_length=120)
+    page_id: str = Field(min_length=1, max_length=80)
+    whatsapp_connection_id: str | None = Field(default=None, max_length=80)
+    daily_budget_brl: str = Field(min_length=1, max_length=40)
+    location_type: str = Field(default="brazil", pattern="^(brazil|radius)$")
+    latitude: float | None = None
+    longitude: float | None = None
+    radius_km: float | None = None
+    gender_mode: str = Field(default="all", pattern="^(all|women|men)$")
 
 
 class TrafficMetaBatchCreateRequest(BaseModel):
@@ -481,16 +495,33 @@ def _serialize_page(page: dict[str, Any], *, selected: bool = False) -> dict[str
     }
 
 
-def _post_preview_url(post: dict[str, Any]) -> str | None:
-    direct = _clean(post.get("media_url") or post.get("thumbnail_url") or post.get("full_picture"))
-    if direct:
-        return direct
+def _https_preview_url(value: Any) -> str | None:
+    raw = _clean(value)
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return raw[:2048]
+
+
+def _post_preview_urls(post: dict[str, Any], *, platform: str, media_type: str) -> tuple[str | None, str | None]:
+    if platform == "instagram":
+        video_url = _https_preview_url(post.get("media_url")) if media_type == "VIDEO" else None
+        thumbnail_url = _https_preview_url(post.get("thumbnail_url") or (post.get("media_url") if media_type == "IMAGE" else None))
+        return video_url, thumbnail_url
     attachments = post.get("attachments") if isinstance(post.get("attachments"), dict) else {}
     data = attachments.get("data") if isinstance(attachments.get("data"), list) else []
     first = data[0] if data and isinstance(data[0], dict) else {}
     media = first.get("media") if isinstance(first.get("media"), dict) else {}
     image = media.get("image") if isinstance(media.get("image"), dict) else first.get("image")
-    return _clean((image or {}).get("src")) if isinstance(image, dict) else None
+    image_url = _https_preview_url((image or {}).get("src")) if isinstance(image, dict) else None
+    video_url = _https_preview_url(media.get("source")) if media_type == "VIDEO" else None
+    thumbnail_url = image_url or _https_preview_url(post.get("full_picture"))
+    return video_url, thumbnail_url
 
 
 def _serialize_existing_post(
@@ -499,6 +530,7 @@ def _serialize_existing_post(
 ) -> dict[str, Any]:
     source_id = _clean(post.get("id")) or ""
     media_type, media_product_type = normalize_existing_post_media_type(platform, post)
+    media_url, thumbnail_url = _post_preview_urls(post, platform=platform, media_type=media_type)
     caption = _clean(post.get("caption") if platform == "instagram" else post.get("message")) or ""
     permalink = _clean(post.get("permalink") if platform == "instagram" else post.get("permalink_url"))
     supported_preview = media_type in {"IMAGE", "VIDEO"} and (
@@ -536,9 +568,10 @@ def _serialize_existing_post(
         "permalink": permalink,
         "media_type": media_type,
         "media_product_type": media_product_type,
-        "media_url": _post_preview_url(post),
-        "thumbnail_url": _clean(post.get("thumbnail_url") or post.get("full_picture")) or _post_preview_url(post),
-        "preview_available": bool(_post_preview_url(post)),
+        "media_url": media_url,
+        "thumbnail_url": thumbnail_url,
+        "preview_available": bool(media_url or thumbnail_url),
+        "video_preview_available": bool(media_url) if media_type == "VIDEO" else None,
         "id_mapping": id_mapping,
         "compatibility": {
             "status": "preliminary" if supported_preview else "unsupported_or_unverified_format",
@@ -2965,6 +2998,109 @@ async def preview_existing_post_ad_creative(
     except TrafficCampaignValidationError as exc:
         raise HTTPException(status_code=422, detail={"code": str(exc), "message": "Formato ou objetivo não compatível com a prévia atual."}) from exc
     return {"preview": preview, "credential": credential_meta, "graph_api_version": credential_meta.get("graph_version")}
+
+
+@router.post("/existing-posts/campaign-preview")
+async def preview_existing_post_campaign(
+    empresa_id: str,
+    payload: TrafficMetaExistingPostCampaignPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_tenant_access),
+):
+    """Simulate the existing campaign builder without persisting or writing to Meta."""
+    empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    try:
+        claims = verify_existing_post_selection_token(payload.selection_token, empresa_id=empresa_uuid)
+    except ExistingPostSelectionError as exc:
+        raise HTTPException(status_code=403, detail={"code": str(exc), "message": "Atualize a lista e selecione novamente a publicação."}) from exc
+    page_id = _clean(payload.page_id) or ""
+    if page_id != claims.get("page_id"):
+        raise HTTPException(status_code=409, detail="A publicação selecionada pertence a outra Página do formulário.")
+    config = await _get_config(db, empresa_uuid)
+    if not config or not config.ad_account_id:
+        raise HTTPException(status_code=409, detail="Configure uma conta de anúncios antes de preparar a prévia.")
+    ad_account_id = _current_configured_ad_account_id(config)
+    selected_whatsapp_id = _uuid_or_400(payload.whatsapp_connection_id, "whatsapp_connection_id") if payload.whatsapp_connection_id else None
+    try:
+        client, credential_meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+        )
+        if claims.get("ad_account_id") != ad_account_id:
+            raise HTTPException(status_code=403, detail="A seleção não pertence à conta de anúncios configurada nesta empresa.")
+        ad_account = await client.validate_ad_account(ad_account_id)
+        assets = await _resolve_campaign_assets_for_write(
+            db,
+            empresa_uuid,
+            config=config,
+            page_id=page_id,
+            whatsapp_connection_id=selected_whatsapp_id,
+            client=client,
+            ad_account=ad_account,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_existing_post_read_error(exc)
+        raise AssertionError("unreachable")
+
+    try:
+        daily_budget_cents = brl_to_meta_cents(payload.daily_budget_brl)
+        targeting = build_targeting(
+            location_mode=payload.location_type,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            radius_km=payload.radius_km,
+            gender_mode=payload.gender_mode,
+        )
+    except TrafficCampaignValidationError as exc:
+        raise HTTPException(status_code=422, detail={"code": str(exc), "message": "Revise orçamento e segmentação antes de simular."}) from exc
+
+    creative_result = await preview_existing_post_ad_creative(
+        empresa_id,
+        TrafficMetaExistingPostPreviewRequest(
+            selection_token=payload.selection_token,
+            objective=CONVERSION_CAMPAIGN_OBJECTIVE,
+            creative_name=payload.creative_name,
+        ),
+        db=db,
+        current_user=current_user,
+    )
+    creative = creative_result["preview"]["creative_payload_preview"]
+    campaign = build_campaign_payload("Prévia A12 · campanha", objective=CONVERSION_CAMPAIGN_OBJECTIVE)
+    adset = build_adset_payload(
+        name="Prévia A12 · conjunto",
+        campaign_id="PREVIEW_CAMPAIGN_ID",
+        daily_budget_cents=daily_budget_cents,
+        page_id=assets["page_id"],
+        phone_number="PHONE_NUMBER_REDACTED_FOR_PREVIEW",
+        targeting=targeting,
+        optimization_goal="CONVERSATIONS",
+        destination_type="WHATSAPP",
+    )
+    ad = build_ad_payload(name="Prévia A12 · anúncio", adset_id="PREVIEW_ADSET_ID", creative_id="PREVIEW_CREATIVE_ID")
+    return {
+        "state": "simulated",
+        "creation_mode": "local_mock",
+        "meta_write_performed": False,
+        "database_write_performed": False,
+        "external_side_effects": False,
+        "graph_api_version": credential_meta.get("graph_version"),
+        "id_mapping": creative_result["preview"]["id_mapping"],
+        "compatibility": creative_result["preview"]["compatibility"],
+        "builder_preview": {
+            "campaign": campaign,
+            "adset": adset,
+            "creative": creative,
+            "ad": ad,
+            "targeting": targeting,
+            "daily_budget_cents": daily_budget_cents,
+            "whatsapp_connection_present": bool(assets.get("whatsapp_connection_id")),
+            "phone_number_id_present": bool(assets.get("phone_number_id")),
+            "phone_number": "[redigido na prévia]",
+        },
+        "note": "Prévia local que reutiliza os validadores e builders atuais; nenhuma estrutura foi salva ou enviada à Meta.",
+    }
 
 
 @router.get("/campaigns")
