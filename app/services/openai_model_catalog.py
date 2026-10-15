@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.llm_factory import get_tenant_api_key
-from app.core.model_catalog import is_allowed_model_id
+from app.core.model_catalog import is_allowed_model_id, reasoning_effort_capabilities
 from db.models import Empresa, OpenAIModelCatalogSnapshot, OpenAIModelValidation
 
 SPECIALIZED_MARKERS = (
@@ -23,6 +23,7 @@ SPECIALIZED_MARKERS = (
 KNOWN_CHAT_MODELS = {
     "gpt-4o", "gpt-4o-mini", "gpt-4o-2024-05-13", "gpt-4o-2024-08-06", "gpt-4o-mini-2024-07-18",
     "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.6-luna", "o1", "o1-mini", "o3", "o3-mini", "o4-mini",
+    "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra",
 }
 
 
@@ -85,6 +86,7 @@ def sanitize_model(item: Any, *, validation_status: str | None = None) -> dict[s
         "compatibility_known": known or validation_status == "compatible",
         "validation_required": compatibility == "needs_validation",
         "compatibility_explanation": explanation,
+        "reasoning_effort_capabilities": reasoning_effort_capabilities(model_id),
         "created": int(created) if isinstance(created, int) and not isinstance(created, bool) else None,
         "owned_by": str(owner)[:80] if owner else None,
         "source": "openai_api_v1_models",
@@ -138,6 +140,10 @@ async def _with_validation_state(db: AsyncSession, tenant_id, fingerprint: str, 
     result = []
     for item in items:
         copied = dict(item)
+        # Older snapshots predate the capability policy. Recompute this
+        # non-credential data on each response so backend policy is the sole
+        # source of truth, even when the model list is served from cache.
+        copied["reasoning_effort_capabilities"] = reasoning_effort_capabilities(str(copied.get("id") or ""))
         validation_status = validation_by_model.get(copied.get("id"))
         if validation_status == "compatible":
             copied.update({"compatibility": "verified_compatible", "compatibility_known": True, "validation_required": False, "compatibility_explanation": "Validated with the tenant credential using Chat Completions"})

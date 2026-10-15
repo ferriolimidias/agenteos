@@ -70,6 +70,7 @@ def build_tenant_agent_config(empresa) -> dict[str, Any]:
         "nome_agente": _clean_text(_get(empresa, "nome_agente")) or "Assistente Virtual",
         "modelo_ia": _clean_text(_get(empresa, "modelo_ia")) or "gpt-4o-mini",
         "modelo_ia_request_profile": _clean_text(_get(empresa, "modelo_ia_request_profile")) or "legacy",
+        "modelo_ia_reasoning_effort": _clean_text(_get(empresa, "modelo_ia_reasoning_effort")) or "default",
         "mensagem_saudacao": _raw_text(_get(empresa, "mensagem_saudacao")),
         "ia_identidade": _clean_text(_get(empresa, "ia_personalidade")) or _clean_text(_get(empresa, "ia_identidade")),
         "ia_regras_negocio": _clean_text(_get(empresa, "ia_regras_negocio")),

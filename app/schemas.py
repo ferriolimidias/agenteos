@@ -129,6 +129,8 @@ class IAConfigResponse(BaseModel):
     mensagem_saudacao: str | None = None
     conversion_monitor_prompt: str | None = None
     modelo_ia: str | None = None
+    modelo_ia_reasoning_effort: str = "default"
+    reasoning_effort_capabilities: dict[str, Any] = Field(default_factory=dict)
     followup_ativo: bool = False
     limite_certeza: float = 0.65
     limite_duvida: float = 0.45
@@ -150,6 +152,7 @@ class IAConfigUpdateRequest(BaseModel):
     mensagem_saudacao: str | None = None
     conversion_monitor_prompt: str | None = None
     modelo_ia: str | None = None
+    modelo_ia_reasoning_effort: Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     followup_ativo: bool | None = None
     limite_certeza: float | None = None
     limite_duvida: float | None = None

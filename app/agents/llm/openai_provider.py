@@ -5,19 +5,22 @@ import time
 from typing import Any
 
 from app.core.secret_sanitizer import sanitize_for_log
-from app.core.model_catalog import model_requires_minimal_chat_parameters
+from app.core.model_catalog import is_reasoning_effort_compatible, model_requires_minimal_chat_parameters
 from app.agents.llm.base import AgentLLM
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAIAgentLLM(AgentLLM):
-    def __init__(self, *, api_key: str, model: str, tenant_id: str | None = None, request_profile: str = "legacy", project_id: str | None = None) -> None:
+    def __init__(self, *, api_key: str, model: str, tenant_id: str | None = None, request_profile: str = "legacy", project_id: str | None = None, reasoning_effort: str | None = None) -> None:
         self._api_key = str(api_key or "").strip()
         self._model = str(model or "").strip() or "gpt-4o-mini"
         self._tenant_id = str(tenant_id or "").strip() or None
         self._request_profile = request_profile if request_profile in {"legacy", "chat_minimal"} else "legacy"
         self._project_id = str(project_id or "").strip() or None
+        self._reasoning_effort = str(reasoning_effort or "default").strip().lower() or "default"
+        if not is_reasoning_effort_compatible(self._model, self._reasoning_effort):
+            raise ValueError("Configured reasoning effort is not compatible with the selected OpenAI model")
         self._observe_usage = False
         self.last_usage_observation = None
 
@@ -39,7 +42,14 @@ class OpenAIAgentLLM(AgentLLM):
             or ""
         ).strip()
         project_id = config.get("openai_project_id") or credentials.get("openai_project_id") or credentials.get("project_id")
-        return cls(api_key=api_key, model=str(config.get("modelo_ia") or "gpt-4o-mini"), tenant_id=config.get("empresa_id"), request_profile=str(config.get("modelo_ia_request_profile") or "legacy"), project_id=project_id)
+        return cls(
+            api_key=api_key,
+            model=str(config.get("modelo_ia") or "gpt-4o-mini"),
+            tenant_id=config.get("empresa_id"),
+            request_profile=str(config.get("modelo_ia_request_profile") or "legacy"),
+            project_id=project_id,
+            reasoning_effort=config.get("modelo_ia_reasoning_effort"),
+        )
 
     async def generate(
         self,
@@ -84,10 +94,17 @@ class OpenAIAgentLLM(AgentLLM):
             "model": self._model,
             "messages": payload_messages,
         }
-        # Keep GPT-5.6 Luna's existing exact exception, and avoid sampling
-        # parameters for reasoning families whose Chat Completions support is
-        # model-specific. New IDs remain minimal unless explicitly profiled.
-        if self._request_profile == "legacy" and not model_requires_minimal_chat_parameters(self._model):
+        if self._reasoning_effort != "default":
+            request_kwargs["reasoning_effort"] = self._reasoning_effort
+        # Sampling parameters are valid only at effort=none for the reasoning
+        # models covered by the provider contract. Keep legacy sampling for
+        # existing default/non-reasoning tenant configurations.
+        sampling_allowed = self._reasoning_effort in {"default", "none"}
+        if (
+            self._request_profile == "legacy"
+            and sampling_allowed
+            and (self._reasoning_effort == "none" or not model_requires_minimal_chat_parameters(self._model))
+        ):
             request_kwargs["temperature"] = 0.2
         try:
             response = await client.chat.completions.create(

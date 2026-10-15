@@ -280,6 +280,15 @@ def _empresa_tem_openai_configurada(empresa: Empresa) -> tuple[bool, str | None]
     return False, None
 
 
+def _reasoning_config_payload(empresa: Empresa) -> dict[str, Any]:
+    from app.core.model_catalog import reasoning_effort_capabilities
+
+    return {
+        "modelo_ia_reasoning_effort": str(getattr(empresa, "modelo_ia_reasoning_effort", None) or "default"),
+        "reasoning_effort_capabilities": reasoning_effort_capabilities(getattr(empresa, "modelo_ia", None)),
+    }
+
+
 def _serializar_empresa_segura(empresa: Empresa) -> dict[str, Any]:
     token = str(getattr(empresa, "meta_access_token", "") or "").strip()
     openai_configurada, _ = _empresa_tem_openai_configurada(empresa)
@@ -963,6 +972,7 @@ async def get_ia_config(
         "mensagem_saudacao": empresa.mensagem_saudacao,
         "conversion_monitor_prompt": getattr(empresa, "conversion_monitor_prompt", None),
         "modelo_ia": empresa.modelo_ia,
+        **_reasoning_config_payload(empresa),
         "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
         "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
         "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,
@@ -1023,10 +1033,48 @@ async def put_ia_config(
     _: Usuario = Depends(require_ia_config_access),
 ):
     # Deprecated para agenda: horários de funcionamento devem ser atualizados em PUT /empresas/{empresa_id}/agenda.
-    result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
+    # Serialize partial updates to this tenant's shared model/effort pair.
+    # Without a row lock concurrent model-only and effort-only writes could
+    # each validate against a stale but individually valid snapshot.
+    result = await db.execute(select(Empresa).where(Empresa.id == empresa_id).with_for_update())
     empresa = result.scalars().first()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
+
+    # Validate the model/effort pair before mutating any ORM fields. A model
+    # change cannot retain an effort that the exact model does not support.
+    fields_set = data.model_fields_set
+    model_was_submitted = "modelo_ia" in fields_set and data.modelo_ia is not None
+    effort_was_submitted = "modelo_ia_reasoning_effort" in fields_set
+    target_model = data.modelo_ia if model_was_submitted else str(empresa.modelo_ia or "")
+    target_effort = (
+        str(data.modelo_ia_reasoning_effort or "default")
+        if effort_was_submitted
+        else str(getattr(empresa, "modelo_ia_reasoning_effort", None) or "default")
+    )
+    if model_was_submitted or effort_was_submitted:
+        from app.core.model_catalog import is_reasoning_effort_compatible, reasoning_effort_capabilities
+
+        if not is_reasoning_effort_compatible(target_model, target_effort):
+            capabilities = reasoning_effort_capabilities(target_model)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "reasoning_effort_incompatible",
+                    "message": "Escolha um nível de raciocínio compatível com o modelo selecionado.",
+                    "supported_options": capabilities["options"],
+                    "capability_status": capabilities["status"],
+                },
+            )
+    if model_was_submitted and data.modelo_ia != str(empresa.modelo_ia or ""):
+        from app.services.openai_model_catalog import model_is_validated
+
+        if not await model_is_validated(db, empresa.id, data.modelo_ia):
+            raise HTTPException(status_code=422, detail="Valide este modelo com a credencial do tenant antes de selecioná-lo.")
+
+    if effort_was_submitted:
+        empresa.modelo_ia_reasoning_effort = None if target_effort == "default" else target_effort
+
     if data.ia_personalidade is not None:
         empresa.ia_personalidade = data.ia_personalidade
     if data.ia_regras_negocio is not None:
@@ -1037,12 +1085,10 @@ async def put_ia_config(
         empresa.mensagem_saudacao = data.mensagem_saudacao
     if data.conversion_monitor_prompt is not None:
         empresa.conversion_monitor_prompt = data.conversion_monitor_prompt
-    if data.modelo_ia is not None:
+    if model_was_submitted:
         if data.modelo_ia != str(empresa.modelo_ia or ""):
-            from app.services.openai_model_catalog import classify_model, model_is_validated
+            from app.services.openai_model_catalog import classify_model
             from app.core.model_catalog import model_requires_minimal_chat_parameters
-            if not await model_is_validated(db, empresa.id, data.modelo_ia):
-                raise HTTPException(status_code=422, detail="Valide este modelo com a credencial do tenant antes de selecioná-lo.")
             compatibility, _, _ = classify_model(data.modelo_ia)
             empresa.modelo_ia_request_profile = "chat_minimal" if model_requires_minimal_chat_parameters(data.modelo_ia) or compatibility != "known_compatible" else "legacy"
         empresa.modelo_ia = data.modelo_ia
@@ -1107,6 +1153,7 @@ async def put_ia_config(
             "mensagem_saudacao": empresa.mensagem_saudacao,
             "conversion_monitor_prompt": getattr(empresa, "conversion_monitor_prompt", None),
             "modelo_ia": empresa.modelo_ia,
+            **_reasoning_config_payload(empresa),
             "followup_ativo": getattr(empresa, 'followup_ativo', False) or False,
             "limite_certeza": getattr(empresa, "limite_certeza", 0.65) if getattr(empresa, "limite_certeza", None) is not None else 0.65,
             "limite_duvida": getattr(empresa, "limite_duvida", 0.45) if getattr(empresa, "limite_duvida", None) is not None else 0.45,

@@ -66,3 +66,16 @@ test("main model select uses canonical IDs and friendly labels", () => {
   assert.doesNotMatch(companiesSource, /showConfigIAModal/);
   assert.doesNotMatch(selectBlock, /<input/);
 });
+
+test("reasoning effort options come from backend capabilities and incompatible values block save", () => {
+  assert.match(pageSource, /reasoning_effort_capabilities/);
+  assert.match(pageSource, /reasoningCapabilities\.options/);
+  assert.match(pageSource, /reasoningEffortOptions\.map/);
+  assert.match(pageSource, /Padrão do modelo/);
+  assert.match(pageSource, /Muito alto/);
+  assert.match(pageSource, /Máximo/);
+  assert.match(pageSource, /reasoningEffortIncompatible/);
+  assert.match(pageSource, /Escolha explicitamente um nível de raciocínio compatível/);
+  assert.match(pageSource, /modelo_ia_reasoning_effort: event\.target\.value/);
+  assert.match(pageSource, /Níveis mais altos podem aumentar latência, tokens de raciocínio e custo/);
+});

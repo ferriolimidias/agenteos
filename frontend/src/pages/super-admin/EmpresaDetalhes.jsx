@@ -55,6 +55,8 @@ const IA_CONFIG_DEFAULT = {
   mensagem_saudacao: "",
   conversion_monitor_prompt: "",
   modelo_ia: "gpt-4o-mini",
+  modelo_ia_reasoning_effort: "default",
+  reasoning_effort_capabilities: { status: "unknown", options: ["default"], levels: [] },
   followup_ativo: false,
   limite_certeza: 0.65,
   limite_duvida: 0.45,
@@ -159,6 +161,15 @@ export default function EmpresaDetalhes() {
     [empresa?.nome_empresa],
   );
   const selectedModelId = String(iaConfig?.modelo_ia || "");
+  const selectedModelOption = modelOptions.find((item) => item.id === selectedModelId);
+  const reasoningCapabilities = selectedModelOption?.reasoning_effort_capabilities
+    || iaConfig?.reasoning_effort_capabilities
+    || { status: "unknown", options: ["default"], levels: [] };
+  const reasoningEffortOptions = Array.isArray(reasoningCapabilities.options) && reasoningCapabilities.options.length
+    ? reasoningCapabilities.options
+    : ["default"];
+  const selectedReasoningEffort = String(iaConfig?.modelo_ia_reasoning_effort || "default");
+  const reasoningEffortIncompatible = !reasoningEffortOptions.includes(selectedReasoningEffort);
   const currentModelMissing = Boolean(selectedModelId && !modelOptions.some((item) => item.id === selectedModelId));
   const visibleModelOptions = useMemo(() => {
     const normalizedQuery = modelSearch.trim().toLowerCase();
@@ -408,6 +419,10 @@ export default function EmpresaDetalhes() {
   const salvarIaConfig = async (e) => {
     e.preventDefault();
     if (!empresaId) return;
+    if (reasoningEffortIncompatible) {
+      setToast("Escolha explicitamente um nível de raciocínio compatível com o modelo.");
+      return;
+    }
     try {
       setSavingIaConfig(true);
       await api.put(`/empresas/${empresaId}/ia-config`, {
@@ -422,7 +437,8 @@ export default function EmpresaDetalhes() {
       await carregarEmpresa();
     } catch (err) {
       console.error("Erro ao salvar configuração do agente:", err);
-      setToast("Falha ao salvar configuração do agente.");
+      const detail = err?.response?.data?.detail;
+      setToast(typeof detail?.message === "string" ? detail.message : typeof detail === "string" ? detail : "Falha ao salvar configuração do agente.");
     } finally {
       setSavingIaConfig(false);
     }
@@ -818,6 +834,29 @@ export default function EmpresaDetalhes() {
               </div>
               {modelOptions.find((item) => item.id === selectedModelId)?.validation_required && <p className="text-xs text-amber-700">Este modelo ainda não tem compatibilidade comprovada. A validação faz uma chamada explícita à API e pode gerar custo; nenhum dado de cliente será enviado.</p>}
               {currentModelMissing && <p className="text-xs text-amber-700">O catálogo atual não confirmou o modelo salvo. Ele permanece selecionado e não será substituído automaticamente.</p>}
+              <div className="mt-3 border-t border-slate-200 pt-3">
+                <label htmlFor="company-field-reasoning-effort" className="mb-1 block text-xs font-semibold text-slate-700">Nível de raciocínio</label>
+                <select
+                  id="company-field-reasoning-effort"
+                  value={selectedReasoningEffort}
+                  onChange={(event) => setIaConfig((previous) => ({ ...previous, modelo_ia_reasoning_effort: event.target.value }))}
+                  className="fm-field"
+                  aria-describedby="reasoning-effort-help"
+                  aria-invalid={reasoningEffortIncompatible}
+                >
+                  {reasoningEffortIncompatible && <option value={selectedReasoningEffort} disabled>{selectedReasoningEffort} — incompatível; escolha um nível permitido</option>}
+                  {reasoningEffortOptions.map((effort) => {
+                    const labels = { default: "Padrão do modelo", none: "Nenhum", minimal: "Mínimo", low: "Baixo", medium: "Médio", high: "Alto", xhigh: "Muito alto", max: "Máximo" };
+                    return <option key={effort} value={effort}>{labels[effort] || effort}</option>;
+                  })}
+                </select>
+                <p id="reasoning-effort-help" className="mt-2 text-xs text-slate-500">
+                  Níveis mais altos podem aumentar latência, tokens de raciocínio e custo. “Padrão do modelo” omite o parâmetro e preserva o padrão do provider.
+                </p>
+                {reasoningEffortIncompatible && <p role="alert" className="mt-2 text-xs text-amber-700">O nível atual não é compatível com o modelo selecionado. Escolha uma opção permitida antes de salvar.</p>}
+                {!reasoningEffortIncompatible && reasoningCapabilities.status === "not_supported" && <p className="mt-2 text-xs text-slate-500">Este modelo não oferece níveis explícitos de raciocínio; o padrão do modelo será usado.</p>}
+                {!reasoningEffortIncompatible && reasoningCapabilities.status === "unknown" && <p className="mt-2 text-xs text-amber-700">Compatibilidade não confirmada para este modelo. Apenas o padrão do provider pode ser selecionado.</p>}
+              </div>
             </div>
             <div>
               <label htmlFor="company-field-7" className="mb-1 block text-xs text-slate-500">Limite de certeza</label>
@@ -933,7 +972,7 @@ export default function EmpresaDetalhes() {
 
           <ActionButton
             type="submit"
-            disabled={savingIaConfig}
+            disabled={savingIaConfig || reasoningEffortIncompatible}
           >
             <Save size={14} />
             {savingIaConfig ? "Salvando..." : "Salvar configuração do agente"}

@@ -71,6 +71,13 @@ agente_ferramentas = Table(
 
 class Empresa(Base):
     __tablename__ = "empresas"
+    __table_args__ = (
+        CheckConstraint(
+            "modelo_ia_reasoning_effort IS NULL OR modelo_ia_reasoning_effort IN "
+            "('none','minimal','low','medium','high','xhigh','max')",
+            name="ck_empresas_modelo_ia_reasoning_effort",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nome_empresa = Column(String, nullable=False)
@@ -99,6 +106,9 @@ class Empresa(Base):
     # Request profile for a model explicitly validated against the tenant's
     # OpenAI credential. Existing rows keep the legacy provider parameters.
     modelo_ia_request_profile = Column(String(32), nullable=False, default="legacy", server_default=sa_text("'legacy'"))
+    # Null means provider default. No backfill: existing tenants retain their
+    # current OpenAI request behavior until an administrator explicitly saves.
+    modelo_ia_reasoning_effort = Column(String(16), nullable=True)
     limite_certeza = Column(Float, nullable=False, default=0.65)
     limite_duvida = Column(Float, nullable=False, default=0.45)
     max_agentes_desempate = Column(Integer, nullable=False, default=3)
