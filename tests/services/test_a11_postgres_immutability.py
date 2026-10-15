@@ -23,15 +23,17 @@ async def test_prompt_versions_are_immutable_and_tenant_cascade_is_allowed():
         pytest.fail("A11_POSTGRES_TEST_DATABASE_URL must use a dedicated a11_ database")
     engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
     tenant_id, source_id, candidate_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    module_state_id, experiment_id, assignment_id, exposure_id = (uuid.uuid4() for _ in range(4))
+    conversation_id = uuid.uuid4()
     try:
         async with engine.begin() as connection:
             await connection.execute(text("INSERT INTO empresas(id) VALUES (:tenant_id)"), {"tenant_id": tenant_id})
             await connection.execute(text("""
                 INSERT INTO a11_prompt_versions
-                    (id, empresa_id, module_key, version_number, content, content_hash, change_summary, hypothesis, primary_metric)
+                    (id, empresa_id, module_key, version_number, content, content_hash, source_version_id, change_summary, hypothesis, primary_metric)
                 VALUES
-                    (:source_id, :tenant_id, 'qualification', 1, 'base', :source_hash, 'base', 'base', 'response_after_7d'),
-                    (:candidate_id, :tenant_id, 'qualification', 2, 'candidate', :candidate_hash, 'change', 'hypothesis', 'response_after_7d')
+                    (:source_id, :tenant_id, 'qualification', 1, 'base', :source_hash, NULL, 'base', 'base', 'response_after_7d'),
+                    (:candidate_id, :tenant_id, 'qualification', 2, 'candidate', :candidate_hash, :source_id, 'change', 'hypothesis', 'response_after_7d')
             """), {
                 "source_id": source_id,
                 "candidate_id": candidate_id,
@@ -39,6 +41,22 @@ async def test_prompt_versions_are_immutable_and_tenant_cascade_is_allowed():
                 "source_hash": "a" * 64,
                 "candidate_hash": "b" * 64,
             })
+            await connection.execute(text("""
+                INSERT INTO a11_prompt_module_states(id, empresa_id, module_key, stable_version_id, active_version_id)
+                VALUES (:id, :tenant_id, 'qualification', :source_id, :candidate_id)
+            """), {"id": module_state_id, "tenant_id": tenant_id, "source_id": source_id, "candidate_id": candidate_id})
+            await connection.execute(text("""
+                INSERT INTO a11_prompt_experiments(id, empresa_id, module_key, control_version_id, candidate_version_id, status)
+                VALUES (:id, :tenant_id, 'qualification', :source_id, :candidate_id, 'PAUSED')
+            """), {"id": experiment_id, "tenant_id": tenant_id, "source_id": source_id, "candidate_id": candidate_id})
+            await connection.execute(text("""
+                INSERT INTO a11_prompt_assignments(id, empresa_id, experiment_id, conversation_id, variant, prompt_version_id, assignment_hash)
+                VALUES (:id, :tenant_id, :experiment_id, :conversation_id, 'candidate', :candidate_id, :assignment_hash)
+            """), {"id": assignment_id, "tenant_id": tenant_id, "experiment_id": experiment_id, "conversation_id": conversation_id, "candidate_id": candidate_id, "assignment_hash": "c" * 64})
+            await connection.execute(text("""
+                INSERT INTO a11_prompt_exposures(id, empresa_id, experiment_id, assignment_id, conversation_id, variant, prompt_version_id, assignment_hash)
+                VALUES (:id, :tenant_id, :experiment_id, :assignment_id, :conversation_id, 'candidate', :candidate_id, :assignment_hash)
+            """), {"id": exposure_id, "tenant_id": tenant_id, "experiment_id": experiment_id, "assignment_id": assignment_id, "conversation_id": conversation_id, "candidate_id": candidate_id, "assignment_hash": "c" * 64})
 
         async with engine.begin() as connection:
             savepoint = await connection.begin_nested()
@@ -54,8 +72,15 @@ async def test_prompt_versions_are_immutable_and_tenant_cascade_is_allowed():
 
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM empresas WHERE id=:tenant_id"), {"tenant_id": tenant_id})
-            remaining = await connection.scalar(text("SELECT count(*) FROM a11_prompt_versions WHERE empresa_id=:tenant_id"), {"tenant_id": tenant_id})
-            assert remaining == 0
+            for table_name in (
+                "a11_prompt_versions",
+                "a11_prompt_module_states",
+                "a11_prompt_experiments",
+                "a11_prompt_assignments",
+                "a11_prompt_exposures",
+            ):
+                remaining = await connection.scalar(text(f"SELECT count(*) FROM {table_name} WHERE empresa_id=:tenant_id"), {"tenant_id": tenant_id})
+                assert remaining == 0, f"tenant cascade left rows in {table_name}"
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM empresas WHERE id=:tenant_id"), {"tenant_id": tenant_id})

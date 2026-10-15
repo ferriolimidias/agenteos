@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS a11_prompt_module_states (
     id UUID PRIMARY KEY,
     empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
     module_key VARCHAR(64) NOT NULL,
-    stable_version_id UUID NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
-    active_version_id UUID NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
+    stable_version_id UUID NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+    active_version_id UUID NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
     state VARCHAR(24) NOT NULL DEFAULT 'OFFLINE' CHECK (state IN ('OFFLINE','SHADOW','READY_FOR_PILOT','LIVE_DISABLED','PAUSED','ROLLED_BACK')),
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_a11_module_state UNIQUE (empresa_id, module_key)
@@ -69,8 +69,8 @@ CREATE TABLE IF NOT EXISTS a11_prompt_experiments (
     id UUID PRIMARY KEY,
     empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
     module_key VARCHAR(64) NOT NULL,
-    control_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
-    candidate_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
+    control_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+    candidate_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
     assignment_unit VARCHAR(32) NOT NULL DEFAULT 'conversation' CHECK (assignment_unit = 'conversation'),
     candidate_percent INTEGER NOT NULL DEFAULT 50 CHECK (candidate_percent BETWEEN 1 AND 99),
     status VARCHAR(24) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','READY_FOR_PILOT','RUNNING','PAUSED','COMPLETED','ROLLED_BACK')),
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS a11_prompt_assignments (
     experiment_id UUID NOT NULL REFERENCES a11_prompt_experiments(id) ON DELETE CASCADE,
     conversation_id UUID NOT NULL,
     variant VARCHAR(16) NOT NULL CHECK (variant IN ('control','candidate')),
-    prompt_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
+    prompt_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
     assignment_hash VARCHAR(64) NOT NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned','exposed','generation_failed','guard_blocked')),
     assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS a11_prompt_exposures (
     assignment_id UUID NOT NULL UNIQUE REFERENCES a11_prompt_assignments(id) ON DELETE CASCADE,
     conversation_id UUID NOT NULL,
     variant VARCHAR(16) NOT NULL CHECK (variant IN ('control','candidate')),
-    prompt_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE RESTRICT,
+    prompt_version_id UUID NOT NULL REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
     assignment_hash VARCHAR(64) NOT NULL,
     exposed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     generation_latency_ms INTEGER,
@@ -152,11 +152,33 @@ CREATE TABLE IF NOT EXISTS a11_prompt_audits (
 CREATE INDEX IF NOT EXISTS ix_a11_audit_tenant_time ON a11_prompt_audits(empresa_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_a11_audit_tenant_version_approval ON a11_prompt_audits(empresa_id, object_type, action, object_id);
 
+-- Existing A11 deployments may have created the original RESTRICT constraints.
+-- Rebuild them as deferred NO ACTION so a tenant cascade can remove all related
+-- experiment state before PostgreSQL validates version references at commit.
+ALTER TABLE a11_prompt_module_states DROP CONSTRAINT IF EXISTS a11_prompt_module_states_stable_version_id_fkey;
+ALTER TABLE a11_prompt_module_states ADD CONSTRAINT a11_prompt_module_states_stable_version_id_fkey
+    FOREIGN KEY (stable_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE a11_prompt_module_states DROP CONSTRAINT IF EXISTS a11_prompt_module_states_active_version_id_fkey;
+ALTER TABLE a11_prompt_module_states ADD CONSTRAINT a11_prompt_module_states_active_version_id_fkey
+    FOREIGN KEY (active_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE a11_prompt_experiments DROP CONSTRAINT IF EXISTS a11_prompt_experiments_control_version_id_fkey;
+ALTER TABLE a11_prompt_experiments ADD CONSTRAINT a11_prompt_experiments_control_version_id_fkey
+    FOREIGN KEY (control_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE a11_prompt_experiments DROP CONSTRAINT IF EXISTS a11_prompt_experiments_candidate_version_id_fkey;
+ALTER TABLE a11_prompt_experiments ADD CONSTRAINT a11_prompt_experiments_candidate_version_id_fkey
+    FOREIGN KEY (candidate_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE a11_prompt_assignments DROP CONSTRAINT IF EXISTS a11_prompt_assignments_prompt_version_id_fkey;
+ALTER TABLE a11_prompt_assignments ADD CONSTRAINT a11_prompt_assignments_prompt_version_id_fkey
+    FOREIGN KEY (prompt_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE a11_prompt_exposures DROP CONSTRAINT IF EXISTS a11_prompt_exposures_prompt_version_id_fkey;
+ALTER TABLE a11_prompt_exposures ADD CONSTRAINT a11_prompt_exposures_prompt_version_id_fkey
+    FOREIGN KEY (prompt_version_id) REFERENCES a11_prompt_versions(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+
 CREATE OR REPLACE FUNCTION a11_prompt_version_immutable() RETURNS trigger AS $$
 BEGIN
     -- Tenant deletion must be able to cascade through the immutable history.
     -- While the tenant still exists, neither updates nor direct deletes are allowed.
-    IF EXISTS (SELECT 1 FROM empresas WHERE id = OLD.empresa_id) THEN
+    IF pg_trigger_depth() <= 1 AND EXISTS (SELECT 1 FROM empresas WHERE id = OLD.empresa_id) THEN
         RAISE EXCEPTION 'A11 prompt versions are immutable';
     END IF;
     IF TG_OP = 'DELETE' THEN
