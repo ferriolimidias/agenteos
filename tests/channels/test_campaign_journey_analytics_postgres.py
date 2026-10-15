@@ -151,6 +151,7 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 assert sum(fact["accepted_without_timestamp"] for fact in facts.values()) == 1
                 assert facts["unknown"]["cancelled"] == 1
                 assert facts["unknown"]["failed"] == 0
+                assert facts["unknown"]["unknown_status"] == 1
                 assert facts["unknown"]["consent_blocked"] == 1
                 session = AsyncSession(bind=connection)
                 delivery = await campaign_results_analytics(

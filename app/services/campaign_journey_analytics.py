@@ -449,6 +449,7 @@ SELECT f.campaign_id, f.origin_segment,
        count(*) FILTER (WHERE f.recipient_status = 'stopped') AS stopped,
        count(*) FILTER (WHERE f.recipient_status = 'blocked') AS blocked,
        count(*) FILTER (WHERE f.recipient_status IN ('queued', 'retry', 'locked', 'processing')) AS pending,
+       count(*) FILTER (WHERE f.recipient_status = 'unknown') AS unknown_status,
        count(*) FILTER (WHERE f.error_code = 'communication_consent_block') AS consent_blocked,
        count(*) FILTER (WHERE f.error_code = 'campaign_allowlist_block') AS allowlist_blocked,
        count(*) FILTER (WHERE f.error_code = 'TEMPLATE_VARIABLE_MISSING') AS template_blocked,
@@ -618,7 +619,13 @@ async def dashboard(session: AsyncSession, *, empresa_id: Any, **kwargs) -> dict
                 "template_blocked": int(outcome.get("template_blocked") or 0),
                 "other_recorded_failure": int(outcome.get("other_recorded_failure") or 0),
                 "current_opt_out": int(outcome.get("current_opt_out") or 0),
+                "recipient_status_coverage": {
+                    "unknown": int(outcome.get("unknown_status") or 0),
+                    "denominator": segment_total,
+                    "state": "partial" if capped or int(outcome.get("unknown_status") or 0) else ("observed" if segment_total else "unknown"),
+                },
                 "state": "partial" if capped or accepted_without_timestamp > 0
+                or int(outcome.get("unknown_status") or 0) > 0
                 or delivery_rates["delivered"]["state"] in {"partial", "unknown"}
                 or delivery_rates["read"]["state"] in {"partial", "unknown"}
                 or state_response in {"partial", "unknown"} or state_reactivation in {"partial", "unknown"}
@@ -689,7 +696,10 @@ async def dashboard(session: AsyncSession, *, empresa_id: Any, **kwargs) -> dict
                                      "other_recorded_failure": sum(int(row.get("other_recorded_failure") or 0) for row in outcomes),
                                  },
                                  "pending": sum(int(row.get("pending") or 0) for row in outcomes),
-                                 "state": "partial" if capped else ("observed" if sampled else "unknown")},
+                                 "unknown_status": sum(int(row.get("unknown_status") or 0) for row in outcomes),
+                                 "denominator": sampled,
+                                 "state": "partial" if capped or any(int(row.get("unknown_status") or 0) for row in outcomes)
+                                 else ("observed" if sampled else "unknown")},
         })
         provider_status_observed = sum(int(row.get("provider_status_observed") or 0) for row in outcomes)
         provider_delivery_observed = sum(int(row.get("provider_delivery_observed") or 0) for row in outcomes)

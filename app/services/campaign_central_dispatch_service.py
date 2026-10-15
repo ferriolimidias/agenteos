@@ -609,6 +609,8 @@ async def campaign_results_analytics(
 ) -> dict[str, Any]:
     if recipient_limit is not None and not 1 <= int(recipient_limit) <= 10_000:
         raise ValueError("recipient_limit must be between 1 and 10000")
+    if observed_at is not None and include_timeline:
+        raise ValueError("as-of campaign analytics do not include the live timeline")
     where_sql, extra_params = _results_filters(
         campaign_id=campaign_id,
         conexao_id=conexao_id,

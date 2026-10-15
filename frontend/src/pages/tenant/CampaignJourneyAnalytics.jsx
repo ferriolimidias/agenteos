@@ -218,7 +218,7 @@ export default function CampaignJourneyAnalytics({ campaigns = [] }) {
                 </ol>
                 <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
                   <p><b>Origem inicial</b> é agrupada pelo primeiro touch de aquisição persistido. <b>Assistência</b> é mostrada separadamente pelos toques `campaign_sent` e `campaign_reply` ligados ao destinatário.</p>
-                  <p className="mt-1">{number(currentCampaign.failed_cancelled?.failed)} falhas · {number(currentCampaign.failed_cancelled?.cancelled)} cancelados · {number(currentCampaign.failed_cancelled?.stopped)} parados · {number(currentCampaign.failed_cancelled?.blocked)} bloqueados</p>
+                  <p className="mt-1">{number(currentCampaign.failed_cancelled?.failed)} falhas · {number(currentCampaign.failed_cancelled?.cancelled)} cancelados · {number(currentCampaign.failed_cancelled?.stopped)} parados · {number(currentCampaign.failed_cancelled?.blocked)} bloqueados · {number(currentCampaign.failed_cancelled?.unknown_status)} status desconhecidos ({a10StateLabel(currentCampaign.failed_cancelled?.state)})</p>
                   <p className="mt-1">Bloqueios registrados: consentimento {number(currentCampaign.failed_cancelled?.reasons?.consent_block)} · lista permitida {number(currentCampaign.failed_cancelled?.reasons?.allowlist_block)} · variável de template ausente {number(currentCampaign.failed_cancelled?.reasons?.template_missing)} · demais falhas codificadas {number(currentCampaign.failed_cancelled?.reasons?.other_recorded_failure)}.</p>
                   <p className="mt-1">Tentativa não significa aceite; aceite não significa entrega. Ausência de evento de provider mantém cobertura parcial.</p>
                 </div>

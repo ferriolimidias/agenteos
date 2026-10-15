@@ -1,5 +1,11 @@
 import unittest
+import asyncio
 from pathlib import Path
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+import uuid
+
+from app.services.campaign_central_dispatch_service import campaign_results_analytics
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +20,13 @@ def rate(numerator: int, denominator: int) -> float:
 
 
 class CampaignResultsAnalyticsContractTest(unittest.TestCase):
+    def test_historical_as_of_query_rejects_live_timeline(self):
+        with self.assertRaisesRegex(ValueError, "do not include the live timeline"):
+            asyncio.run(campaign_results_analytics(
+                AsyncMock(), empresa_id=uuid.uuid4(),
+                observed_at=datetime(2026, 10, 14, tzinfo=timezone.utc),
+            ))
+
     def test_results_accepted_includes_delivered_and_read_contract(self):
         source = read("app/services/campaign_central_dispatch_service.py")
         self.assertIn("or status in ('sent', 'delivered', 'read')", source)

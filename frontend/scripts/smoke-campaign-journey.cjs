@@ -30,7 +30,7 @@ const dashboard = {
     verified_purchase_after_send: metric(0, 1),
     opt_out: { snapshot_exclusions: 1, current_recipients: 0 },
     campaign_assistance: { sent_touches: 3, reply_touches: 1 },
-    failed_cancelled: { failed: 0, cancelled: 0, stopped: 0, blocked: 0 },
+    failed_cancelled: { failed: 0, cancelled: 0, stopped: 0, blocked: 0, unknown_status: 0, denominator: 3, state: "observed" },
     funnel: [
       { key: "sent", label: "Aceitos pelo provider", value: 3, denominator: 3, state: "observed" },
       { key: "delivered", label: "Entregues", value: 2, denominator: 3, state: "partial" },
@@ -100,6 +100,7 @@ async function main() {
       await page.goto(`${baseUrl}/painel/campanhas/resultados/jornada`, { waitUntil: "networkidle" });
       await page.getByRole("heading", { name: /Jornada · Campanha sintética A10/ }).waitFor();
       await page.getByText("Respostas posteriores").first().waitFor();
+      await page.getByText(/0 status desconhecidos \(Observado\)/).waitFor();
       await page.getByRole("button", { name: "Nova campanha" }).waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Criar template" }).waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Ver destinatários" }).click();

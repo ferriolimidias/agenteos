@@ -111,6 +111,7 @@ class CampaignJourneyContractTests(unittest.TestCase):
             "stage_denominator": 0, "stage_comparable_denominator": 0, "stage_pending": 0,
             "purchase_denominator": 1, "purchase_pending": 1,
             "failed": 0, "cancelled": 0, "stopped": 0, "blocked": 0,
+            "unknown_status": 1,
             "pending": 0, "consent_blocked": 0, "allowlist_blocked": 0,
             "template_blocked": 0, "other_recorded_failure": 0,
         }
@@ -140,6 +141,10 @@ class CampaignJourneyContractTests(unittest.TestCase):
         self.assertEqual(campaign["verified_purchase_after_send"]["state"], "partial")
         self.assertEqual(campaign["stage_advance_after_send"]["state"], "unknown")
         self.assertEqual(campaign["opt_out"]["snapshot_exclusions"], 1)
+        self.assertEqual(campaign["failed_cancelled"]["unknown_status"], 1)
+        self.assertEqual(campaign["failed_cancelled"]["state"], "partial")
+        self.assertEqual(output["segments"][0]["recipient_status_coverage"]["unknown"], 1)
+        self.assertEqual(output["segments"][0]["recipient_status_coverage"]["state"], "partial")
         reply_step = next(step for step in campaign["funnel"] if step["key"] == "reply")
         self.assertEqual(reply_step["denominator"], 1)
         self.assertEqual(reply_step["value"], 0)
