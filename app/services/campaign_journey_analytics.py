@@ -200,6 +200,9 @@ WITH selected_campaigns AS (
            bool_or(ev.status = 'delivered') AS provider_delivered,
            bool_or(ev.status = 'read') AS provider_read,
            bool_or(ev.status IN ('sent', 'delivered', 'read', 'failed')) AS has_provider_status,
+           (array_agg(ev.status ORDER BY coalesce(ev.occurred_at, ev.created_at) DESC,
+                      CASE ev.status WHEN 'read' THEN 4 WHEN 'delivered' THEN 3 WHEN 'sent' THEN 2 ELSE 1 END DESC)
+             FILTER (WHERE ev.status IS NOT NULL))[1] AS last_event_status,
            min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'sent') AS event_sent_at,
            min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'delivered') AS event_delivered_at,
            min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'read') AS event_read_at
@@ -221,9 +224,26 @@ WITH selected_campaigns AS (
     LEFT JOIN message_attempts ma
       ON ma.empresa_id = mo.empresa_id AND ma.outbox_id = mo.id
      AND ma.provider = r.provider AND ma.conexao_id = r.conexao_id
-     AND (ma.finished_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-          OR (ma.finished_at IS NULL AND ma.started_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'))
+     AND ma.finished_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
     GROUP BY r.id
+), recipient_state AS MATERIALIZED (
+    SELECT r.*,
+           CASE WHEN r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.status
+                ELSE coalesce((
+                    SELECT state.status FROM (VALUES
+                        (r.sent_at, 'sent', 1), (r.delivered_at, 'delivered', 2),
+                        (r.read_at, 'read', 3), (r.failed_at, 'failed', 4),
+                        (r.cancelled_at, 'cancelled', 5)
+                    ) AS state(status_at, status, priority)
+                    WHERE state.status_at IS NOT NULL
+                      AND state.status_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                    ORDER BY state.status_at DESC, state.priority DESC LIMIT 1
+                ), sr.last_event_status, 'unknown')
+           END AS effective_status,
+           CASE WHEN r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                THEN r.error_code END AS effective_error_code
+    FROM recipients r
+    LEFT JOIN status_rollup sr ON sr.recipient_id = r.id
 ), accepted_recipients AS MATERIALIZED (
     SELECT r.*,
            coalesce(
@@ -240,7 +260,7 @@ WITH selected_campaigns AS (
            coalesce(ar.attempt_accepted, false) AS attempt_accepted,
            (
                r.external_message_id IS NOT NULL AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-               OR r.status IN ('sent', 'delivered', 'read') AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+               OR r.effective_status IN ('sent', 'delivered', 'read')
                OR r.sent_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
                OR r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
                OR r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
@@ -249,15 +269,15 @@ WITH selected_campaigns AS (
            (
                r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
                OR r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-               OR r.status IN ('delivered', 'read') AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+               OR r.effective_status IN ('delivered', 'read')
                OR coalesce(sr.provider_delivered, false) OR coalesce(sr.provider_read, false)
            ) AS delivery_confirmation_observed,
            (
                r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-               OR r.status = 'read' AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+               OR r.effective_status = 'read'
                OR coalesce(sr.provider_read, false)
            ) AS read_confirmation_observed
-    FROM recipients r
+    FROM recipient_state r
     LEFT JOIN status_rollup sr ON sr.recipient_id = r.id
     LEFT JOIN attempt_rollup ar ON ar.recipient_id = r.id
 ), stage_catalog AS (
@@ -265,7 +285,8 @@ WITH selected_campaigns AS (
 ), facts AS (
     SELECT r.id AS recipient_id, r.campanha_id AS campaign_id, r.empresa_id,
            r.lead_id, r.contact_id, r.conversation_id, r.conexao_id,
-           r.status AS recipient_status, r.error_code, r.sent_at, r.created_at,
+           r.effective_status AS recipient_status, r.effective_error_code AS error_code,
+           r.sent_at, r.created_at,
            r.effective_sent_at, r.is_accepted, r.has_provider_status,
            r.provider_delivered, r.provider_read,
            r.delivery_confirmation_observed, r.read_confirmation_observed,
@@ -276,7 +297,10 @@ WITH selected_campaigns AS (
                LEFT JOIN message_attempts ma ON ma.empresa_id = mo.empresa_id AND ma.outbox_id = mo.id
                WHERE mo.empresa_id = r.empresa_id AND mo.campaign_recipient_id = r.id
                  AND mo.provider = r.provider AND mo.conexao_id = r.conexao_id AND mo.channel = r.channel
-                 AND (mo.attempts > 0 OR (ma.id IS NOT NULL AND ma.provider = r.provider AND ma.conexao_id = r.conexao_id))
+                 AND (r.is_accepted
+                      OR (mo.attempts > 0 AND mo.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC')
+                      OR (ma.id IS NOT NULL AND ma.provider = r.provider AND ma.conexao_id = r.conexao_id
+                          AND ma.started_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'))
            ) AS attempted,
            EXISTS (
                SELECT 1 FROM mensagens_historico mh
@@ -785,7 +809,8 @@ async def recipients(session: AsyncSession, *, empresa_id: Any, campaign_id: str
         WITH candidates AS MATERIALIZED (
             SELECT r.id, r.empresa_id, r.campanha_id, r.lead_id, r.contact_id, r.conversation_id,
                    r.conexao_id, r.provider, r.channel, r.external_message_id, r.updated_at,
-                   r.status, r.sent_at, r.created_at, r.delivered_at, r.read_at
+                   r.status, r.error_code, r.sent_at, r.created_at, r.delivered_at, r.read_at,
+                   r.failed_at, r.cancelled_at
             FROM campaign_recipients r
             WHERE r.empresa_id = :tenant AND r.campanha_id = :campaign_id
               AND coalesce(r.sent_at,r.created_at) >= :period_start
@@ -793,26 +818,30 @@ async def recipients(session: AsyncSession, *, empresa_id: Any, campaign_id: str
               AND coalesce(r.sent_at,r.created_at) <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
             ORDER BY coalesce(r.sent_at,r.created_at), r.id
             LIMIT :sample_limit
-        ), candidate_evidence AS MATERIALIZED (
+        ), candidate_state AS MATERIALIZED (
             SELECT r.*,
-                   coalesce(
-                       CASE WHEN r.sent_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.sent_at END,
-                       status_event.event_sent_at, status_event.event_delivered_at, status_event.event_read_at,
-                       CASE WHEN r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.delivered_at END,
-                       CASE WHEN r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.read_at END,
-                       attempt.accepted_at
-                   ) AS effective_sent_at,
-                   (
-                       r.external_message_id IS NOT NULL AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR r.status IN ('sent', 'delivered', 'read') AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR r.sent_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR status_event.status_accepted OR attempt.is_accepted
-                   ) AS is_accepted
+                   CASE WHEN r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.status
+                        ELSE coalesce((
+                            SELECT state.status FROM (VALUES
+                                (r.sent_at, 'sent', 1), (r.delivered_at, 'delivered', 2),
+                                (r.read_at, 'read', 3), (r.failed_at, 'failed', 4),
+                                (r.cancelled_at, 'cancelled', 5)
+                            ) AS state(status_at, status, priority)
+                            WHERE state.status_at IS NOT NULL
+                              AND state.status_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                            ORDER BY state.status_at DESC, state.priority DESC LIMIT 1
+                        ), status_event.last_status, 'unknown')
+                   END AS effective_status,
+                   CASE WHEN r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                        THEN r.error_code END AS effective_error_code,
+                   status_event.status_accepted, status_event.event_sent_at,
+                   status_event.event_delivered_at, status_event.event_read_at
             FROM candidates r
             LEFT JOIN LATERAL (
                 SELECT bool_or(ev.status IN ('sent', 'delivered', 'read')) AS status_accepted,
+                       (array_agg(ev.status ORDER BY coalesce(ev.occurred_at, ev.created_at) DESC,
+                                  CASE ev.status WHEN 'read' THEN 4 WHEN 'delivered' THEN 3 WHEN 'sent' THEN 2 ELSE 1 END DESC)
+                         FILTER (WHERE ev.status IS NOT NULL))[1] AS last_status,
                        min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'sent') AS event_sent_at,
                        min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'delivered') AS event_delivered_at,
                        min(coalesce(ev.occurred_at, ev.created_at)) FILTER (WHERE ev.status = 'read') AS event_read_at
@@ -822,6 +851,24 @@ async def recipients(session: AsyncSession, *, empresa_id: Any, campaign_id: str
                   AND ev.external_message_id = r.external_message_id
                   AND coalesce(ev.occurred_at, ev.created_at) <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
             ) status_event ON true
+        ), candidate_evidence AS MATERIALIZED (
+            SELECT r.*,
+                   coalesce(
+                       CASE WHEN r.sent_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.sent_at END,
+                       r.event_sent_at, r.event_delivered_at, r.event_read_at,
+                       CASE WHEN r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.delivered_at END,
+                       CASE WHEN r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN r.read_at END,
+                       attempt.accepted_at
+                   ) AS effective_sent_at,
+                   (
+                       r.external_message_id IS NOT NULL AND r.updated_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                       OR r.effective_status IN ('sent', 'delivered', 'read')
+                       OR r.sent_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                       OR r.delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                       OR r.read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
+                       OR r.status_accepted OR attempt.is_accepted
+                   ) AS is_accepted
+            FROM candidate_state r
             LEFT JOIN LATERAL (
                 SELECT bool_or(ma.result_status IN ('accepted', 'sent', 'completed') AND ma.external_message_id IS NOT NULL) AS is_accepted,
                        min(ma.finished_at) FILTER (WHERE ma.result_status IN ('accepted', 'sent', 'completed') AND ma.external_message_id IS NOT NULL) AS accepted_at
@@ -830,8 +877,7 @@ async def recipients(session: AsyncSession, *, empresa_id: Any, campaign_id: str
                 WHERE mo.empresa_id = r.empresa_id AND mo.campaign_recipient_id = r.id
                   AND mo.provider = r.provider AND mo.conexao_id = r.conexao_id AND mo.channel = r.channel
                   AND ma.provider = r.provider AND ma.conexao_id = r.conexao_id
-                  AND (ma.finished_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
-                       OR (ma.finished_at IS NULL AND ma.started_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'))
+                  AND ma.finished_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC'
             ) attempt ON true
         ), stage_catalog AS (
             SELECT * FROM jsonb_to_recordset(CAST(:stages_json AS jsonb)) AS s(key text, "order" integer)
@@ -924,7 +970,7 @@ async def recipients(session: AsyncSession, *, empresa_id: Any, campaign_id: str
                 ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1
             ) prior_stage ON true
         )
-        SELECT id AS recipient_id, lead_id, conversation_id, status,
+        SELECT id AS recipient_id, lead_id, conversation_id, effective_status AS status,
                effective_sent_at AS sent_at,
                CASE WHEN delivered_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN delivered_at END AS delivered_at,
                CASE WHEN read_at <= CAST(:observed_at AS timestamptz) AT TIME ZONE 'UTC' THEN read_at END AS read_at,

@@ -625,6 +625,7 @@ async def campaign_results_analytics(
     accepted_fallback = "sr.event_sent_at, ar.attempt_accepted_at"
     status_acceptance_clause = "or status in ('sent', 'delivered', 'read')"
     status_delivery_clause = "or status in ('delivered', 'read')"
+    recipient_status_expr = "r.status"
     if observed_at is not None:
         # Campaign timestamp columns are stored as naive UTC. Convert callers' UTC
         # instants at the boundary so comparisons do not depend on DB timezone.
@@ -632,13 +633,21 @@ async def campaign_results_analytics(
         params["observed_at"] = observed_at
         as_of_clause = " and coalesce(r.sent_at, r.created_at) <= :observed_at"
         status_as_of_clause = " and coalesce(ev.occurred_at, ev.created_at) <= :observed_at"
-        attempt_as_of_clause = " and (ma.finished_at <= :observed_at or (ma.finished_at is null and ma.started_at <= :observed_at))"
+        attempt_as_of_clause = " and ma.finished_at <= :observed_at"
         status_scope_clause = " and ev.conexao_id = r.conexao_id and ev.channel = r.channel"
         attempt_scope_clause = " and mo.provider = r.provider and mo.conexao_id = r.conexao_id and mo.channel = r.channel and ma.provider = r.provider and ma.conexao_id = r.conexao_id"
         status_event_timestamp = "coalesce(ev.occurred_at, ev.created_at)"
         accepted_fallback = "sr.event_sent_at, sr.event_delivered_at, sr.event_read_at, ar.attempt_accepted_at"
-        status_acceptance_clause = "or (status in ('sent', 'delivered', 'read') and updated_at <= :observed_at)"
-        status_delivery_clause = "or (status in ('delivered', 'read') and updated_at <= :observed_at)"
+        recipient_status_expr = """case when r.updated_at <= :observed_at then r.status else coalesce((
+            select state.status from (values
+                (r.sent_at, 'sent', 1), (r.delivered_at, 'delivered', 2),
+                (r.read_at, 'read', 3), (r.failed_at, 'failed', 4), (r.cancelled_at, 'cancelled', 5)
+            ) as state(status_at, status, priority)
+            where state.status_at is not null and state.status_at <= :observed_at
+            order by state.status_at desc, state.priority desc limit 1
+        ), 'unknown') end"""
+        status_acceptance_clause = "or observed_status in ('sent', 'delivered', 'read')"
+        status_delivery_clause = "or observed_status in ('delivered', 'read')"
     recipient_sent_at = "r.sent_at" if observed_at is None else "case when r.sent_at <= :observed_at then r.sent_at end"
     recipient_delivered_at = "r.delivered_at" if observed_at is None else "case when r.delivered_at <= :observed_at then r.delivered_at end"
     recipient_read_at = "r.read_at" if observed_at is None else "case when r.read_at <= :observed_at then r.read_at end"
@@ -735,6 +744,7 @@ async def campaign_results_analytics(
         recipient_facts as (
             select
                 r.*,
+                {recipient_status_expr} as observed_status,
                 coalesce(sr.event_sent, false) as event_sent,
                 coalesce(sr.event_delivered, false) as event_delivered,
                 coalesce(sr.event_read, false) as event_read,
@@ -776,11 +786,11 @@ async def campaign_results_analytics(
                 ) as is_delivered,
                 (
                     read_stage_at is not null
-                    or (status = 'read' and {status_updated_clause})
+                    or (observed_status = 'read' and {status_updated_clause})
                     or event_read
                 ) as is_read,
                 (
-                    (failed_stage_at is not null or (status in ('failed', 'blocked') and {status_updated_clause}) or event_failed)
+                    (failed_stage_at is not null or (observed_status in ('failed', 'blocked') and {status_updated_clause}) or event_failed)
                     and not (
                         delivered_stage_at is not null
                         or read_stage_at is not null
@@ -789,7 +799,7 @@ async def campaign_results_analytics(
                         or event_read
                     )
                 ) as is_failed,
-                status in ('queued', 'locked', 'retry', 'processing') as is_pending
+                observed_status in ('queued', 'locked', 'retry', 'processing') as is_pending
             from recipient_facts
         ),
         replies as (

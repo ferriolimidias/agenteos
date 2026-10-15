@@ -26,15 +26,15 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
     engine = create_async_engine(database_url, pool_pre_ping=True)
     tenant_id, other_tenant = uuid.uuid4(), uuid.uuid4()
     campaign_id = uuid.uuid4()
-    recipient_id, other_recipient, cancelled_recipient, fallback_recipient, untimed_recipient, future_recipient = [uuid.uuid4() for _ in range(6)]
+    recipient_id, other_recipient, cancelled_recipient, fallback_recipient, untimed_recipient, future_recipient, future_update_recipient = [uuid.uuid4() for _ in range(7)]
     lead_id, contact_id, conversation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     connection_id = uuid.uuid4()
     sent_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
     observed_at = datetime(2026, 10, 20, tzinfo=timezone.utc)
 
     ddl = [
-        "CREATE TEMP TABLE campaign_recipients (id uuid, empresa_id uuid, campanha_id uuid, lead_id uuid, contact_id uuid, conversation_id uuid, conexao_id uuid, provider text, channel text, external_message_id text, status text, error_code text, sent_at timestamp, created_at timestamp, delivered_at timestamp, read_at timestamp, failed_at timestamp, updated_at timestamp)",
-        "CREATE TEMP TABLE message_outbox (id uuid, empresa_id uuid, campaign_recipient_id uuid, provider text, conexao_id uuid, channel text, attempts integer)",
+        "CREATE TEMP TABLE campaign_recipients (id uuid, empresa_id uuid, campanha_id uuid, lead_id uuid, contact_id uuid, conversation_id uuid, conexao_id uuid, provider text, channel text, external_message_id text, status text, error_code text, sent_at timestamp, created_at timestamp, delivered_at timestamp, read_at timestamp, failed_at timestamp, cancelled_at timestamp, updated_at timestamp)",
+        "CREATE TEMP TABLE message_outbox (id uuid, empresa_id uuid, campaign_recipient_id uuid, provider text, conexao_id uuid, channel text, attempts integer, updated_at timestamp)",
         "CREATE TEMP TABLE message_attempts (id uuid, empresa_id uuid, outbox_id uuid, provider text, conexao_id uuid, result_status text, external_message_id text, finished_at timestamp, started_at timestamp)",
         "CREATE TEMP TABLE mensagens_historico (id uuid, empresa_id uuid, channel_conversation_id uuid, direction text, from_me boolean, tipo_mensagem text, metadata_json jsonb, criado_em timestamp)",
         "CREATE TEMP TABLE attribution_touches (id uuid, empresa_id uuid, campaign_recipient_id uuid, outbound_campaign_id uuid, event_kind text, occurred_at timestamptz, lead_id uuid, contact_id uuid, conversation_id uuid)",
@@ -50,12 +50,13 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                     await connection.exec_driver_sql(statement)
                 await connection.execute(text("""
                     INSERT INTO campaign_recipients VALUES
-                    (:id, :tenant, :campaign, :lead, :contact, :conversation, :connection, 'meta', 'whatsapp', 'wamid-a10-test', 'sent', NULL, :sent, :sent, NULL, NULL, NULL, :sent),
-                    (:other_id, :other_tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-other-tenant', 'sent', NULL, :sent, :sent, NULL, NULL, NULL, :sent),
-                    (:cancelled_id, :tenant, :campaign, NULL, :cancelled_contact, NULL, :connection, 'meta', 'whatsapp', NULL, 'cancelled', 'communication_consent_block', NULL, :sent, NULL, NULL, NULL, :sent),
-                    (:fallback_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'queued', NULL, NULL, :sent, NULL, NULL, NULL, :sent),
-                    (:untimed_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'queued', NULL, NULL, :sent, NULL, NULL, NULL, :sent),
-                    (:future_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-future', 'sent', NULL, :future, :future, NULL, NULL, NULL, :future)
+                    (:id, :tenant, :campaign, :lead, :contact, :conversation, :connection, 'meta', 'whatsapp', 'wamid-a10-test', 'delivered', NULL, :sent, :sent, NULL, NULL, NULL, NULL, :future),
+                    (:other_id, :other_tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-other-tenant', 'sent', NULL, :sent, :sent, NULL, NULL, NULL, NULL, :sent),
+                    (:cancelled_id, :tenant, :campaign, NULL, :cancelled_contact, NULL, :connection, 'meta', 'whatsapp', NULL, 'cancelled', 'communication_consent_block', NULL, :sent, NULL, NULL, NULL, :sent, :sent),
+                    (:fallback_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'queued', NULL, NULL, :sent, NULL, NULL, NULL, NULL, :sent),
+                    (:untimed_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-untimed', 'sent', NULL, NULL, :sent, NULL, NULL, NULL, NULL, :sent),
+                    (:future_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-future', 'sent', NULL, :future, :future, NULL, NULL, NULL, NULL, :future),
+                    (:future_update_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'failed', 'future_failure', NULL, :sent, NULL, NULL, :future, NULL, :future)
                 """), {
                     "id": recipient_id, "other_id": other_recipient, "tenant": tenant_id,
                     "other_tenant": other_tenant, "campaign": campaign_id, "lead": lead_id,
@@ -63,23 +64,26 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                     "cancelled_id": cancelled_recipient, "cancelled_contact": uuid.uuid4(),
                     "connection": connection_id, "sent": sent_at.replace(tzinfo=None),
                     "fallback_id": fallback_recipient, "untimed_id": untimed_recipient,
-                    "future_id": future_recipient,
+                    "future_id": future_recipient, "future_update_id": future_update_recipient,
                     "future": datetime(2026, 10, 21),
                 })
                 outbox_id = uuid.uuid4()
                 fallback_outbox_id = uuid.uuid4()
                 untimed_outbox_id = uuid.uuid4()
-                await connection.execute(text("INSERT INTO message_outbox VALUES (:id, :tenant, :recipient, 'meta', :connection, 'whatsapp', 1), (:fallback_outbox, :tenant, :fallback_recipient, 'meta', :connection, 'whatsapp', 1), (:untimed_outbox, :tenant, :untimed_recipient, 'meta', :connection, 'whatsapp', 1)"),
+                future_outbox_id = uuid.uuid4()
+                await connection.execute(text("INSERT INTO message_outbox VALUES (:id, :tenant, :recipient, 'meta', :connection, 'whatsapp', 1, :sent), (:fallback_outbox, :tenant, :fallback_recipient, 'meta', :connection, 'whatsapp', 1, :sent), (:untimed_outbox, :tenant, :untimed_recipient, 'meta', :connection, 'whatsapp', 1, :future), (:future_outbox, :tenant, :future_update_recipient, 'meta', :connection, 'whatsapp', 1, :future)"),
                                          {"id": outbox_id, "tenant": tenant_id, "recipient": recipient_id,
                                           "fallback_outbox": fallback_outbox_id, "fallback_recipient": fallback_recipient,
                                           "untimed_outbox": untimed_outbox_id, "untimed_recipient": untimed_recipient,
-                                          "connection": connection_id})
-                await connection.execute(text("INSERT INTO message_attempts VALUES (:id, :tenant, :outbox, 'meta', :connection, 'accepted', 'wamid-a10-test', :finished, :started), (:fallback_attempt, :tenant, :fallback_outbox, 'meta', :connection, 'accepted', 'wamid-fallback', :finished, :started), (:untimed_attempt, :tenant, :untimed_outbox, 'meta', :connection, 'accepted', 'wamid-untimed', NULL, :started)"),
+                                          "future_outbox": future_outbox_id, "future_update_recipient": future_update_recipient,
+                                          "connection": connection_id, "sent": sent_at.replace(tzinfo=None),
+                                          "future": datetime(2026, 10, 21)})
+                await connection.execute(text("INSERT INTO message_attempts VALUES (:id, :tenant, :outbox, 'meta', :connection, 'accepted', 'wamid-a10-test', :finished, :started), (:fallback_attempt, :tenant, :fallback_outbox, 'meta', :connection, 'accepted', 'wamid-fallback', :finished, :started), (:future_attempt, :tenant, :future_outbox, 'meta', :connection, 'started', NULL, NULL, :future)"),
                                          {"id": uuid.uuid4(), "tenant": tenant_id, "outbox": outbox_id,
                                           "fallback_attempt": uuid.uuid4(), "fallback_outbox": fallback_outbox_id,
-                                          "untimed_attempt": uuid.uuid4(), "untimed_outbox": untimed_outbox_id,
+                                          "future_attempt": uuid.uuid4(), "future_outbox": future_outbox_id,
                                           "connection": connection_id, "finished": sent_at.replace(tzinfo=None),
-                                          "started": sent_at.replace(tzinfo=None)})
+                                          "started": sent_at.replace(tzinfo=None), "future": datetime(2026, 10, 21)})
                 await connection.execute(text("""
                     INSERT INTO mensagens_historico VALUES
                     (:prior_id, :tenant, :conversation, 'inbound', false, 'text', '{}'::jsonb, :prior),
@@ -131,7 +135,7 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 rows = result.mappings().all()
                 facts = {row["origin_segment"]: dict(row) for row in rows}
                 assert set(facts) == {"ctwa_referral", "unknown"}
-                assert sum(fact["sampled_recipients"] for fact in facts.values()) == 4
+                assert sum(fact["sampled_recipients"] for fact in facts.values()) == 5
                 assert sum(fact["attempted"] for fact in facts.values()) == 3
                 assert facts["ctwa_referral"]["replied"] == 1
                 assert facts["ctwa_referral"]["reactivated"] == 1
@@ -146,6 +150,7 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 assert sum(fact["sent_recipients"] for fact in facts.values()) == 3
                 assert sum(fact["accepted_without_timestamp"] for fact in facts.values()) == 1
                 assert facts["unknown"]["cancelled"] == 1
+                assert facts["unknown"]["failed"] == 0
                 assert facts["unknown"]["consent_blocked"] == 1
                 session = AsyncSession(bind=connection)
                 delivery = await campaign_results_analytics(
@@ -154,7 +159,7 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                     include_timeline=False, observed_at=observed_at.replace(tzinfo=None),
                     recipient_limit=10_000,
                 )
-                assert delivery["metrics"]["audience_total"] == 4
+                assert delivery["metrics"]["audience_total"] == 5
                 assert delivery["metrics"]["meta_accepted"] == 3
                 assert delivery["metrics"]["delivered"] == 0
                 assert delivery["metrics"]["read"] == 0
@@ -163,7 +168,7 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                     period_start=datetime(2026, 9, 1), period_end=datetime(2026, 11, 1),
                     include_timeline=False, recipient_limit=10_000,
                 )
-                assert unbounded_delivery["metrics"]["audience_total"] == 5
+                assert unbounded_delivery["metrics"]["audience_total"] == 6
                 with patch.object(journey, "_selected_campaigns", new=AsyncMock(return_value=[(campaign_id, "Campanha sintética")])):
                     with patch.object(journey, "load_funnel_configuration", new=AsyncMock(return_value=[])):
                         details = await journey.recipients(
@@ -172,10 +177,13 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                             end=observed_at, observed_at=observed_at, now=observed_at, limit=100,
                         )
                 detail_items = {str(item["recipient_id"]): item for item in details["items"]}
-                assert len(detail_items) == 4
+                assert len(detail_items) == 5
                 assert detail_items[str(fallback_recipient)]["sent_at"] == sent_at.replace(tzinfo=None)
                 assert detail_items[str(untimed_recipient)]["is_accepted"] is True
                 assert detail_items[str(untimed_recipient)]["acceptance_time_unknown"] is True
+                assert detail_items[str(recipient_id)]["status"] == "sent"
+                assert detail_items[str(future_update_recipient)]["status"] == "unknown"
+                assert detail_items[str(future_update_recipient)]["is_accepted"] is False
                 await session.close()
                 await transaction.rollback()
             except BaseException:
