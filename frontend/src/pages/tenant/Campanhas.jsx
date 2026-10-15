@@ -29,6 +29,7 @@ import {
 import "../../styles/ux05-automation.css";
 
 import MetaTemplateSelector from "../../components/MetaTemplateSelector";
+import CampaignJourneyAnalytics from "./CampaignJourneyAnalytics";
 import api from "../../services/api";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, MetricCard, PageHeader, StatusBadge } from "../../components/ui";
 import { getActiveEmpresaId } from "../../utils/auth";
@@ -39,6 +40,7 @@ const tabs = [
   { id: "templates", label: "Templates", path: "/painel/campanhas/templates", icon: FileText },
   { id: "audiences", label: "Públicos", path: "/painel/campanhas/publicos", icon: Users },
   { id: "results", label: "Resultados", path: "/painel/campanhas/resultados", icon: CheckCircle2 },
+  { id: "journey", label: "Jornada A10", path: "/painel/campanhas/resultados/jornada", icon: GitBranch },
   { id: "costs", label: "Custos", path: "/painel/campanhas/resultados/custos", icon: DollarSign },
   { id: "conversions", label: "Conversões", path: "/painel/campanhas/resultados/conversoes", icon: GitBranch },
 ];
@@ -157,6 +159,7 @@ function templateHeaderLocalMedia(file) {
 function activeTabFromPath(pathname) {
   if (pathname.includes("/templates")) return "templates";
   if (pathname.includes("/publicos")) return "audiences";
+  if (pathname.includes("/resultados/jornada")) return "journey";
   if (pathname.includes("/resultados/custos")) return "costs";
   if (pathname.includes("/resultados/conversoes")) return "conversions";
   if (pathname.includes("/resultados")) return "results";
@@ -1213,14 +1216,18 @@ export default function Campanhas() {
     <div className="fm-automation fm-campaigns space-y-6">
       <PageHeader
         title="Central de Campanhas"
-        description="Campanhas, templates, públicos, custos e conversões em uma operação única. Follow-ups continuam em área própria."
+        description={activeTab === "journey"
+          ? "Análise somente leitura da jornada e dos resultados persistidos das campanhas de WhatsApp."
+          : "Campanhas, templates, públicos, custos e conversões em uma operação única. Follow-ups continuam em área própria."}
         icon={Megaphone}
-        eyebrow="Operação"
+        eyebrow={activeTab === "journey" ? "Análise" : "Operação"}
         actions={
           <>
             <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={loadData}>Atualizar</ActionButton>
-            <ActionButton type="button" icon={Plus} onClick={() => navigate("/painel/campanhas/nova")}>Nova campanha</ActionButton>
-            <ActionButton type="button" variant="secondary" icon={FileText} onClick={() => navigate("/painel/campanhas/templates/novo")}>Criar template</ActionButton>
+            {activeTab !== "journey" ? <>
+              <ActionButton type="button" icon={Plus} onClick={() => navigate("/painel/campanhas/nova")}>Nova campanha</ActionButton>
+              <ActionButton type="button" variant="secondary" icon={FileText} onClick={() => navigate("/painel/campanhas/templates/novo")}>Criar template</ActionButton>
+            </> : null}
           </>
         }
       />
@@ -1238,6 +1245,8 @@ export default function Campanhas() {
       </nav>
 
       {message ? <InfoBanner tone={message.includes("não") || message.includes("Revise") ? "warning" : "success"}>{message}</InfoBanner> : null}
+
+      {activeTab === "journey" ? <CampaignJourneyAnalytics campaigns={campaigns} /> : null}
 
       {activeTab === "overview" ? (
         <div className="space-y-5">

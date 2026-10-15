@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routers.auth import require_tenant_access
@@ -51,6 +51,9 @@ from app.services.campaign_central_dispatch_service import (
     resume_campaign,
     start_campaign_from_snapshot,
 )
+from app.services.campaign_journey_analytics import dashboard as campaign_journey_dashboard
+from app.services.campaign_journey_analytics import enabled as campaign_journey_enabled
+from app.services.campaign_journey_analytics import recipients as campaign_journey_recipients
 from app.api.routers.meta_templates import _provider_for_connection
 from app.services.channels.providers.meta_whatsapp import MetaWhatsAppError
 from app.services.meta.image_validation import ImageValidationError
@@ -386,6 +389,86 @@ async def results_analytics_endpoint(
         period_start=_datetime_or_400(period_start, "period_start"),
         period_end=_datetime_or_400(period_end, "period_end"),
     )
+
+
+def _campaign_journey_ids(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts or len(parts) > 5:
+        raise HTTPException(status_code=422, detail="Selecione entre uma e cinco campanhas para comparar.")
+    return [str(_uuid_or_400(part, "campaign_id")) for part in parts]
+
+
+async def _campaign_journey_call(service, db, empresa_id, **kwargs):
+    if not campaign_journey_enabled():
+        raise HTTPException(status_code=404, detail="Análise de jornada de campanhas indisponível.")
+    try:
+        return await service(db, empresa_id=_uuid_or_400(empresa_id, "empresa_id"), **kwargs)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Campanha ou evidência indisponível.") from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Filtro de jornada de campanha inválido.") from exc
+
+
+@router.get("/journey")
+async def campaign_journey_analytics_endpoint(
+    empresa_id: str,
+    response: Response,
+    campaign_ids: str | None = Query(default=None, max_length=200),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    observed_at: datetime | None = Query(default=None),
+    response_window_days: int = Query(default=7, ge=1, le=30),
+    reactivation_days: int = Query(default=7, ge=1, le=90),
+    stage_window_days: int = Query(default=30, ge=1, le=90),
+    purchase_window_days: int = Query(default=30, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    result = await _campaign_journey_call(
+        campaign_journey_dashboard, db, empresa_id,
+        campaign_ids=_campaign_journey_ids(campaign_ids), start=start, end=end,
+        observed_at=observed_at, response_window_days=response_window_days,
+        reactivation_days=reactivation_days, stage_window_days=stage_window_days,
+        purchase_window_days=purchase_window_days,
+    )
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
+
+
+@router.get("/journey/recipients")
+async def campaign_journey_recipients_endpoint(
+    empresa_id: str,
+    response: Response,
+    campaign_id: str,
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    observed_at: datetime | None = Query(default=None),
+    response_window_days: int = Query(default=7, ge=1, le=30),
+    reactivation_days: int = Query(default=7, ge=1, le=90),
+    stage_window_days: int = Query(default=30, ge=1, le=90),
+    purchase_window_days: int = Query(default=30, ge=1, le=90),
+    segment: str | None = Query(default=None, pattern="^(ctwa_referral|tracked_link_click|manual_touch|unknown_source|unknown)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    result = await _campaign_journey_call(
+        campaign_journey_recipients, db, empresa_id,
+        campaign_id=str(_uuid_or_400(campaign_id, "campaign_id")),
+        start=start, end=end, observed_at=observed_at, segment=segment,
+        response_window_days=response_window_days, reactivation_days=reactivation_days,
+        stage_window_days=stage_window_days, purchase_window_days=purchase_window_days,
+        limit=limit, offset=offset,
+    )
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
 
 
 @router.get("/audiences/tags")

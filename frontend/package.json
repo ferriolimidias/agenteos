@@ -17,6 +17,7 @@
     "test:followups": "node --test src/pages/tenant/TenantFollowUps.test.js",
     "test:crm": "node --test src/pages/tenant/CrmCampaignCentral.test.js",
     "test:costs-conversions": "node --test src/pages/tenant/CostsConversions.test.js",
+    "test:a10-browser": "node scripts/smoke-campaign-journey.cjs",
     "preview": "vite preview",
     "validate:artifacts": "node scripts/validate-panel-artifacts.mjs --root dist",
     "test:artifacts": "node --test scripts/validate-panel-artifacts.test.mjs",

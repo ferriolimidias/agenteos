@@ -7,7 +7,7 @@ import logging
 import os
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -602,7 +602,13 @@ async def campaign_results_analytics(
     conexao_id: uuid.UUID | None = None,
     period_start: datetime | None = None,
     period_end: datetime | None = None,
+    include_timeline: bool = True,
+    include_segments: bool = False,
+    recipient_limit: int | None = None,
+    observed_at: datetime | None = None,
 ) -> dict[str, Any]:
+    if recipient_limit is not None and not 1 <= int(recipient_limit) <= 10_000:
+        raise ValueError("recipient_limit must be between 1 and 10000")
     where_sql, extra_params = _results_filters(
         campaign_id=campaign_id,
         conexao_id=conexao_id,
@@ -610,11 +616,83 @@ async def campaign_results_analytics(
         period_end=period_end,
     )
     params = {"empresa_id": str(empresa_id), **extra_params}
+    as_of_clause = ""
+    status_as_of_clause = ""
+    attempt_as_of_clause = ""
+    status_scope_clause = ""
+    attempt_scope_clause = ""
+    status_event_timestamp = "ev.occurred_at"
+    accepted_fallback = "sr.event_sent_at, ar.attempt_accepted_at"
+    status_acceptance_clause = "or status in ('sent', 'delivered', 'read')"
+    status_delivery_clause = "or status in ('delivered', 'read')"
+    if observed_at is not None:
+        # Campaign timestamp columns are stored as naive UTC. Convert callers' UTC
+        # instants at the boundary so comparisons do not depend on DB timezone.
+        observed_at = observed_at.replace(tzinfo=None) if observed_at.tzinfo is None else observed_at.astimezone(timezone.utc).replace(tzinfo=None)
+        params["observed_at"] = observed_at
+        as_of_clause = " and coalesce(r.sent_at, r.created_at) <= :observed_at"
+        status_as_of_clause = " and coalesce(ev.occurred_at, ev.created_at) <= :observed_at"
+        attempt_as_of_clause = " and (ma.finished_at <= :observed_at or (ma.finished_at is null and ma.started_at <= :observed_at))"
+        status_scope_clause = " and ev.conexao_id = r.conexao_id and ev.channel = r.channel"
+        attempt_scope_clause = " and mo.provider = r.provider and mo.conexao_id = r.conexao_id and mo.channel = r.channel and ma.provider = r.provider and ma.conexao_id = r.conexao_id"
+        status_event_timestamp = "coalesce(ev.occurred_at, ev.created_at)"
+        accepted_fallback = "sr.event_sent_at, sr.event_delivered_at, sr.event_read_at, ar.attempt_accepted_at"
+        status_acceptance_clause = "or (status in ('sent', 'delivered', 'read') and updated_at <= :observed_at)"
+        status_delivery_clause = "or (status in ('delivered', 'read') and updated_at <= :observed_at)"
+    recipient_sent_at = "r.sent_at" if observed_at is None else "case when r.sent_at <= :observed_at then r.sent_at end"
+    recipient_delivered_at = "r.delivered_at" if observed_at is None else "case when r.delivered_at <= :observed_at then r.delivered_at end"
+    recipient_read_at = "r.read_at" if observed_at is None else "case when r.read_at <= :observed_at then r.read_at end"
+    recipient_failed_at = "r.failed_at" if observed_at is None else "case when r.failed_at <= :observed_at then r.failed_at end"
+    status_updated_clause = "true" if observed_at is None else "updated_at <= :observed_at"
+    reply_as_of_clause = "" if observed_at is None else " and mh.criado_em <= :observed_at"
+    if recipient_limit is not None:
+        params["recipient_limit"] = int(recipient_limit)
+    scoped_order_limit = (
+        " order by coalesce(r.sent_at, r.created_at), r.id limit :recipient_limit"
+        if recipient_limit is not None else ""
+    )
+    origin_cte = """
+        origin_rollup as (
+            select r.id as recipient_id, coalesce(origin.event_kind, 'unknown') as origin_segment
+            from scoped_recipients r
+            left join lateral (
+                select t.event_kind
+                from attribution_touches t
+                where t.empresa_id = r.empresa_id
+                  and t.event_kind in ('ctwa_referral', 'tracked_link_click', 'manual_touch', 'unknown_source')
+                  and t.occurred_at <= coalesce(r.sent_at, r.created_at) at time zone 'UTC'
+                  and ((r.lead_id is not null and t.lead_id = r.lead_id)
+                    or (r.lead_id is null and r.contact_id is not null and t.contact_id = r.contact_id)
+                    or (r.lead_id is null and r.contact_id is null and r.conversation_id is not null and t.conversation_id = r.conversation_id))
+                order by t.occurred_at asc, t.id asc
+                limit 1
+            ) origin on true
+        ),
+    """ if include_segments else ""
+    origin_join = " left join origin_rollup origin on origin.recipient_id = r.id " if include_segments else ""
+    origin_select = ", coalesce(origin.origin_segment, 'unknown') as origin_segment" if include_segments else ""
+    segments_select = """
+            , (select coalesce(jsonb_agg(to_jsonb(segment_row) order by segment_row.segment), '[]'::jsonb)
+               from (
+                    select c.origin_segment as segment,
+                           count(*) as audience_total,
+                           count(*) filter (where c.is_meta_accepted) as meta_accepted,
+                           count(*) filter (where c.is_delivered) as delivered,
+                           count(*) filter (where c.is_read) as read,
+                           count(*) filter (where c.is_failed) as failed,
+                           count(*) filter (where c.is_pending and not c.is_meta_accepted and not c.is_failed) as pending,
+                           count(replies.recipient_id) as replies
+                    from classified c
+                    left join replies on replies.recipient_id = c.id
+                    group by c.origin_segment
+               ) segment_row) as segments
+    """ if include_segments else ""
     metrics_sql = text(f"""
         with scoped_recipients as (
             select r.*
             from campaign_recipients r
-            where {where_sql}
+            where {where_sql}{as_of_clause}
+            {scoped_order_limit}
         ),
         status_rollup as (
             select
@@ -623,15 +701,17 @@ async def campaign_results_analytics(
                 bool_or(ev.status = 'delivered') as event_delivered,
                 bool_or(ev.status = 'read') as event_read,
                 bool_or(ev.status = 'failed') as event_failed,
-                min(ev.occurred_at) filter (where ev.status = 'sent') as event_sent_at,
-                min(ev.occurred_at) filter (where ev.status = 'delivered') as event_delivered_at,
-                min(ev.occurred_at) filter (where ev.status = 'read') as event_read_at,
-                min(ev.occurred_at) filter (where ev.status = 'failed') as event_failed_at
+                min({status_event_timestamp}) filter (where ev.status = 'sent') as event_sent_at,
+                min({status_event_timestamp}) filter (where ev.status = 'delivered') as event_delivered_at,
+                min({status_event_timestamp}) filter (where ev.status = 'read') as event_read_at,
+                min({status_event_timestamp}) filter (where ev.status = 'failed') as event_failed_at
             from scoped_recipients r
             left join message_status_events ev
               on ev.empresa_id = r.empresa_id
              and ev.provider = r.provider
              and ev.external_message_id = r.external_message_id
+             {status_scope_clause}
+             {status_as_of_clause}
             group by r.id
         ),
         attempt_rollup as (
@@ -647,8 +727,11 @@ async def campaign_results_analytics(
             left join message_attempts ma
               on ma.empresa_id = mo.empresa_id
              and ma.outbox_id = mo.id
+             {attempt_scope_clause}
+             {attempt_as_of_clause}
             group by r.id
         ),
+        {origin_cte}
         recipient_facts as (
             select
                 r.*,
@@ -658,21 +741,28 @@ async def campaign_results_analytics(
                 coalesce(sr.event_failed, false) as event_failed,
                 coalesce(ar.attempt_accepted, false) as attempt_accepted,
                 coalesce(ar.attempt_failed, false) as attempt_failed,
-                coalesce(r.sent_at, sr.event_sent_at, ar.attempt_accepted_at) as accepted_at,
-                coalesce(r.delivered_at, sr.event_delivered_at, r.read_at, sr.event_read_at) as delivered_stage_at,
-                coalesce(r.read_at, sr.event_read_at) as read_stage_at,
-                coalesce(r.failed_at, sr.event_failed_at) as failed_stage_at
+                coalesce({recipient_sent_at}, {accepted_fallback}) as accepted_at,
+                coalesce({recipient_delivered_at},
+                         sr.event_delivered_at,
+                         {recipient_read_at},
+                         sr.event_read_at) as delivered_stage_at,
+                coalesce({recipient_read_at},
+                         sr.event_read_at) as read_stage_at,
+                coalesce({recipient_failed_at},
+                         sr.event_failed_at) as failed_stage_at
+                {origin_select}
             from scoped_recipients r
             left join status_rollup sr on sr.recipient_id = r.id
             left join attempt_rollup ar on ar.recipient_id = r.id
+            {origin_join}
         ),
         classified as (
             select
                 *,
                 (
-                    external_message_id is not null
+                    (external_message_id is not null and {status_updated_clause})
                     or accepted_at is not null
-                    or status in ('sent', 'delivered', 'read')
+                    {status_acceptance_clause}
                     or attempt_accepted
                     or event_sent
                     or event_delivered
@@ -680,21 +770,21 @@ async def campaign_results_analytics(
                 ) as is_meta_accepted,
                 (
                     delivered_stage_at is not null
-                    or status in ('delivered', 'read')
+                    {status_delivery_clause}
                     or event_delivered
                     or event_read
                 ) as is_delivered,
                 (
                     read_stage_at is not null
-                    or status = 'read'
+                    or (status = 'read' and {status_updated_clause})
                     or event_read
                 ) as is_read,
                 (
-                    (failed_stage_at is not null or status in ('failed', 'blocked') or event_failed)
+                    (failed_stage_at is not null or (status in ('failed', 'blocked') and {status_updated_clause}) or event_failed)
                     and not (
                         delivered_stage_at is not null
                         or read_stage_at is not null
-                        or status in ('delivered', 'read')
+                        {status_delivery_clause}
                         or event_delivered
                         or event_read
                     )
@@ -710,6 +800,7 @@ async def campaign_results_analytics(
              and mh.channel_conversation_id = c.conversation_id
              and coalesce(mh.from_me, false) = false
              and coalesce(mh.criado_em, now()) > coalesce(c.accepted_at, c.sent_at, c.created_at)
+             {reply_as_of_clause}
             where c.conversation_id is not null and c.is_meta_accepted
         )
         select
@@ -720,33 +811,36 @@ async def campaign_results_analytics(
             count(*) filter (where is_failed) as failed,
             count(*) filter (where is_pending and not is_meta_accepted and not is_failed) as pending,
             count(replies.recipient_id) as replies
+            {segments_select}
         from classified
         left join replies on replies.recipient_id = classified.id
     """)
     row = (await session.execute(metrics_sql, params)).mappings().first() or {}
     metrics = {key: int(row.get(key) or 0) for key in ("audience_total", "meta_accepted", "delivered", "read", "failed", "pending", "replies")}
+    segments = row.get("segments") or []
+    capped = recipient_limit is not None and metrics["audience_total"] >= recipient_limit
 
     old_rows = (
         await session.execute(
             text(f"""
                 select r.status, count(*) as count
                 from campaign_recipients r
-                where {where_sql}
+                where {where_sql}{as_of_clause}
                 group by r.status
             """),
             params,
         )
-    ).all()
+    ).all() if include_timeline else []
     old_status_counts = {str(status): int(count) for status, count in old_rows}
     for key in ("queued", "locked", "retry", "sent", "delivered", "read", "failed", "blocked", "cancelled", "stopped"):
         old_status_counts.setdefault(key, 0)
 
     minmax = (
         await session.execute(
-            text(f"select min(coalesce(r.sent_at, r.created_at)) as start_at, max(coalesce(r.read_at, r.delivered_at, r.sent_at, r.failed_at, r.created_at)) as end_at from campaign_recipients r where {where_sql}"),
+            text(f"select min(coalesce(r.sent_at, r.created_at)) as start_at, max(coalesce(r.read_at, r.delivered_at, r.sent_at, r.failed_at, r.created_at)) as end_at from campaign_recipients r where {where_sql}{as_of_clause}"),
             params,
         )
-    ).mappings().first() or {}
+    ).mappings().first() or {} if include_timeline else {}
     start_at = minmax.get("start_at")
     end_at = minmax.get("end_at")
     bucket = "hour" if start_at and end_at and (end_at - start_at) <= timedelta(days=2) else "day"
@@ -756,20 +850,22 @@ async def campaign_results_analytics(
                 with scoped_recipients as (
                     select r.*
                     from campaign_recipients r
-                    where {where_sql}
+                    where {where_sql}{as_of_clause}
                 ),
                 status_rollup as (
                     select
                         r.id as recipient_id,
-                        min(ev.occurred_at) filter (where ev.status = 'sent') as event_sent_at,
-                        min(ev.occurred_at) filter (where ev.status = 'delivered') as event_delivered_at,
-                        min(ev.occurred_at) filter (where ev.status = 'read') as event_read_at,
-                        min(ev.occurred_at) filter (where ev.status = 'failed') as event_failed_at
+                min({status_event_timestamp}) filter (where ev.status = 'sent') as event_sent_at,
+                min({status_event_timestamp}) filter (where ev.status = 'delivered') as event_delivered_at,
+                min({status_event_timestamp}) filter (where ev.status = 'read') as event_read_at,
+                min({status_event_timestamp}) filter (where ev.status = 'failed') as event_failed_at
                     from scoped_recipients r
                     left join message_status_events ev
                       on ev.empresa_id = r.empresa_id
                      and ev.provider = r.provider
                      and ev.external_message_id = r.external_message_id
+                     {status_scope_clause}
+                     {status_as_of_clause}
                     group by r.id
                 ),
                 attempt_rollup as (
@@ -815,7 +911,7 @@ async def campaign_results_analytics(
             """),
             {**params, "bucket": bucket},
         )
-    ).mappings().all()
+    ).mappings().all() if include_timeline else []
     timeline_map: dict[str, dict[str, Any]] = {}
     for item in timeline_rows:
         bucket_at = item.get("bucket_at")
@@ -837,6 +933,14 @@ async def campaign_results_analytics(
             "period_end": period_end.isoformat() if period_end else None,
         },
         "metrics": metrics,
+        "segments": segments,
+        "coverage": {
+            "state": "partial" if capped else ("observed" if metrics["audience_total"] else "unknown"),
+            "sampled_recipients": metrics["audience_total"],
+            "sample_limit": recipient_limit,
+            "capped": capped,
+            "origin_segment_source": "earliest persisted attribution touch before campaign dispatch; unknown when absent",
+        },
         "rates": {
             "delivery_rate": _rate(metrics["delivered"], metrics["meta_accepted"]),
             "read_rate": _rate(metrics["read"], metrics["delivered"]),
