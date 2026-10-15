@@ -653,6 +653,11 @@ async def campaign_results_analytics(
     recipient_sent_at = "r.sent_at" if observed_at is None else "case when r.sent_at <= :observed_at then r.sent_at end"
     recipient_delivered_at = "r.delivered_at" if observed_at is None else "case when r.delivered_at <= :observed_at then r.delivered_at end"
     recipient_read_at = "r.read_at" if observed_at is None else "case when r.read_at <= :observed_at then r.read_at end"
+    if observed_at is not None:
+        accepted_fallback = (
+            "sr.event_sent_at, sr.event_delivered_at, sr.event_read_at, "
+            f"{recipient_delivered_at}, {recipient_read_at}, ar.attempt_accepted_at"
+        )
     recipient_failed_at = "r.failed_at" if observed_at is None else "case when r.failed_at <= :observed_at then r.failed_at end"
     status_updated_clause = "true" if observed_at is None else "updated_at <= :observed_at"
     reply_as_of_clause = "" if observed_at is None else " and mh.criado_em <= :observed_at"
@@ -662,7 +667,9 @@ async def campaign_results_analytics(
         " order by coalesce(r.sent_at, r.created_at), r.id limit :recipient_limit"
         if recipient_limit is not None else ""
     )
-    origin_cte = """
+    origin_cte = ""
+    if include_segments and observed_at is None:
+        origin_cte = """
         origin_rollup as (
             select r.id as recipient_id, coalesce(origin.event_kind, 'unknown') as origin_segment
             from scoped_recipients r
@@ -679,7 +686,45 @@ async def campaign_results_analytics(
                 limit 1
             ) origin on true
         ),
-    """ if include_segments else ""
+        """
+    elif include_segments:
+        origin_accepted_at = f"coalesce({recipient_sent_at}, {accepted_fallback})"
+        origin_is_accepted = f"""(
+            (r.external_message_id is not null and {status_updated_clause})
+            or {origin_accepted_at} is not null
+            or {recipient_status_expr} in ('sent', 'delivered', 'read')
+            or coalesce(ar.attempt_accepted, false)
+            or coalesce(sr.event_sent, false)
+            or coalesce(sr.event_delivered, false)
+            or coalesce(sr.event_read, false)
+        )"""
+        origin_cte = f"""
+        origin_basis as (
+            select r.*, {origin_accepted_at} as effective_origin_sent_at,
+                   {origin_is_accepted} as is_origin_accepted
+            from scoped_recipients r
+            left join status_rollup sr on sr.recipient_id = r.id
+            left join attempt_rollup ar on ar.recipient_id = r.id
+        ),
+        origin_rollup as (
+            select r.id as recipient_id,
+                   case when r.is_origin_accepted and r.effective_origin_sent_at is null then 'unknown'
+                        else coalesce(origin.event_kind, 'unknown') end as origin_segment
+            from origin_basis r
+            left join lateral (
+                select t.event_kind
+                from attribution_touches t
+                where t.empresa_id = r.empresa_id
+                  and t.event_kind in ('ctwa_referral', 'tracked_link_click', 'manual_touch', 'unknown_source')
+                  and t.occurred_at <= coalesce(r.effective_origin_sent_at, r.created_at) at time zone 'UTC'
+                  and ((r.lead_id is not null and t.lead_id = r.lead_id)
+                    or (r.lead_id is null and r.contact_id is not null and t.contact_id = r.contact_id)
+                    or (r.lead_id is null and r.contact_id is null and r.conversation_id is not null and t.conversation_id = r.conversation_id))
+                order by t.occurred_at asc, t.id asc
+                limit 1
+            ) origin on true
+        ),
+        """
     origin_join = " left join origin_rollup origin on origin.recipient_id = r.id " if include_segments else ""
     origin_select = ", coalesce(origin.origin_segment, 'unknown') as origin_segment" if include_segments else ""
     segments_select = """

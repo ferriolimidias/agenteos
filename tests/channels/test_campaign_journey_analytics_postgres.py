@@ -26,10 +26,14 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
     engine = create_async_engine(database_url, pool_pre_ping=True)
     tenant_id, other_tenant = uuid.uuid4(), uuid.uuid4()
     campaign_id = uuid.uuid4()
-    recipient_id, other_recipient, cancelled_recipient, fallback_recipient, untimed_recipient, future_recipient, future_update_recipient = [uuid.uuid4() for _ in range(7)]
-    lead_id, contact_id, conversation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    recipient_id, other_recipient, cancelled_recipient, fallback_recipient, delivered_fallback_recipient, untimed_recipient, future_recipient, future_update_recipient = [uuid.uuid4() for _ in range(8)]
+    lead_id, fallback_lead_id, delivered_fallback_lead_id, contact_id, conversation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     connection_id = uuid.uuid4()
     sent_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    fallback_sent_at = datetime(2026, 10, 1, 2, tzinfo=timezone.utc)
+    fallback_origin_at = datetime(2026, 10, 1, 1, tzinfo=timezone.utc)
+    delivered_fallback_sent_at = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)
+    delivered_fallback_origin_at = datetime(2026, 10, 1, 3, tzinfo=timezone.utc)
     observed_at = datetime(2026, 10, 20, tzinfo=timezone.utc)
 
     ddl = [
@@ -53,19 +57,23 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                     (:id, :tenant, :campaign, :lead, :contact, :conversation, :connection, 'meta', 'whatsapp', 'wamid-a10-test', 'delivered', NULL, :sent, :sent, NULL, NULL, NULL, NULL, :future),
                     (:other_id, :other_tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-other-tenant', 'sent', NULL, :sent, :sent, NULL, NULL, NULL, NULL, :sent),
                     (:cancelled_id, :tenant, :campaign, NULL, :cancelled_contact, NULL, :connection, 'meta', 'whatsapp', NULL, 'cancelled', 'communication_consent_block', NULL, :sent, NULL, NULL, NULL, :sent, :sent),
-                    (:fallback_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'queued', NULL, NULL, :sent, NULL, NULL, NULL, NULL, :sent),
+                    (:fallback_id, :tenant, :campaign, :fallback_lead, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'queued', NULL, NULL, :sent, NULL, NULL, NULL, NULL, :sent),
+                    (:delivered_fallback_id, :tenant, :campaign, :delivered_fallback_lead, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-delivered-fallback', 'delivered', NULL, NULL, :sent, :delivered_fallback_at, NULL, NULL, NULL, :delivered_fallback_at),
                     (:untimed_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-untimed', 'sent', NULL, NULL, :sent, NULL, NULL, NULL, NULL, :sent),
                     (:future_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', 'wamid-future', 'sent', NULL, :future, :future, NULL, NULL, NULL, NULL, :future),
                     (:future_update_id, :tenant, :campaign, NULL, NULL, NULL, :connection, 'meta', 'whatsapp', NULL, 'failed', 'future_failure', NULL, :sent, NULL, NULL, :future, NULL, :future)
                 """), {
                     "id": recipient_id, "other_id": other_recipient, "tenant": tenant_id,
                     "other_tenant": other_tenant, "campaign": campaign_id, "lead": lead_id,
+                    "fallback_lead": fallback_lead_id, "delivered_fallback_lead": delivered_fallback_lead_id,
                     "contact": contact_id, "conversation": conversation_id,
                     "cancelled_id": cancelled_recipient, "cancelled_contact": uuid.uuid4(),
                     "connection": connection_id, "sent": sent_at.replace(tzinfo=None),
                     "fallback_id": fallback_recipient, "untimed_id": untimed_recipient,
+                    "delivered_fallback_id": delivered_fallback_recipient,
                     "future_id": future_recipient, "future_update_id": future_update_recipient,
                     "future": datetime(2026, 10, 21),
+                    "delivered_fallback_at": delivered_fallback_sent_at.replace(tzinfo=None),
                 })
                 outbox_id = uuid.uuid4()
                 fallback_outbox_id = uuid.uuid4()
@@ -78,11 +86,12 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                                           "future_outbox": future_outbox_id, "future_update_recipient": future_update_recipient,
                                           "connection": connection_id, "sent": sent_at.replace(tzinfo=None),
                                           "future": datetime(2026, 10, 21)})
-                await connection.execute(text("INSERT INTO message_attempts VALUES (:id, :tenant, :outbox, 'meta', :connection, 'accepted', 'wamid-a10-test', :finished, :started), (:fallback_attempt, :tenant, :fallback_outbox, 'meta', :connection, 'accepted', 'wamid-fallback', :finished, :started), (:future_attempt, :tenant, :future_outbox, 'meta', :connection, 'started', NULL, NULL, :future)"),
+                await connection.execute(text("INSERT INTO message_attempts VALUES (:id, :tenant, :outbox, 'meta', :connection, 'accepted', 'wamid-a10-test', :finished, :started), (:fallback_attempt, :tenant, :fallback_outbox, 'meta', :connection, 'accepted', 'wamid-fallback', :fallback_finished, :started), (:future_attempt, :tenant, :future_outbox, 'meta', :connection, 'started', NULL, NULL, :future)"),
                                          {"id": uuid.uuid4(), "tenant": tenant_id, "outbox": outbox_id,
                                           "fallback_attempt": uuid.uuid4(), "fallback_outbox": fallback_outbox_id,
                                           "future_attempt": uuid.uuid4(), "future_outbox": future_outbox_id,
                                           "connection": connection_id, "finished": sent_at.replace(tzinfo=None),
+                                          "fallback_finished": fallback_sent_at.replace(tzinfo=None),
                                           "started": sent_at.replace(tzinfo=None), "future": datetime(2026, 10, 21)})
                 await connection.execute(text("""
                     INSERT INTO mensagens_historico VALUES
@@ -94,12 +103,18 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 await connection.execute(text("""
                     INSERT INTO attribution_touches VALUES
                     (:origin_id, :tenant, NULL, NULL, 'ctwa_referral', :origin_at, :lead, :contact, :conversation),
+                    (:fallback_origin_id, :tenant, NULL, NULL, 'tracked_link_click', :fallback_origin_at, :fallback_lead, NULL, NULL),
+                    (:delivered_fallback_origin_id, :tenant, NULL, NULL, 'tracked_link_click', :delivered_fallback_origin_at, :delivered_fallback_lead, NULL, NULL),
                     (:sent_touch, :tenant, :recipient, :campaign, 'campaign_sent', :sent_at, :lead, :contact, :conversation),
                     (:reply_touch, :tenant, :recipient, :campaign, 'campaign_reply', :reply_at, :lead, :contact, :conversation)
-                """), {"origin_id": uuid.uuid4(), "sent_touch": uuid.uuid4(), "reply_touch": uuid.uuid4(),
+                """), {"origin_id": uuid.uuid4(), "fallback_origin_id": uuid.uuid4(), "delivered_fallback_origin_id": uuid.uuid4(), "sent_touch": uuid.uuid4(), "reply_touch": uuid.uuid4(),
                        "tenant": tenant_id, "recipient": recipient_id, "campaign": campaign_id,
                        "origin_at": datetime(2026, 9, 1, tzinfo=timezone.utc), "sent_at": sent_at,
+                       "fallback_origin_at": fallback_origin_at,
+                       "delivered_fallback_origin_at": delivered_fallback_origin_at,
                        "reply_at": datetime(2026, 10, 2, tzinfo=timezone.utc), "lead": lead_id,
+                       "fallback_lead": fallback_lead_id,
+                       "delivered_fallback_lead": delivered_fallback_lead_id,
                        "contact": contact_id, "conversation": conversation_id})
                 await connection.execute(text("""
                     INSERT INTO commercial_events VALUES
@@ -134,8 +149,8 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 })
                 rows = result.mappings().all()
                 facts = {row["origin_segment"]: dict(row) for row in rows}
-                assert set(facts) == {"ctwa_referral", "unknown"}
-                assert sum(fact["sampled_recipients"] for fact in facts.values()) == 5
+                assert set(facts) == {"ctwa_referral", "tracked_link_click", "unknown"}
+                assert sum(fact["sampled_recipients"] for fact in facts.values()) == 6
                 assert sum(fact["attempted"] for fact in facts.values()) == 3
                 assert facts["ctwa_referral"]["replied"] == 1
                 assert facts["ctwa_referral"]["reactivated"] == 1
@@ -147,8 +162,10 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 assert facts["ctwa_referral"]["provider_status_observed"] == 1
                 assert facts["ctwa_referral"]["provider_delivery_observed"] == 0
                 assert facts["ctwa_referral"]["provider_read_observed"] == 0
-                assert sum(fact["sent_recipients"] for fact in facts.values()) == 3
+                assert sum(fact["sent_recipients"] for fact in facts.values()) == 4
                 assert sum(fact["accepted_without_timestamp"] for fact in facts.values()) == 1
+                assert facts["tracked_link_click"]["sampled_recipients"] == 2
+                assert facts["tracked_link_click"]["sent_recipients"] == 2
                 assert facts["unknown"]["cancelled"] == 1
                 assert facts["unknown"]["failed"] == 0
                 assert facts["unknown"]["unknown_status"] == 1
@@ -157,19 +174,24 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                 delivery = await campaign_results_analytics(
                     session, empresa_id=tenant_id,
                     period_start=datetime(2026, 9, 1), period_end=datetime(2026, 11, 1),
-                    include_timeline=False, observed_at=observed_at.replace(tzinfo=None),
+                    include_timeline=False, include_segments=True,
+                    observed_at=observed_at.replace(tzinfo=None),
                     recipient_limit=10_000,
                 )
-                assert delivery["metrics"]["audience_total"] == 5
-                assert delivery["metrics"]["meta_accepted"] == 3
-                assert delivery["metrics"]["delivered"] == 0
+                assert delivery["metrics"]["audience_total"] == 6
+                assert delivery["metrics"]["meta_accepted"] == 4
+                assert delivery["metrics"]["delivered"] == 1
                 assert delivery["metrics"]["read"] == 0
+                delivery_segments = {segment["segment"]: segment for segment in delivery["segments"]}
+                assert delivery_segments["tracked_link_click"]["audience_total"] == 2
+                assert delivery_segments["tracked_link_click"]["meta_accepted"] == 2
+                assert delivery_segments["tracked_link_click"]["delivered"] == 1
                 unbounded_delivery = await campaign_results_analytics(
                     session, empresa_id=tenant_id,
                     period_start=datetime(2026, 9, 1), period_end=datetime(2026, 11, 1),
                     include_timeline=False, recipient_limit=10_000,
                 )
-                assert unbounded_delivery["metrics"]["audience_total"] == 6
+                assert unbounded_delivery["metrics"]["audience_total"] == 7
                 with patch.object(journey, "_selected_campaigns", new=AsyncMock(return_value=[(campaign_id, "Campanha sintética")])):
                     with patch.object(journey, "load_funnel_configuration", new=AsyncMock(return_value=[])):
                         details = await journey.recipients(
@@ -178,8 +200,9 @@ async def test_outcome_sql_uses_synthetic_postgres_facts_and_tenant_scope():
                             end=observed_at, observed_at=observed_at, now=observed_at, limit=100,
                         )
                 detail_items = {str(item["recipient_id"]): item for item in details["items"]}
-                assert len(detail_items) == 5
-                assert detail_items[str(fallback_recipient)]["sent_at"] == sent_at.replace(tzinfo=None)
+                assert len(detail_items) == 6
+                assert detail_items[str(fallback_recipient)]["sent_at"] == fallback_sent_at.replace(tzinfo=None)
+                assert detail_items[str(delivered_fallback_recipient)]["sent_at"] == delivered_fallback_sent_at.replace(tzinfo=None)
                 assert detail_items[str(untimed_recipient)]["is_accepted"] is True
                 assert detail_items[str(untimed_recipient)]["acceptance_time_unknown"] is True
                 assert detail_items[str(recipient_id)]["status"] == "sent"
