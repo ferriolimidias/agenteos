@@ -5,6 +5,7 @@ import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
 import { loadFacebookSdk, startMetaMarketingAuthorization, sanitizeMetaBrowserError } from "../../utils/metaEmbeddedSignup";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
+import ExistingPostPicker from "./ExistingPostPicker";
 
 const emptyConfig = {
   ad_account_id: "",
@@ -331,6 +332,7 @@ export default function TrafficMeta() {
   const [draftCreationId, setDraftCreationId] = useState("");
   const [resolvingPin, setResolvingPin] = useState(false);
   const [draftSessionId, setDraftSessionId] = useState("");
+  const [creativeSource, setCreativeSource] = useState("new");
   const [campaignForm, setCampaignForm] = useState({
     daily_budget_brl: "",
     location_type: "brazil",
@@ -635,6 +637,7 @@ export default function TrafficMeta() {
     setDraftSessionId(sessionId);
     setDraftCreationId("");
     setCreatedStructure(null);
+    setCreativeSource("new");
     setCampaignForm((current) => ({ ...current, daily_budget_brl: "", location_type: "brazil", location_input: "", location_display_name: "", latitude: "", longitude: "", radius_km: "", gender_mode: "all", conversion_goal_key: "", ads: [] }));
     if (compatibleWhatsapps.length === 1) {
       setCampaignForm((current) => ({ ...current, whatsapp_connection_id: compatibleWhatsapps[0].connection_id || "" }));
@@ -1437,36 +1440,53 @@ export default function TrafficMeta() {
                 <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                   Público: <strong>Advantage+ / automático ativado</strong>
                 </div>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Imagens do anúncio</h3><span className="text-xs text-slate-500">{campaignForm.ads.filter(analysisReady).length} de {campaignForm.ads.length} concluídas · análise automática</span></div>
-                  <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">
-                    {campaignForm.ads.length ? "Adicionar imagens" : "Selecionar imagens"}
-                    <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="fm-field mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
-                    <span className="mt-1 block text-xs font-normal text-slate-500">JPEG ou PNG. A IA analisa cada imagem; duplicatas e arquivos inválidos são ignorados.</span>
-                  </label>
-                  {campaignForm.ads.map((ad, index) => (
-                    <div key={ad.item_key || `ad-${index}`} className="space-y-3 rounded-lg border border-slate-200 p-4">
-                      <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900">Imagem {index + 1}</p><button type="button" title="Remover imagem" onClick={() => removeAd(index)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Trash2 size={16} /></button></div>
-                      <div className="flex items-center gap-3">
-                        {ad.thumbnail_url ? <img src={ad.thumbnail_url} alt={ad.media_name || `Imagem ${index + 1}`} className="h-20 w-20 rounded-lg object-cover" /> : null}
-                        <div className="text-sm text-slate-600"><p>{ad.media_name || "Imagem selecionada"}</p><p className="mt-1 font-medium">{creativeItemStatus(ad)}</p></div>
-                      </div>
-                      {ad.analysis_error ? <div className="flex items-center justify-between gap-3"><InfoBanner tone="warning">{ad.analysis_error}</InfoBanner><ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => retryImageAnalysis(index)}>Tentar novamente</ActionButton></div> : null}
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
-                        <div className="space-y-3">
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                <fieldset className="space-y-3">
+                  <legend className="text-sm font-semibold text-slate-900">Origem do criativo</legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className={`cursor-pointer rounded-lg border p-3 text-sm ${creativeSource === "new" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                      <input type="radio" name="traffic-meta-creative-source" value="new" checked={creativeSource === "new"} onChange={() => setCreativeSource("new")} className="mr-2" />
+                      <span className="font-semibold">Novo criativo</span><span className="mt-1 block pl-6 text-xs text-slate-600">Manter o fluxo atual com imagem e copy próprias.</span>
+                    </label>
+                    <label className={`cursor-pointer rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                      <input type="radio" name="traffic-meta-creative-source" value="existing" checked={creativeSource === "existing"} onChange={() => { setCreativeSource("existing"); setConfirmingCampaign(false); }} className="mr-2" />
+                      <span className="font-semibold">Publicação existente</span><span className="mt-1 block pl-6 text-xs text-slate-600">Consultar e gerar uma prévia simulada de Facebook ou Instagram.</span>
+                    </label>
+                  </div>
+                </fieldset>
+                {creativeSource === "new" ? (
+                  <>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Imagens do anúncio</h3><span className="text-xs text-slate-500">{campaignForm.ads.filter(analysisReady).length} de {campaignForm.ads.length} concluídas · análise automática</span></div>
+                      <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">
+                        {campaignForm.ads.length ? "Adicionar imagens" : "Selecionar imagens"}
+                        <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="fm-field mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
+                        <span className="mt-1 block text-xs font-normal text-slate-500">JPEG ou PNG. A IA analisa cada imagem; duplicatas e arquivos inválidos são ignorados.</span>
+                      </label>
+                      {campaignForm.ads.map((ad, index) => (
+                        <div key={ad.item_key || `ad-${index}`} className="space-y-3 rounded-lg border border-slate-200 p-4">
+                          <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900">Imagem {index + 1}</p><button type="button" title="Remover imagem" onClick={() => removeAd(index)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Trash2 size={16} /></button></div>
+                          <div className="flex items-center gap-3">
+                            {ad.thumbnail_url ? <img src={ad.thumbnail_url} alt={ad.media_name || `Imagem ${index + 1}`} className="h-20 w-20 rounded-lg object-cover" /> : null}
+                            <div className="text-sm text-slate-600"><p>{ad.media_name || "Imagem selecionada"}</p><p className="mt-1 font-medium">{creativeItemStatus(ad)}</p></div>
+                          </div>
+                          {ad.analysis_error ? <div className="flex items-center justify-between gap-3"><InfoBanner tone="warning">{ad.analysis_error}</InfoBanner><ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => retryImageAnalysis(index)}>Tentar novamente</ActionButton></div> : null}
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                            <div className="space-y-3">
+                              <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                              <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-500">CTA: WhatsApp / enviar mensagem · a copy continua editável.</p>
                         </div>
-                      </div>
-                      <p className="text-xs text-slate-500">CTA: WhatsApp / enviar mensagem · a copy continua editável.</p>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <ActionButton variant="secondary" onClick={() => setShowNewCampaign(false)}>Cancelar</ActionButton>
-                  <ActionButton onClick={() => setConfirmingCampaign(true)} disabled={!writesEnabled || !campaignReadiness?.ready || !campaignForm.daily_budget_brl || !campaignForm.page_id || !compatibleWhatsapps.length || (compatibleWhatsapps.length > 1 && !campaignForm.whatsapp_connection_id) || !campaignForm.ads.length || (campaignForm.location_type === "radius" && (!campaignForm.latitude || !campaignForm.longitude || !campaignForm.location_display_name || !campaignForm.radius_km)) || campaignForm.ads.some((ad) => !ad.media_data_url || !analysisReady(ad) || analysisBusy(ad))}>Criar campanha e anúncios</ActionButton>
-                </div>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton variant="secondary" onClick={() => setShowNewCampaign(false)}>Cancelar</ActionButton>
+                      <ActionButton onClick={() => setConfirmingCampaign(true)} disabled={!writesEnabled || !campaignReadiness?.ready || !campaignForm.daily_budget_brl || !campaignForm.page_id || !compatibleWhatsapps.length || (compatibleWhatsapps.length > 1 && !campaignForm.whatsapp_connection_id) || !campaignForm.ads.length || (campaignForm.location_type === "radius" && (!campaignForm.latitude || !campaignForm.longitude || !campaignForm.location_display_name || !campaignForm.radius_km)) || campaignForm.ads.some((ad) => !ad.media_data_url || !analysisReady(ad) || analysisBusy(ad))}>Criar campanha e anúncios</ActionButton>
+                    </div>
+                  </>
+                ) : <ExistingPostPicker empresaId={empresaId} pages={assetPages} adAccountId={configuredAdAccountId} objective="OUTCOME_SALES" initialPageId={campaignForm.page_id || config.page_id || ""} />}
               </>
             ) : (
               <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">

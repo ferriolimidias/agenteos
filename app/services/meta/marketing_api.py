@@ -295,6 +295,40 @@ class MetaMarketingApiClient:
         fields = "id,name,tasks,instagram_business_account{id,username},connected_instagram_account{id,username}"
         return sanitize_graph_payload(await self._client()._list_paginated("me/accounts", fields=fields))
 
+    async def list_page_published_posts(
+        self, page_id: str, *, limit: int = 25, after: str | None = None,
+    ) -> dict[str, Any]:
+        """Read one bounded page of published Page posts; never follows a Graph URL."""
+        params: dict[str, Any] = {
+            "fields": "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,media,url,subattachments{media_type,media,url}}",
+            "limit": max(1, min(int(limit or 25), 50)),
+        }
+        if after:
+            params["after"] = str(after)[:500]
+        body = await self._client()._request("GET", f"{str(page_id).strip()}/published_posts", params=params)
+        return sanitize_graph_payload(body)
+
+    async def list_instagram_media_page(
+        self, instagram_account_id: str, *, limit: int = 25, after: str | None = None,
+    ) -> dict[str, Any]:
+        """Read one bounded page of media for a Page-linked Instagram account."""
+        params: dict[str, Any] = {
+            "fields": "id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp",
+            "limit": max(1, min(int(limit or 25), 50)),
+        }
+        if after:
+            params["after"] = str(after)[:500]
+        body = await self._client()._request("GET", f"{str(instagram_account_id).strip()}/media", params=params)
+        return sanitize_graph_payload(body)
+
+    async def get_page_published_post(self, post_id: str) -> dict[str, Any]:
+        fields = "id,message,created_time,permalink_url,full_picture,from{id},attachments{media_type,media,url}"
+        return sanitize_graph_payload(await self._client()._request("GET", str(post_id).strip(), params={"fields": fields}))
+
+    async def get_instagram_media(self, media_id: str) -> dict[str, Any]:
+        fields = "id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp"
+        return sanitize_graph_payload(await self._client()._request("GET", str(media_id).strip(), params={"fields": fields}))
+
     async def list_campaigns(
         self, ad_account_id: str, *, page_counter: list[int] | None = None, max_pages: int = 100,
     ) -> list[dict[str, Any]]:
