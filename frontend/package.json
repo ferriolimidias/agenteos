@@ -27,7 +27,9 @@
     "test:funnel": "node --test src/utils/commercialFunnel.test.js",
     "test:jev": "node --test src/utils/jevDiagnostics.test.js",
     "test:jev-smoke": "node scripts/smoke-jev-diagnostics.cjs",
-    "test:quality-browser": "node scripts/smoke-attendance-quality.cjs"
+    "test:quality-browser": "node scripts/smoke-attendance-quality.cjs",
+    "test:a11": "node --test src/pages/tenant/PromptOptimizer.test.js",
+    "test:a11-browser": "node scripts/smoke-a11.cjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

@@ -1,8 +1,8 @@
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator
 
-from app.core.model_catalog import is_allowed_model_id
 
 SENSITIVE_METADATA_KEY_MARKERS = (
     "api_key",
@@ -114,7 +114,6 @@ class EmpresaResponse(EmpresaBase):
     id: UUID4
     conexao_disparo_id: UUID4 | None = None
     openai_api_key_configurada: bool = False
-    openai_api_key_mascarada: str | None = None
     meta_capi_ativo: bool | None = None
     meta_pixel_id: str | None = None
     meta_access_token_configurado: bool = False
@@ -166,8 +165,8 @@ class IAConfigUpdateRequest(BaseModel):
         if value is None:
             return None
         normalized = str(value).strip()
-        if not is_allowed_model_id(normalized):
-            raise ValueError("modelo_ia deve ser um model ID permitido")
+        if not normalized or len(normalized) > 255 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", normalized):
+            raise ValueError("modelo_ia deve ser um ID canônico válido")
         return normalized
 
 

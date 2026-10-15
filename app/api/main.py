@@ -18,6 +18,8 @@ from app.api.routers import api_connections
 from app.api.routers import auth
 from app.api.routers import orquestrador
 from app.api.routers import configuracoes
+from app.api.routers import openai_models
+from app.api.routers import prompt_optimizer
 from app.api.routers import webhook
 from app.api.routers import meta_webhook
 from app.api.routers import campaign_central
@@ -231,6 +233,8 @@ app.include_router(company_payments.router)
 # Rotas que já possuem o prefixo completo no próprio APIRouter interno
 app.include_router(configuracoes.router)
 app.include_router(configuracoes.public_router)
+app.include_router(openai_models.router)
+app.include_router(prompt_optimizer.router)
 app.include_router(auth.router)
 app.include_router(inbox.router)
 app.include_router(integracoes.router)

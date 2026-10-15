@@ -17,6 +17,7 @@ import {
   Power,
   PowerOff,
   RefreshCw,
+  Search,
   Save,
   Settings2,
   ShieldCheck,
@@ -121,8 +122,13 @@ export default function EmpresaDetalhes() {
   const [toast, setToast] = useState("");
   const [editEmpresa, setEditEmpresa] = useState({ nome_empresa: "", area_atuacao: "" });
   const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiKeyConfigured, setOpenaiKeyConfigured] = useState(false);
   const [iaConfig, setIaConfig] = useState(IA_CONFIG_DEFAULT);
   const [modelOptions, setModelOptions] = useState([]);
+  const [modelCatalog, setModelCatalog] = useState({ credential_status: "unknown", stale: false, updated_at: null, source: null });
+  const [modelSearch, setModelSearch] = useState("");
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [validatingModel, setValidatingModel] = useState(false);
   const [tagsOficiais, setTagsOficiais] = useState([]);
   const [tagsIaLoading, setTagsIaLoading] = useState(false);
   const [tagsIaError, setTagsIaError] = useState("");
@@ -152,6 +158,14 @@ export default function EmpresaDetalhes() {
     () => String(empresa?.nome_empresa || "Empresa"),
     [empresa?.nome_empresa],
   );
+  const selectedModelId = String(iaConfig?.modelo_ia || "");
+  const currentModelMissing = Boolean(selectedModelId && !modelOptions.some((item) => item.id === selectedModelId));
+  const visibleModelOptions = useMemo(() => {
+    const normalizedQuery = modelSearch.trim().toLowerCase();
+    const matching = modelOptions.filter((item) => !normalizedQuery || `${item.name || item.id} ${item.id}`.toLowerCase().includes(normalizedQuery));
+    const selected = modelOptions.find((item) => item.id === selectedModelId);
+    return selected && !matching.some((item) => item.id === selected.id) ? [selected, ...matching] : matching;
+  }, [modelOptions, modelSearch, selectedModelId]);
 
   const alterarTab = (tabId) => {
     const next = new URLSearchParams(searchParams);
@@ -173,15 +187,16 @@ export default function EmpresaDetalhes() {
             api.get(`/empresas/${empresaId}/ia-config`).catch(() => ({ data: {} })),
             api.get(`/empresas/${empresaId}/crm/tags/oficiais`).catch(() => ({ data: null })),
             api.get(`/empresas/${empresaId}/monitor/funnel`).catch(() => ({ data: null })),
-            api.get("/admin/modelos-ia").catch(() => ({ data: [] })),
+            api.get(`/admin/empresas/${empresaId}/openai-models`).catch(() => ({ data: { items: [], credential_status: "unknown", stale: false, load_error: true } })),
           ])
-        : [{ data: {} }, { data: [] }, { data: null }, { data: [] }];
+        : [{ data: {} }, { data: [] }, { data: null }, { data: null }];
       setEmpresa(atual);
       setEditEmpresa({
         nome_empresa: String(atual?.nome_empresa || ""),
         area_atuacao: String(atual?.area_atuacao || ""),
       });
-      setOpenaiApiKey(String(atual?.credenciais_canais?.openai_api_key || ""));
+      setOpenaiApiKey("");
+      setOpenaiKeyConfigured(Boolean(atual?.openai_api_key_configurada || resIaConfig.data?.openai_configurada));
       setIaConfig({
         ...IA_CONFIG_DEFAULT,
         ...(resIaConfig.data || {}),
@@ -189,7 +204,8 @@ export default function EmpresaDetalhes() {
         tags_ia_habilitadas: Array.isArray(resIaConfig.data?.tags_ia_habilitadas) ? resIaConfig.data.tags_ia_habilitadas : [],
       });
       setFunnelStatus(resFunnel?.data || null);
-      setModelOptions(Array.isArray(resModels.data) ? resModels.data : []);
+      setModelOptions(Array.isArray(resModels.data?.items) ? resModels.data.items : []);
+      setModelCatalog(resModels.data || { credential_status: "unknown", stale: false, updated_at: null, source: null });
       if (resTags.data === null) {
         setTagsIaError("Não foi possível carregar as tags oficiais deste tenant.");
         setTagsOficiais([]);
@@ -339,16 +355,53 @@ export default function EmpresaDetalhes() {
   const salvarOpenAI = async (e) => {
     e.preventDefault();
     if (!empresaId) return;
+    if (!openaiApiKey.trim()) {
+      setToast("Informe uma nova chave para substituir a credencial atual. Campo vazio preserva a configuração existente.");
+      return;
+    }
     try {
       setSavingCredenciais(true);
       await api.put(`/empresas/${empresaId}/credenciais`, { openai_api_key: openaiApiKey });
       setToast("Credenciais salvas.");
       await carregarEmpresa();
-    } catch (err) {
-      console.error("Erro ao salvar credenciais:", err);
+    } catch {
       setToast("Falha ao salvar credenciais.");
     } finally {
       setSavingCredenciais(false);
+    }
+  };
+
+  const atualizarCatalogoModelos = async () => {
+    if (!empresaId) return;
+    try {
+      setRefreshingModels(true);
+      const response = await api.get(`/admin/empresas/${empresaId}/openai-models?refresh=true`);
+      const catalog = response.data || {};
+      setModelCatalog(catalog);
+      setModelOptions(Array.isArray(catalog.items) ? catalog.items : []);
+      setToast(catalog.stale ? "A atualização falhou; o último catálogo válido está sendo exibido." : "Catálogo OpenAI atualizado.");
+    } catch (error) {
+      const stale = error?.response?.data?.detail?.code === "catalog_refresh_failed";
+      setModelCatalog((previous) => ({ ...previous, stale: true, refresh_error: error?.response?.data?.detail?.provider_status || "provider_unavailable" }));
+      setToast(stale ? "Não foi possível atualizar o catálogo agora. Confira a conexão e tente novamente." : "Não foi possível carregar o catálogo OpenAI deste tenant.");
+    } finally {
+      setRefreshingModels(false);
+    }
+  };
+
+  const validarModeloSelecionado = async () => {
+    if (!empresaId || !selectedModelId) return;
+    if (!window.confirm(`O AgentOS fará uma chamada de teste explícita a ${selectedModelId}. A OpenAI pode cobrar pelo uso. O teste enviará apenas o texto sintético “Reply with OK.”. Continuar?`)) return;
+    try {
+      setValidatingModel(true);
+      await api.post(`/admin/empresas/${empresaId}/openai-models/validate`, { model_id: selectedModelId });
+      setModelOptions((items) => items.map((item) => item.id === selectedModelId ? { ...item, compatibility: "verified_compatible", compatibility_known: true, validation_required: false, compatibility_explanation: "Validado com a credencial deste tenant" } : item));
+      setToast("Modelo validado. A seleção só será ativada ao salvar a configuração.");
+    } catch (error) {
+      const code = error?.response?.data?.detail?.provider_status || error?.response?.data?.detail?.code || "validation_failed";
+      setToast(`Não foi possível validar este modelo (${code}). O modelo atual foi preservado.`);
+    } finally {
+      setValidatingModel(false);
     }
   };
 
@@ -729,17 +782,42 @@ export default function EmpresaDetalhes() {
                 className="fm-field"
               />
             </div>
-            <div>
-              <label htmlFor="company-field-6" className="mb-1 block text-xs text-slate-500">Modelo principal</label>
+            <div className="lg:col-span-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <label htmlFor="company-field-6" className="mb-1 block text-xs font-semibold text-slate-700">Modelo principal</label>
+                  <p className="text-xs text-slate-500">Este modelo é compartilhado pelo atendimento e pelo Monitor de Conversão.</p>
+                </div>
+                <ActionButton type="button" variant="secondary" disabled={refreshingModels || modelCatalog.credential_status === "not_configured"} onClick={atualizarCatalogoModelos}>
+                  <RefreshCw size={14} className={refreshingModels ? "animate-spin" : ""} />
+                  {refreshingModels ? "Atualizando..." : "Atualizar modelos"}
+                </ActionButton>
+              </div>
+              <div className="relative">
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input aria-label="Buscar modelos OpenAI" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="Buscar por nome ou ID" className="fm-field pl-9" />
+              </div>
               <select id="company-field-6"
-                value={iaConfig.modelo_ia || ""}
-                onChange={(e) => setIaConfig((p) => ({ ...p, modelo_ia: e.target.value }))}
+                value={selectedModelId}
+                onChange={(event) => setIaConfig((previous) => ({ ...previous, modelo_ia: event.target.value }))}
                 className="fm-field"
               >
-                {modelOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
+                {currentModelMissing && <option value={selectedModelId}>{selectedModelId} — Modelo atual — não confirmado</option>}
+                {!selectedModelId && <option value="">Selecione um modelo disponível</option>}
+                {visibleModelOptions.map((option) => {
+                  const compatibilityLabel = option.compatibility === "incompatible" ? "Não compatível" : option.compatibility === "verified_compatible" ? "Validado" : option.compatibility === "known_compatible" ? "Compatibilidade conhecida" : "Verificação necessária";
+                  const availabilityLabel = option.availability === "listed" ? "Listado na OpenAI" : "Disponibilidade desconhecida";
+                  return <option key={option.id} value={option.id} disabled={option.compatibility === "incompatible"}>{option.name || option.id} — {availabilityLabel} · {compatibilityLabel}</option>;
+                })}
               </select>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <span>
+                  {modelCatalog.credential_status === "not_configured" ? "Credencial deste tenant não configurada. Cadastre uma chave para consultar modelos." : modelCatalog.load_error ? "Não foi possível carregar o catálogo deste tenant. O modelo salvo continua preservado." : modelCatalog.stale ? "Catálogo antigo: a atualização mais recente falhou; o último resultado válido foi preservado." : modelCatalog.updated_at ? `Catálogo consultado em ${new Date(modelCatalog.updated_at).toLocaleString()}.` : "O catálogo é consultado com a credencial OpenAI desta empresa."}
+                </span>
+                {modelOptions.find((item) => item.id === selectedModelId)?.validation_required && <ActionButton type="button" variant="secondary" disabled={validatingModel} onClick={validarModeloSelecionado}>{validatingModel ? "Validando..." : "Validar modelo"}</ActionButton>}
+              </div>
+              {modelOptions.find((item) => item.id === selectedModelId)?.validation_required && <p className="text-xs text-amber-700">Este modelo ainda não tem compatibilidade comprovada. A validação faz uma chamada explícita à API e pode gerar custo; nenhum dado de cliente será enviado.</p>}
+              {currentModelMissing && <p className="text-xs text-amber-700">O catálogo atual não confirmou o modelo salvo. Ele permanece selecionado e não será substituído automaticamente.</p>}
             </div>
             <div>
               <label htmlFor="company-field-7" className="mb-1 block text-xs text-slate-500">Limite de certeza</label>
@@ -929,7 +1007,7 @@ export default function EmpresaDetalhes() {
               Credencial OpenAI por Tenant
             </h3>
             <p className="text-xs text-slate-500">
-              Opcional. Se vazio, o sistema usa fallback configurado no ambiente/plataforma.
+              {openaiKeyConfigured ? "Credencial OpenAI configurada para este tenant. Digite uma nova chave somente para substituí-la; o campo vazio preserva a atual." : "Nenhuma credencial OpenAI configurada para este tenant. O catálogo exige uma chave associada a esta empresa."}
             </p>
             <div>
               <label htmlFor="company-field-14" className="mb-1 block text-xs text-slate-500">OPENAI API Key</label>
@@ -937,7 +1015,7 @@ export default function EmpresaDetalhes() {
                 type="password"
                 value={openaiApiKey}
                 onChange={(e) => setOpenaiApiKey(e.target.value)}
-                placeholder="sk-..."
+                placeholder={openaiKeyConfigured ? "Nova chave para substituição explícita" : "Informe a chave OpenAI deste tenant"}
                 className="fm-field"
               />
             </div>

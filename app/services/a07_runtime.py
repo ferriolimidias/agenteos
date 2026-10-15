@@ -108,6 +108,10 @@ async def prepare_runtime(state, legacy_prompt, *, messages, tools_context):
             composition['mode'] = 'LEGACY'
             composition['fallback_reason'] = 'ledger_unavailable'
             trace.update(composition)
+        else:
+            from app.services.a11_runtime import prepare_experiment
+            await prepare_experiment(state, composition)
+            trace.update(composition)
         trace['persisted'] = persisted
         trace['deadline_remaining'] = max(.001, DEADLINE_SECONDS - (time.monotonic() - started))
         return composition['prompt'], trace
@@ -128,7 +132,17 @@ def metadata(trace):
 
 
 async def complete_runtime(state, trace, *, guard_allowed=None, generation_error=None, latency_ms=None):
-    if not trace or not trace.get('persisted'):
+    if not trace:
+        return
+    if trace.get('a11_optimizer'):
+        from app.services.a11_runtime import complete_experiment
+        metrics = trace.get('metrics') or {}
+        await complete_experiment(
+            state, trace, guard_allowed=guard_allowed, generation_error=generation_error,
+            latency_ms=latency_ms,
+            input_tokens=metrics.get('input_tokens'), output_tokens=metrics.get('output_tokens'),
+        )
+    if not trace.get('persisted'):
         return
     trace['guard_allowed'] = guard_allowed
     trace['status'] = generation_error or ('completed' if guard_allowed else 'guard_blocked')

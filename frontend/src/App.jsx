@@ -13,6 +13,7 @@ const JevIntegration = lazy(() => import("./pages/super-admin/JevIntegration"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
 const FunnelDashboard = lazy(() => import("./pages/tenant/FunnelDashboard"));
 const QualityDashboard = lazy(() => import("./pages/tenant/QualityDashboard"));
+const PromptOptimizer = lazy(() => import("./pages/tenant/PromptOptimizer"));
 const FollowUpAnalytics = lazy(() => import("./pages/tenant/FollowUpAnalytics"));
 const JevDiagnostics = lazy(() => import("./pages/tenant/JevDiagnostics"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
@@ -96,6 +97,7 @@ function App() {
           <Route index element={<TenantDashboard />} />
           <Route path="funil" element={<FunnelDashboard />} />
           <Route path="qualidade" element={<QualityDashboard />} />
+          <Route path="otimizador-prompts" element={<PromptOptimizer />} />
           <Route path="followups/impacto" element={<FollowUpAnalytics />} />
           <Route path="inteligencia" element={<JevDiagnostics />} />
           <Route path="agentes" element={<TenantAgentes />} />

@@ -9,7 +9,6 @@ import hashlib
 from datetime import datetime, time, timedelta
 import pdfplumber
 import traceback
-from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, update, func, or_, text
@@ -94,7 +93,7 @@ from app.services.transferencia_service import executar_transferencia_atendiment
 from app.services.simulator_session import simulator_response_key
 from app.services.rosangela_ai_control import get_conversation_manual_ai_state, set_conversation_ai_manual_state
 from app.core.default_agents import FERRAMENTAS_SISTEMA
-from app.core.llm_factory import get_embeddings_for_tenant, get_tenant_api_key
+from app.core.llm_factory import get_embeddings_for_tenant
 from app.core.secret_sanitizer import sanitize_credenciais_canais
 from app.agents.tenant_ai import tenant_ai_enabled
 
@@ -271,28 +270,30 @@ def _mascarar_credenciais_publicas(value: Any) -> Any:
 def _empresa_tem_openai_configurada(empresa: Empresa) -> tuple[bool, str | None]:
     direta = str(getattr(empresa, "openai_api_key", "") or "").strip()
     if direta:
-        return True, mascarar_secret(direta)
+        return True, None
     credenciais = getattr(empresa, "credenciais_canais", None) or {}
     if isinstance(credenciais, dict):
         for key in ("openai_api_key", "api_key_openai"):
             raw = str(credenciais.get(key) or "").strip()
             if raw:
-                return True, mascarar_secret(raw)
+                return True, None
     return False, None
 
 
 def _serializar_empresa_segura(empresa: Empresa) -> dict[str, Any]:
     token = str(getattr(empresa, "meta_access_token", "") or "").strip()
-    openai_configurada, openai_mascarada = _empresa_tem_openai_configurada(empresa)
+    openai_configurada, _ = _empresa_tem_openai_configurada(empresa)
+    credenciais_publicas = dict(empresa.credenciais_canais or {}) if isinstance(empresa.credenciais_canais, dict) else {}
+    credenciais_publicas.pop("openai_api_key", None)
+    credenciais_publicas.pop("api_key_openai", None)
     return {
         "id": empresa.id,
         "nome_empresa": empresa.nome_empresa,
         "area_atuacao": empresa.area_atuacao,
         "logo_url": empresa.logo_url,
-        "credenciais_canais": _mascarar_credenciais_publicas(empresa.credenciais_canais or {}),
+        "credenciais_canais": _mascarar_credenciais_publicas(credenciais_publicas),
         "openai_api_key": None,
         "openai_api_key_configurada": openai_configurada,
-        "openai_api_key_mascarada": openai_mascarada,
         "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
         "conexao_disparo_id": empresa.conexao_disparo_id,
@@ -970,7 +971,7 @@ async def get_ia_config(
         "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
         "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
         "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
-        "openai_configurada": tenant_ai_enabled(empresa),
+        "openai_configurada": _empresa_tem_openai_configurada(empresa)[0],
         # Compatibilidade de API; a fonte de verdade é TagCRM.ai_can_apply.
         "tags_ia_habilitadas": ai_tag_ids,
     }
@@ -1037,6 +1038,12 @@ async def put_ia_config(
     if data.conversion_monitor_prompt is not None:
         empresa.conversion_monitor_prompt = data.conversion_monitor_prompt
     if data.modelo_ia is not None:
+        if data.modelo_ia != str(empresa.modelo_ia or ""):
+            from app.services.openai_model_catalog import classify_model, model_is_validated
+            if not await model_is_validated(db, empresa.id, data.modelo_ia):
+                raise HTTPException(status_code=422, detail="Valide este modelo com a credencial do tenant antes de selecioná-lo.")
+            compatibility, _, _ = classify_model(data.modelo_ia)
+            empresa.modelo_ia_request_profile = "legacy" if compatibility == "known_compatible" else "chat_minimal"
         empresa.modelo_ia = data.modelo_ia
     if data.followup_ativo is not None:
         empresa.followup_ativo = data.followup_ativo
@@ -1107,7 +1114,7 @@ async def put_ia_config(
             "coletar_nome": getattr(empresa, 'coletar_nome', True) if getattr(empresa, 'coletar_nome', True) is not None else True,
             "telefone_notificacao": str(getattr(empresa, "telefone_notificacao", "") or "").strip() or None,
             "status_openai": str(getattr(empresa, "status_openai", "ok") or "ok"),
-            "openai_configurada": tenant_ai_enabled(empresa),
+            "openai_configurada": _empresa_tem_openai_configurada(empresa)[0],
             "tags_ia_habilitadas": ai_tag_ids,
         }
     except Exception as e:
@@ -4434,29 +4441,28 @@ async def atualizar_credenciais(
             raise HTTPException(status_code=404, detail="Empresa não encontrada")
             
         base = dict(empresa.credenciais_canais or {})
-        if credenciais.openai_api_key is not None:
-            base["openai_api_key"] = credenciais.openai_api_key
-            empresa.openai_api_key = str(credenciais.openai_api_key or "").strip() or None
+        replacement = str(credenciais.openai_api_key or "").strip()
+        if replacement:
+            base["openai_api_key"] = replacement
+            empresa.openai_api_key = replacement
         empresa.credenciais_canais = base
         
         await db.commit()
         await db.refresh(empresa)
         
-        openai_configurada, openai_mascarada = _empresa_tem_openai_configurada(empresa)
+        openai_configurada, _ = _empresa_tem_openai_configurada(empresa)
         return {
             "mensagem": "Credenciais atualizadas com sucesso",
-            "credenciais": _mascarar_credenciais_publicas(empresa.credenciais_canais or {}),
             "openai_api_key_configurada": openai_configurada,
-            "openai_api_key_mascarada": openai_mascarada,
         }
         
     except HTTPException as e:
         raise e
-    except Exception as e:
+    except Exception:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao atualizar credenciais: {str(e)}"
+            detail="Erro ao atualizar credenciais."
         )
 
 
@@ -4467,40 +4473,26 @@ async def listar_modelos_openai_empresa(
     _: Usuario = Depends(require_super_admin),
 ):
     try:
-        api_key = await get_tenant_api_key(empresa_id, db)
+        from app.services.openai_model_catalog import CatalogUnavailable, list_models
+        tenant_uuid = uuid.UUID(empresa_id)
+        catalog = await list_models(db, tenant_uuid)
+        await db.commit()
+        # Legacy shape for existing readers; the Super Admin screen uses the
+        # richer tenant-scoped /admin/empresas/{id}/openai-models contract.
+        return [
+            {"id": item["id"], "created": item.get("created") or 0}
+            for item in catalog["items"]
+            if item.get("compatibility") != "incompatible"
+        ]
+    except ValueError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Empresa ou credencial OpenAI inválida.") from None
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    try:
-        client = AsyncOpenAI(api_key=api_key)
-        response = await client.models.list()
-        modelos = []
-        for item in list(getattr(response, "data", []) or []):
-            model_id = str(getattr(item, "id", "") or "").strip()
-            if not model_id:
-                continue
-            prefixos_validos = ("gpt-", "o1", "o3", "o4")
-            if not model_id.startswith(prefixos_validos):
-                continue
-            modelos.append(
-                {
-                    "id": model_id,
-                    "created": int(getattr(item, "created", 0) or 0),
-                }
-            )
-        modelos.sort(key=lambda m: m["created"], reverse=True)
-        return modelos
-    except Exception as exc:
-        detalhe = str(exc).lower()
-        if "401" in detalhe or "invalid api key" in detalhe or "authentication" in detalhe:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Chave OpenAI inválida para esta empresa. Atualize a chave e tente novamente.",
-            ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Falha ao listar modelos da OpenAI: {str(exc)}",
-        ) from exc
+        await db.rollback()
+        from app.services.openai_model_catalog import CatalogUnavailable
+        if isinstance(exc, CatalogUnavailable):
+            raise HTTPException(status_code=502, detail="Não foi possível consultar o catálogo OpenAI deste tenant.") from None
+        raise HTTPException(status_code=502, detail="Não foi possível consultar o catálogo OpenAI deste tenant.") from None
 
 
 class SimuladorRequest(BaseModel):

@@ -25,6 +25,7 @@ export const TENANT_NAVIGATION_GROUPS = [
   ] },
   { id: "automation", label: "Automações e inteligência", items: [
     item("intelligence", "Inteligência SHADOW", "/painel/inteligencia", "brain"),
+    item("prompt-optimizer", "Prompt Optimizer A11", "/painel/otimizador-prompts", "brain"),
     item("agent", "Agente de Atendimento", "/painel/agentes", "brain"),
     item("followups", "Follow-ups", "/painel/followups", "timer"),
     item("campaigns", "Campanhas", "/painel/campanhas", "campaign"),
@@ -47,7 +48,9 @@ export const REVIEWER_NAVIGATION_GROUPS = [{ id: "reviewer", label: "Demonstraç
 ] }];
 
 export function getTenantNavigationGroups(role) {
-  return role === "meta_app_reviewer" ? REVIEWER_NAVIGATION_GROUPS : TENANT_NAVIGATION_GROUPS;
+  if (role === "meta_app_reviewer") return REVIEWER_NAVIGATION_GROUPS;
+  if (["admin_empresa", "super_admin"].includes(role)) return TENANT_NAVIGATION_GROUPS;
+  return TENANT_NAVIGATION_GROUPS.map((group) => ({ ...group, items: group.items.filter((entry) => entry.id !== "prompt-optimizer") }));
 }
 
 export function normalizeTenantPath(pathname) {

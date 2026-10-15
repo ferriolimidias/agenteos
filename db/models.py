@@ -96,6 +96,9 @@ class Empresa(Base):
     nome_agente = Column(String, default="Assistente Virtual")
     mensagem_saudacao = Column(String, nullable=True)
     modelo_ia = Column(String, default="gpt-4o-mini")
+    # Request profile for a model explicitly validated against the tenant's
+    # OpenAI credential. Existing rows keep the legacy provider parameters.
+    modelo_ia_request_profile = Column(String(32), nullable=False, default="legacy", server_default=sa_text("'legacy'"))
     limite_certeza = Column(Float, nullable=False, default=0.65)
     limite_duvida = Column(Float, nullable=False, default=0.45)
     max_agentes_desempate = Column(Integer, nullable=False, default=3)
@@ -144,6 +147,187 @@ class Empresa(Base):
     meta_template_sync_runs = relationship("MetaTemplateSyncRun", back_populates="empresa", cascade="all, delete-orphan")
     traffic_meta_configs = relationship("TrafficMetaConfig", back_populates="empresa", cascade="all, delete-orphan")
     payment_providers = relationship("EmpresaPaymentProvider", back_populates="empresa", cascade="all, delete-orphan")
+
+
+class OpenAIModelCatalogSnapshot(Base):
+    __tablename__ = "openai_model_catalog_snapshots"
+    __table_args__ = (UniqueConstraint("empresa_id", "credential_fingerprint", "provider", "project_context_fingerprint", name="uq_openai_catalog_scope"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False, index=True)
+    credential_fingerprint = Column(String(64), nullable=False)
+    provider = Column(String(32), nullable=False, default="openai", server_default=sa_text("'openai'"))
+    project_context_fingerprint = Column(String(64), nullable=False, default="default", server_default=sa_text("'default'"))
+    models_json = Column(JSONB, nullable=False, default=list)
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class OpenAIModelValidation(Base):
+    __tablename__ = "openai_model_validations"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "credential_fingerprint", "model_id", name="uq_openai_model_validation_scope"),
+        CheckConstraint("validation_status IN ('compatible','incompatible')", name="ck_openai_model_validation_status"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False, index=True)
+    credential_fingerprint = Column(String(64), nullable=False)
+    model_id = Column(String(255), nullable=False)
+    endpoint = Column(String(64), nullable=False, default="chat.completions", server_default=sa_text("'chat.completions'"))
+    validation_status = Column(String(24), nullable=False)
+    validated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+
+class A11PromptVersion(Base):
+    __tablename__ = "a11_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "module_key", "version_number", name="uq_a11_prompt_version"),
+        Index("ix_a11_prompt_versions_tenant_module", "empresa_id", "module_key", "version_number"),
+        CheckConstraint("version_number > 0", name="ck_a11_prompt_version_number"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    module_key = Column(String(64), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    source_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="SET NULL"), nullable=True)
+    change_summary = Column(Text, nullable=False)
+    hypothesis = Column(Text, nullable=False)
+    primary_metric = Column(String(64), nullable=False)
+    author_id = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class A11PromptModuleState(Base):
+    __tablename__ = "a11_prompt_module_states"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "module_key", name="uq_a11_module_state"),
+        CheckConstraint("state IN ('OFFLINE','SHADOW','READY_FOR_PILOT','LIVE_DISABLED','PAUSED','ROLLED_BACK')", name="ck_a11_module_state"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    module_key = Column(String(64), nullable=False)
+    stable_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=True)
+    active_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=True)
+    state = Column(String(24), nullable=False, default="OFFLINE", server_default=sa_text("'OFFLINE'"))
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class A11OptimizerSettings(Base):
+    __tablename__ = "a11_optimizer_settings"
+    __table_args__ = (UniqueConstraint("empresa_id", name="uq_a11_optimizer_settings_tenant"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    evaluator_model_id = Column(String(255), nullable=True)
+    evaluator_enabled = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    updated_by = Column(String(128), nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class A11PromptExperiment(Base):
+    __tablename__ = "a11_prompt_experiments"
+    __table_args__ = (
+        Index("ix_a11_experiment_tenant_state", "empresa_id", "status"),
+        Index("uq_a11_one_running_experiment_per_tenant", "empresa_id", unique=True, postgresql_where=sa_text("status = 'RUNNING'")),
+        CheckConstraint("assignment_unit = 'conversation'", name="ck_a11_assignment_unit"),
+        CheckConstraint("candidate_percent BETWEEN 1 AND 99", name="ck_a11_candidate_percent"),
+        CheckConstraint("status IN ('DRAFT','READY_FOR_PILOT','RUNNING','PAUSED','COMPLETED','ROLLED_BACK')", name="ck_a11_experiment_status"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    module_key = Column(String(64), nullable=False)
+    control_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    candidate_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    assignment_unit = Column(String(32), nullable=False, default="conversation", server_default=sa_text("'conversation'"))
+    candidate_percent = Column(Integer, nullable=False, default=50, server_default=sa_text("50"))
+    status = Column(String(24), nullable=False, default="DRAFT", server_default=sa_text("'DRAFT'"))
+    starts_at = Column(DateTime, nullable=True)
+    ends_at = Column(DateTime, nullable=True)
+    criteria_json = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class A11PromptAssignment(Base):
+    __tablename__ = "a11_prompt_assignments"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "experiment_id", "conversation_id", name="uq_a11_assignment_unit"),
+        Index("ix_a11_assignments_tenant_state", "empresa_id", "status", "assigned_at"),
+        CheckConstraint("variant IN ('control','candidate')", name="ck_a11_assignment_variant"),
+        CheckConstraint("status IN ('assigned','exposed','generation_failed','guard_blocked')", name="ck_a11_assignment_status"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    experiment_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_experiments.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(UUID(as_uuid=True), nullable=False)
+    variant = Column(String(16), nullable=False)
+    prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    assignment_hash = Column(String(64), nullable=False)
+    status = Column(String(24), nullable=False, default="assigned", server_default=sa_text("'assigned'"))
+    assigned_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+    completed_at = Column(DateTime, nullable=True)
+
+
+class A11PromptExposure(Base):
+    __tablename__ = "a11_prompt_exposures"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "experiment_id", "conversation_id", name="uq_a11_exposure_unit"),
+        Index("ix_a11_exposures_tenant_time", "empresa_id", "exposed_at"),
+        CheckConstraint("variant IN ('control','candidate')", name="ck_a11_exposure_variant"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    experiment_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_experiments.id", ondelete="CASCADE"), nullable=False)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_assignments.id", ondelete="CASCADE"), nullable=False, unique=True)
+    conversation_id = Column(UUID(as_uuid=True), nullable=False)
+    variant = Column(String(16), nullable=False)
+    prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    assignment_hash = Column(String(64), nullable=False)
+    exposed_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+    generation_latency_ms = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    guard_allowed = Column(Boolean, nullable=False, default=True, server_default=sa_text("true"))
+
+
+class A11PromptEvaluation(Base):
+    __tablename__ = "a11_prompt_evaluations"
+    __table_args__ = (
+        Index("ix_a11_eval_tenant_version", "empresa_id", "prompt_version_id"),
+        CheckConstraint("source_kind IN ('synthetic','anonymized')", name="ck_a11_eval_source_kind"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("a11_prompt_versions.id", ondelete="CASCADE"), nullable=False)
+    suite_version = Column(String(32), nullable=False)
+    source_kind = Column(String(24), nullable=False, default="synthetic", server_default=sa_text("'synthetic'"))
+    result_json = Column(JSONB, nullable=False)
+    passed = Column(Boolean, nullable=False)
+    evaluated_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
+
+
+class A11PromptAudit(Base):
+    __tablename__ = "a11_prompt_audits"
+    __table_args__ = (Index("ix_a11_audit_tenant_time", "empresa_id", "created_at"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    actor_id = Column(String(128), nullable=True)
+    action = Column(String(48), nullable=False)
+    object_type = Column(String(32), nullable=False)
+    object_id = Column(UUID(as_uuid=True), nullable=True)
+    details_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
 
 
 class EmpresaPaymentProvider(Base):

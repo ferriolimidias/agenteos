@@ -209,7 +209,7 @@ def test_api_serialization() -> None:
     assert_true(not contains_raw_secret(serialized, raw_evolution), "API de empresa não retorna Evolution apikey crua")
     assert_true(serialized.get("openai_api_key") is None, "EmpresaResponse não contém openai_api_key em claro")
     assert_true(serialized.get("openai_api_key_configurada") is True, "status OpenAI usa flag booleana")
-    assert_true(bool(serialized.get("openai_api_key_mascarada")), "status OpenAI usa máscara")
+    assert_true("openai_api_key_mascarada" not in serialized, "API OpenAI retorna somente status, sem máscara ou fragmento")
     assert_true(serialized.get("meta_access_token_configurado") is True, "status Meta usa flag booleana")
     assert_true(bool(serialized.get("meta_access_token_mascarado")), "status Meta usa máscara")
 

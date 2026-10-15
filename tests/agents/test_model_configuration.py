@@ -21,6 +21,12 @@ def test_luna_model_is_accepted_and_label_is_not_a_model_id():
         IAConfigUpdateRequest(modelo_ia="gpt-5.6 Luna")
 
 
+def test_new_canonical_model_id_is_accepted_for_tenant_scoped_validation():
+    assert IAConfigUpdateRequest(modelo_ia="gpt-future-2027-preview").modelo_ia == "gpt-future-2027-preview"
+    with pytest.raises(ValueError):
+        IAConfigUpdateRequest(modelo_ia="GPT Future Label")
+
+
 def test_gpt54_mini_remains_accepted():
     assert "gpt-5.4-mini" in ALLOWED_MODEL_IDS
     assert IAConfigUpdateRequest(modelo_ia="gpt-5.4-mini").modelo_ia == "gpt-5.4-mini"
@@ -94,3 +100,33 @@ async def test_luna_request_omits_unsupported_temperature_while_other_models_kee
 
     assert "temperature" not in captured[0]
     assert captured[1]["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_explicitly_verified_dynamic_model_uses_minimal_provider_parameters():
+    captured = {}
+    client_kwargs = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"), finish_reason="stop")])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    with patch("openai.AsyncOpenAI", FakeOpenAI):
+        await OpenAIAgentLLM.from_config({
+            "modelo_ia": "gpt-new-preview",
+            "modelo_ia_request_profile": "chat_minimal",
+            "_openai_api_key": "REDACTED_FOR_TEST",
+            "empresa_id": "tenant-test",
+            "credenciais_canais": {"openai_project_id": "proj-synthetic"},
+        }).generate(system_prompt="system", messages=[{"role": "user", "content": "hello"}])
+
+    assert captured["model"] == "gpt-new-preview"
+    assert "temperature" not in captured
+    assert set(captured) == {"model", "messages"}
+    assert client_kwargs["project"] == "proj-synthetic"

@@ -11,10 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIAgentLLM(AgentLLM):
-    def __init__(self, *, api_key: str, model: str, tenant_id: str | None = None) -> None:
+    def __init__(self, *, api_key: str, model: str, tenant_id: str | None = None, request_profile: str = "legacy", project_id: str | None = None) -> None:
         self._api_key = str(api_key or "").strip()
         self._model = str(model or "").strip() or "gpt-4o-mini"
         self._tenant_id = str(tenant_id or "").strip() or None
+        self._request_profile = request_profile if request_profile in {"legacy", "chat_minimal"} else "legacy"
+        self._project_id = str(project_id or "").strip() or None
         self._observe_usage = False
         self.last_usage_observation = None
 
@@ -28,13 +30,15 @@ class OpenAIAgentLLM(AgentLLM):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "OpenAIAgentLLM":
+        credentials = config.get("credenciais_canais") if isinstance(config.get("credenciais_canais"), dict) else {}
         api_key = str(
             config.get("_openai_api_key")
-            or (config.get("credenciais_canais") or {}).get("openai_api_key")
-            or (config.get("credenciais_canais") or {}).get("api_key_openai")
+            or credentials.get("openai_api_key")
+            or credentials.get("api_key_openai")
             or ""
         ).strip()
-        return cls(api_key=api_key, model=str(config.get("modelo_ia") or "gpt-4o-mini"), tenant_id=config.get("empresa_id"))
+        project_id = config.get("openai_project_id") or credentials.get("openai_project_id") or credentials.get("project_id")
+        return cls(api_key=api_key, model=str(config.get("modelo_ia") or "gpt-4o-mini"), tenant_id=config.get("empresa_id"), request_profile=str(config.get("modelo_ia_request_profile") or "legacy"), project_id=project_id)
 
     async def generate(
         self,
@@ -51,7 +55,10 @@ class OpenAIAgentLLM(AgentLLM):
         if not self._api_key:
             raise RuntimeError("Tenant OpenAI key missing")
 
-        client = AsyncOpenAI(api_key=self._api_key)
+        client_kwargs = {"api_key": self._api_key}
+        if self._project_id:
+            client_kwargs["project"] = self._project_id
+        client = AsyncOpenAI(**client_kwargs)
         payload_messages = [{"role": "system", "content": system_prompt}]
         for item in messages:
             role = str(item.get("role") or "user").strip() or "user"
@@ -78,7 +85,7 @@ class OpenAIAgentLLM(AgentLLM):
         }
         # GPT-5.6 Luna only accepts the provider default sampling value.
         # Do not send temperature=0.2, which OpenAI rejects before execution.
-        if self._model.lower() != "gpt-5.6-luna":
+        if self._request_profile == "legacy" and self._model.lower() != "gpt-5.6-luna":
             request_kwargs["temperature"] = 0.2
         try:
             response = await client.chat.completions.create(

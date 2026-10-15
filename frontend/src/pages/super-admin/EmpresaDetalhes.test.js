@@ -50,12 +50,19 @@ test("company management exposes tenant-scoped Mercado Pago configuration withou
 test("main model select uses canonical IDs and friendly labels", () => {
   const modelStart = pageSource.indexOf("Modelo principal");
   const modelBlock = pageSource.slice(modelStart, pageSource.indexOf("</select>", modelStart) + "</select>".length);
-  assert.match(pageSource, /api\.get\("\/admin\/modelos-ia"\)/);
+  const selectStart = pageSource.indexOf('<select id="company-field-6"', modelStart);
+  const selectBlock = pageSource.slice(selectStart, pageSource.indexOf("</select>", selectStart) + "</select>".length);
+  assert.match(pageSource, /api\.get\(`\/admin\/empresas\/\$\{empresaId\}\/openai-models`\)/);
+  assert.match(pageSource, /api\.get\(`\/admin\/empresas\/\$\{empresaId\}\/openai-models\?refresh=true`\)/);
   assert.match(modelBlock, /<select/);
-  assert.match(modelBlock, /option\.value/);
-  assert.match(modelBlock, /option\.label/);
+  assert.match(modelBlock, /value=\{option\.id\}/);
+  assert.match(modelBlock, /option\.name \|\| option\.id/);
+  assert.match(pageSource, /Modelo atual — não confirmado/);
+  assert.match(pageSource, /Verificação necessária/);
+  assert.match(pageSource, /Este modelo é compartilhado pelo atendimento e pelo Monitor de Conversão/);
+  assert.match(modelBlock, /aria-label="Buscar modelos OpenAI"/);
   // UX03 removed the unreachable duplicate list modal; the canonical select stays in details.
   assert.match(companiesSource, /tab=agente/);
   assert.doesNotMatch(companiesSource, /showConfigIAModal/);
-  assert.doesNotMatch(modelBlock, /<input/);
+  assert.doesNotMatch(selectBlock, /<input/);
 });
