@@ -10,11 +10,14 @@ const read = (relativePath) => fs.readFileSync(path.join(frontendRoot, relativeP
 test("A11 page exposes versions, evidence coverage, and explicit offline/live states", () => {
   const page = read("src/pages/tenant/PromptOptimizer.jsx");
   assert.match(page, /Módulos e versões imutáveis/);
-  assert.match(page, /Avaliar offline/);
+  assert.match(page, /Verificar estrutura \(local\)/);
+  assert.match(page, /não aprova o comportamento do modelo/);
+  assert.match(page, /approval_eligible/);
   assert.match(page, /nove casos sintéticos/);
   assert.match(page, /numerator/);
   assert.match(page, /denominator/);
   assert.match(page, /unknown/);
+  assert.match(page, /Histórico parcial/);
   assert.match(page, /não causalidade|não causalidade|não causal/);
   assert.match(page, /A\/B LIVE está OFF/);
   assert.match(page, /\/pause/);

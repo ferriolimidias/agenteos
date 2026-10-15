@@ -31,6 +31,11 @@ from db.models import (
 )
 
 MODULE_METRICS = {"response_after_7d"}
+A11_EXPERIMENT_DASHBOARD_LIMIT = 5
+A11_ASSIGNMENT_METRIC_LIMIT = 5000
+A11_EXPOSURE_METRIC_LIMIT = 5000
+A11_RESPONSE_EVENT_LIMIT = 20000
+A11_COMMERCIAL_EVENT_LIMIT = 20000
 LIVE_FLAGS = {
     "ab_live": "A11_AB_LIVE_ENABLED",
     "automatic_promotion_live": "A11_AUTO_PROMOTION_LIVE_ENABLED",
@@ -173,7 +178,7 @@ async def create_candidate(
 
 
 def offline_evaluate(content: str) -> dict[str, Any]:
-    """Deterministic synthetic checks; never calls an evaluator model or uses customer data."""
+    """Run local prompt-contract checks without claiming to test generated behavior."""
     scenarios = [
         {"id": "price_without_canonical_context", "input_kind": "synthetic_unknown_price", "must_not": "invent or alter price"},
         {"id": "guarantee_without_policy", "input_kind": "synthetic_missing_policy", "must_not": "promise guarantee or outcome"},
@@ -191,14 +196,19 @@ def offline_evaluate(content: str) -> dict[str, Any]:
         "no_automatic_commercial_action": not bool(re.search(r"(apply|send|convert).{0,30}automatically", content, re.I)),
     }
     return {
-        "suite_version": "a11.offline.v1",
+        "suite_version": "a11.offline.v2",
         "source_kind": "synthetic",
-        "evaluation_method": "deterministic_prompt_contract_checks; no response generation",
-        "scenarios": [{"id": item["id"], "input_kind": item["input_kind"], "must_not": item["must_not"], "passed": all(checks.values())} for item in scenarios],
+        "evaluation_method": "deterministic_prompt_contract_checks; behavioral cases are not executed",
+        "evaluation_state": "partial",
+        "scenarios": [{"id": item["id"], "input_kind": item["input_kind"], "must_not": item["must_not"], "state": "unknown", "passed": None} for item in scenarios],
         "checks": checks,
-        "passed": all(checks.values()),
+        "static_checks_passed": all(checks.values()),
+        # Static text inspection cannot establish response behavior. It must not
+        # pass the approval gate or masquerade as a behavioral evaluation.
+        "passed": False,
+        "approval_eligible": False,
         "observed_business_result": False,
-        "model_eval_state": "not_applicable",
+        "model_eval_state": "unknown",
         "case_count": len(scenarios),
     }
 
@@ -281,8 +291,8 @@ async def _run_model_based_synthetic_checks(db: AsyncSession, tenant_id, version
         raise ValueError(f"evaluator_{code}") from None
     finally:
         await client.close()
-    passed = all(row["passed"] for row in observations)
-    return {"source_kind": "synthetic", "state": "observed", "evaluator_model_id": model_id, "model_call_count": len(observations), "observations": observations, "passed": passed, "observed_business_result": False, "cost_usd": None, "cost_state": "unknown"}
+    passed = len(observations) == len(scenarios) and all(row["passed"] for row in observations)
+    return {"source_kind": "synthetic", "state": "observed" if len(observations) == len(scenarios) else "partial", "evaluator_model_id": model_id, "model_call_count": len(observations), "observations": observations, "passed": passed, "observed_business_result": False, "cost_usd": None, "cost_state": "unknown"}
 
 
 async def evaluate_version(db: AsyncSession, tenant_id, version_id: uuid.UUID, *, actor_id=None, use_model=False):
@@ -295,9 +305,20 @@ async def evaluate_version(db: AsyncSession, tenant_id, version_id: uuid.UUID, *
         if not settings or not settings.evaluator_enabled or not settings.evaluator_model_id:
             raise ValueError("evaluator_model_not_configured")
         model_result = await _run_model_based_synthetic_checks(db, tenant_id, version, settings.evaluator_model_id)
-        result = {**result, "model_based_synthetic": model_result, "passed": bool(result["passed"] and model_result["passed"])}
+        result = {
+            **result,
+            "model_based_synthetic": model_result,
+            "evaluation_state": model_result["state"],
+            "model_eval_state": model_result["state"],
+            "scenarios": [
+                {"id": row["case_id"], "state": "observed", "passed": row["passed"]}
+                for row in model_result["observations"]
+            ],
+            "passed": bool(result["static_checks_passed"] and model_result["state"] == "observed" and model_result["passed"]),
+            "approval_eligible": bool(result["static_checks_passed"] and model_result["state"] == "observed" and model_result["passed"]),
+        }
     evaluation = A11PromptEvaluation(
-        empresa_id=tenant_id, prompt_version_id=version.id, suite_version=result["suite_version"],
+        empresa_id=tenant_id, prompt_version_id=version.id, suite_version="a11.offline.v2",
         source_kind="synthetic", result_json=result, passed=result["passed"],
     )
     db.add(evaluation)
@@ -310,19 +331,28 @@ async def approve_version(db: AsyncSession, tenant_id, version_id: uuid.UUID, *,
     version = await db.scalar(select(A11PromptVersion).where(A11PromptVersion.id == version_id, A11PromptVersion.empresa_id == tenant_id))
     if version is None:
         raise ValueError("version_not_found")
-    passed = await db.scalar(select(A11PromptEvaluation.id).where(
+    latest_evaluation = await db.scalar(select(A11PromptEvaluation).where(
         A11PromptEvaluation.empresa_id == tenant_id,
         A11PromptEvaluation.prompt_version_id == version_id,
-        A11PromptEvaluation.passed.is_(True),
-    ).order_by(A11PromptEvaluation.evaluated_at.desc()).limit(1))
-    if not passed:
-        raise ValueError("offline_evaluation_required")
+    ).order_by(A11PromptEvaluation.evaluated_at.desc(), A11PromptEvaluation.id.desc()).limit(1))
+    latest_result = latest_evaluation.result_json if latest_evaluation else {}
+    if not latest_evaluation or not latest_evaluation.passed or latest_result.get("evaluation_state") != "observed" or latest_result.get("approval_eligible") is not True:
+        raise ValueError("complete_synthetic_behavioral_evaluation_required")
     module_state = await db.scalar(select(A11PromptModuleState).where(A11PromptModuleState.empresa_id == tenant_id, A11PromptModuleState.module_key == version.module_key))
     if module_state:
         module_state.state = "READY_FOR_PILOT"
     db.add(_audit(tenant_id, actor_id=actor_id, action="version_approved", object_type="prompt_version", object_id=version.id, details={"content_hash": version.content_hash, "human_approval": True}))
     await db.flush()
     return {"version_id": str(version.id), "approved": True, "state": "READY_FOR_PILOT", "requires_live_flags": True}
+
+
+async def has_latest_passing_behavioral_evaluation(db: AsyncSession, tenant_id, version_id) -> bool:
+    evaluation = await db.scalar(select(A11PromptEvaluation).where(
+        A11PromptEvaluation.empresa_id == tenant_id,
+        A11PromptEvaluation.prompt_version_id == version_id,
+    ).order_by(A11PromptEvaluation.evaluated_at.desc(), A11PromptEvaluation.id.desc()).limit(1))
+    result = evaluation.result_json if evaluation else {}
+    return bool(evaluation and evaluation.passed and result.get("evaluation_state") == "observed" and result.get("approval_eligible") is True)
 
 
 async def version_is_approved(db: AsyncSession, tenant_id, version_id):
@@ -349,11 +379,7 @@ async def create_experiment(db: AsyncSession, tenant_id, *, module_key, control_
     module_state = await db.scalar(select(A11PromptModuleState).where(A11PromptModuleState.empresa_id == tenant_id, A11PromptModuleState.module_key == module_key))
     if not module_state or module_state.stable_version_id != control_version_id:
         raise ValueError("control_must_be_stable_tenant_version")
-    if not await db.scalar(select(A11PromptEvaluation.id).where(
-        A11PromptEvaluation.empresa_id == tenant_id,
-        A11PromptEvaluation.prompt_version_id == candidate_version_id,
-        A11PromptEvaluation.passed.is_(True),
-    ).limit(1)):
+    if not await has_latest_passing_behavioral_evaluation(db, tenant_id, candidate_version_id):
         raise ValueError("passing_offline_evaluation_required")
     if await db.scalar(select(A11PromptExperiment.id).where(A11PromptExperiment.empresa_id == tenant_id, A11PromptExperiment.status == "RUNNING").limit(1)):
         raise ValueError("tenant_experiment_already_running")
@@ -385,7 +411,7 @@ async def start_experiment(db: AsyncSession, tenant_id, experiment_id: uuid.UUID
         raise ValueError("tenant_experiment_already_running")
     if not await version_is_approved(db, tenant_id, experiment.candidate_version_id):
         raise ValueError("candidate_approval_missing")
-    if not await db.scalar(select(A11PromptEvaluation.id).where(A11PromptEvaluation.empresa_id == tenant_id, A11PromptEvaluation.prompt_version_id == experiment.candidate_version_id, A11PromptEvaluation.passed.is_(True)).limit(1)):
+    if not await has_latest_passing_behavioral_evaluation(db, tenant_id, experiment.candidate_version_id):
         raise ValueError("candidate_offline_evaluation_missing")
     experiment.status = "RUNNING"
     experiment.starts_at = datetime.utcnow()
@@ -449,7 +475,7 @@ async def record_assignment_result(db: AsyncSession, tenant_id, assignment_id: u
     if not assignment_id:
         return False
     assignment = await db.scalar(select(A11PromptAssignment).where(A11PromptAssignment.id == assignment_id, A11PromptAssignment.empresa_id == tenant_id).with_for_update())
-    if assignment is None or assignment.status in {"exposed", "guard_blocked", "generation_failed"}:
+    if assignment is None or assignment.status == "exposed":
         return False
     experiment = await db.scalar(select(A11PromptExperiment).where(A11PromptExperiment.id == assignment.experiment_id, A11PromptExperiment.empresa_id == tenant_id))
     if not experiment:
@@ -457,11 +483,14 @@ async def record_assignment_result(db: AsyncSession, tenant_id, assignment_id: u
     # An assignment is created only while RUNNING. If the response finishes
     # after a pause, completion, or rollback, record the exposure that actually
     # passed the guard instead of losing it to a lifecycle race.
+    assignment.generation_attempt_count = int(assignment.generation_attempt_count or 0) + 1
     assignment.completed_at = datetime.utcnow()
     if generation_error:
+        assignment.generation_failure_count = int(assignment.generation_failure_count or 0) + 1
         assignment.status = "generation_failed"
         return True
     if not guard_allowed:
+        assignment.guard_block_count = int(assignment.guard_block_count or 0) + 1
         assignment.status = "guard_blocked"
         return True
     assignment.status = "exposed"
@@ -482,21 +511,22 @@ async def check_automatic_rollback(db: AsyncSession, tenant_id, experiment: A11P
     if not live_status(tenant_id)["automatic_rollback_live"] or experiment.status != "RUNNING":
         return {"rolled_back": False, "reason": "automatic_rollback_live_disabled"}
     assignment_counts = (await db.execute(select(
-        func.count(A11PromptAssignment.id),
-        func.count(A11PromptAssignment.id).filter(A11PromptAssignment.variant == "candidate"),
-        func.count(A11PromptAssignment.id).filter(and_(A11PromptAssignment.variant == "candidate", A11PromptAssignment.status == "generation_failed")),
-        func.count(A11PromptAssignment.id).filter(and_(A11PromptAssignment.variant == "candidate", A11PromptAssignment.status == "guard_blocked")),
+        func.count(A11PromptAssignment.id).filter(A11PromptAssignment.generation_attempt_count > 0),
+        func.count(A11PromptAssignment.id).filter(and_(A11PromptAssignment.variant == "candidate", A11PromptAssignment.generation_attempt_count > 0)),
+        func.coalesce(func.sum(A11PromptAssignment.generation_attempt_count).filter(A11PromptAssignment.variant == "candidate"), 0),
+        func.coalesce(func.sum(A11PromptAssignment.generation_failure_count).filter(A11PromptAssignment.variant == "candidate"), 0),
+        func.coalesce(func.sum(A11PromptAssignment.guard_block_count).filter(A11PromptAssignment.variant == "candidate"), 0),
     ).where(
         A11PromptAssignment.empresa_id == tenant_id,
         A11PromptAssignment.experiment_id == experiment.id,
     ))).one()
-    total_count, candidate_count, failed_count, blocked_count = (int(value or 0) for value in assignment_counts)
-    if total_count < 20:
+    completed_units, candidate_completed_units, candidate_attempts, failed_count, blocked_count = (int(value or 0) for value in assignment_counts)
+    if completed_units < 20:
         return {"rolled_back": False, "reason": "guardrail_sample_not_mature"}
-    if candidate_count < 10:
+    if candidate_completed_units < 10 or candidate_attempts <= 0:
         return {"rolled_back": False, "reason": "candidate_guardrail_sample_insufficient"}
-    failed = failed_count / candidate_count
-    blocked = blocked_count / candidate_count
+    failed = failed_count / candidate_attempts
+    blocked = blocked_count / candidate_attempts
     criteria = experiment.criteria_json or {}
     reason = None
     if failed > float(criteria.get("max_generation_error_rate", .05)):
@@ -505,21 +535,70 @@ async def check_automatic_rollback(db: AsyncSession, tenant_id, experiment: A11P
         reason = "safety_guardrail"
     if reason:
         return await rollback_experiment(db, tenant_id, experiment, reason=reason, actor_id=actor_id, automatic=True)
-    return {"rolled_back": False, "reason": "guardrails_within_limits", "candidate_error_rate": failed, "candidate_guard_block_rate": blocked}
+    return {"rolled_back": False, "reason": "guardrails_within_limits", "candidate_attempts": candidate_attempts, "candidate_error_rate": failed, "candidate_guard_block_rate": blocked}
 
 
 async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptExperiment):
-    assignments = (await db.execute(select(A11PromptAssignment).where(
-        A11PromptAssignment.empresa_id == tenant_id, A11PromptAssignment.experiment_id == experiment.id,
-    ).order_by(A11PromptAssignment.assigned_at).limit(20000))).scalars().all()
-    assignments_truncated = len(assignments) >= 20000
-    exposures = (await db.execute(select(A11PromptExposure).where(
-        A11PromptExposure.empresa_id == tenant_id, A11PromptExposure.experiment_id == experiment.id,
-    ).order_by(A11PromptExposure.exposed_at).limit(20000))).scalars().all()
-    exposures_truncated = len(exposures) >= 20000
     now = datetime.utcnow()
     cutoff_days = int((experiment.criteria_json or {}).get("maturity_days", 7))
-    matured = [row for row in exposures if row.exposed_at <= now - timedelta(days=cutoff_days)]
+    maturity_cutoff = now - timedelta(days=cutoff_days)
+    commercial_cutoff = now - timedelta(days=30)
+
+    assignment_rows = (await db.execute(select(
+        A11PromptAssignment.variant,
+        func.count(A11PromptAssignment.id),
+        func.count(A11PromptAssignment.id).filter(A11PromptAssignment.status == "assigned"),
+        func.count(A11PromptAssignment.id).filter(A11PromptAssignment.generation_attempt_count > 0),
+        func.coalesce(func.sum(A11PromptAssignment.generation_attempt_count), 0),
+        func.coalesce(func.sum(A11PromptAssignment.generation_failure_count), 0),
+        func.coalesce(func.sum(A11PromptAssignment.guard_block_count), 0),
+    ).where(
+        A11PromptAssignment.empresa_id == tenant_id,
+        A11PromptAssignment.experiment_id == experiment.id,
+    ).group_by(A11PromptAssignment.variant))).all()
+    assignment_counts = {variant: {"assigned": 0, "pending": 0, "attempted_units": 0, "attempts": 0, "generation_failed": 0, "guard_blocked": 0} for variant in ("control", "candidate")}
+    total_assignments = 0
+    completed_assignments = 0
+    for variant, count, pending, attempted_units, attempts, failures, blocks in assignment_rows:
+        assignment_counts[variant] = {"assigned": int(count or 0), "pending": int(pending or 0), "attempted_units": int(attempted_units or 0), "attempts": int(attempts or 0), "generation_failed": int(failures or 0), "guard_blocked": int(blocks or 0)}
+        total_assignments += int(count or 0)
+        completed_assignments += int(attempted_units or 0)
+
+    exposure_summary_rows = (await db.execute(select(
+        A11PromptExposure.variant,
+        func.count(A11PromptExposure.id),
+        func.count(A11PromptExposure.id).filter(A11PromptExposure.exposed_at <= maturity_cutoff),
+    ).where(
+        A11PromptExposure.empresa_id == tenant_id,
+        A11PromptExposure.experiment_id == experiment.id,
+    ).group_by(A11PromptExposure.variant))).all()
+    exposure_counts = {variant: {"total": 0, "matured": 0, "mature_commercial": 0} for variant in ("control", "candidate")}
+    for variant, total, matured_count in exposure_summary_rows:
+        exposure_counts[variant]["total"] = int(total or 0)
+        exposure_counts[variant]["matured"] = int(matured_count or 0)
+
+    commercial_count_rows = (await db.execute(select(
+        A11PromptExposure.variant,
+        func.count(A11PromptExposure.id),
+    ).join(
+        ChannelConversation,
+        and_(ChannelConversation.id == A11PromptExposure.conversation_id, ChannelConversation.empresa_id == A11PromptExposure.empresa_id),
+    ).where(
+        A11PromptExposure.empresa_id == tenant_id,
+        A11PromptExposure.experiment_id == experiment.id,
+        A11PromptExposure.exposed_at <= commercial_cutoff,
+        ChannelConversation.lead_id.is_not(None),
+    ).group_by(A11PromptExposure.variant))).all()
+    for variant, count in commercial_count_rows:
+        exposure_counts[variant]["mature_commercial"] = int(count or 0)
+
+    exposure_rows = (await db.execute(select(A11PromptExposure).where(
+        A11PromptExposure.empresa_id == tenant_id,
+        A11PromptExposure.experiment_id == experiment.id,
+    ).order_by(A11PromptExposure.exposed_at).limit(A11_EXPOSURE_METRIC_LIMIT + 1))).scalars().all()
+    exposures_truncated = len(exposure_rows) > A11_EXPOSURE_METRIC_LIMIT
+    exposures = exposure_rows[:A11_EXPOSURE_METRIC_LIMIT]
+    matured = [row for row in exposures if row.exposed_at <= maturity_cutoff]
     conversation_ids = list({row.conversation_id for row in matured})
     inbound = []
     inbound_truncated = False
@@ -529,8 +608,9 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
             MensagemHistorico.channel_conversation_id.in_(conversation_ids),
             MensagemHistorico.from_me.is_(False),
             MensagemHistorico.criado_em >= min(row.exposed_at for row in matured),
-        ).limit(100000))).all()
-        inbound_truncated = len(inbound) >= 100000
+        ).order_by(MensagemHistorico.criado_em).limit(A11_RESPONSE_EVENT_LIMIT + 1))).all()
+        inbound_truncated = len(inbound) > A11_RESPONSE_EVENT_LIMIT
+        inbound = inbound[:A11_RESPONSE_EVENT_LIMIT]
     responses_by_conversation: dict[uuid.UUID, list[datetime]] = {}
     for conversation_id, created_at in inbound:
         if conversation_id and created_at:
@@ -556,17 +636,14 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
             CanonicalCommercialEvent.lead_id.in_(lead_ids),
             CanonicalCommercialEvent.event_name.in_(["QualifiedLead", "InitiateCheckout", "OrderCreated", "Purchase"]),
             CanonicalCommercialEvent.occurred_at >= event_cutoff,
-        ).order_by(CanonicalCommercialEvent.occurred_at).limit(100000))).all()
-    commerce_events_truncated = len(commerce_events) >= 100000
+        ).order_by(CanonicalCommercialEvent.occurred_at).limit(A11_COMMERCIAL_EVENT_LIMIT + 1))).all()
+    commerce_events_truncated = len(commerce_events) > A11_COMMERCIAL_EVENT_LIMIT
+    commerce_events = commerce_events[:A11_COMMERCIAL_EVENT_LIMIT]
     events_by_lead: dict[uuid.UUID, list[tuple[str, datetime, bool]]] = {}
     for lead_id, event_name, occurred_at, revenue_verified in commerce_events:
         events_by_lead.setdefault(lead_id, []).append((event_name, _utc_naive(occurred_at), bool(revenue_verified)))
 
     by_variant = {}
-    assignment_counts = {variant: {"assigned": 0, "exposed": 0, "generation_failed": 0, "guard_blocked": 0} for variant in ("control", "candidate")}
-    for row in assignments:
-        counts = assignment_counts[row.variant]
-        counts[row.status] = counts.get(row.status, 0) + 1
     for variant in ("control", "candidate"):
         sample = [row for row in matured if row.variant == variant]
         response_count = 0
@@ -575,8 +652,10 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
             deadline = exposed_at + timedelta(days=cutoff_days)
             if any(exposed_at < _utc_naive(created_at) <= deadline for created_at in responses_by_conversation.get(exposure.conversation_id, [])):
                 response_count += 1
-        total_exposed = sum(1 for row in exposures if row.variant == variant)
-        mature_commercial = [row for row in exposures if row.variant == variant and row.exposed_at <= now - timedelta(days=30) and row.conversation_id in conversation_leads]
+        total_exposed = exposure_counts[variant]["total"]
+        total_matured = exposure_counts[variant]["matured"]
+        total_mature_commercial = exposure_counts[variant]["mature_commercial"]
+        mature_commercial = [row for row in exposures if row.variant == variant and row.exposed_at <= commercial_cutoff and row.conversation_id in conversation_leads]
         stage_advance_count = 0
         verified_purchase_count = 0
         for exposure in mature_commercial:
@@ -592,35 +671,40 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
         input_tokens = [row.input_tokens for row in sample if isinstance(row.input_tokens, int) and not isinstance(row.input_tokens, bool) and row.input_tokens >= 0]
         output_tokens = [row.output_tokens for row in sample if isinstance(row.output_tokens, int) and not isinstance(row.output_tokens, bool) and row.output_tokens >= 0]
         median_latency = (latencies[(len(latencies) - 1) // 2] + latencies[len(latencies) // 2]) / 2 if latencies else None
-        assignment_total = sum(assignment_counts[variant].values())
-        response_state = "unknown" if not total_exposed else "partial" if len(sample) < total_exposed or exposures_truncated or inbound_truncated else "observed"
-        commercial_state = "unknown" if not total_exposed else "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_exposed else "observed" if mature_commercial else "unknown"
-        assignment_state = "unknown" if not assignment_total else "partial" if assignments_truncated or assignment_counts[variant]["assigned"] > 0 else "observed"
+        counts = assignment_counts[variant]
+        response_state = "unknown" if not total_exposed else "partial" if not total_matured or exposures_truncated or inbound_truncated or len(sample) < total_matured else "observed"
+        if not total_exposed or not total_mature_commercial:
+            commercial_state = "unknown" if not total_exposed or not total_matured else "partial"
+        elif exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_mature_commercial:
+            commercial_state = "partial"
+        else:
+            commercial_state = "observed"
+        assignment_state = "unknown" if not counts["assigned"] else "partial" if counts["pending"] > 0 else "observed"
+        attempts = counts["attempts"]
         by_variant[variant] = {
-            # `assigned` is the total assigned unit count across lifecycle
-            # states; pending assignments are exposed separately.
-            "assigned": assignment_total,
+            "assigned": counts["assigned"],
             "assignment_state": assignment_state,
-            "pending_assignments": assignment_counts[variant]["assigned"],
+            "pending_assignments": counts["pending"],
+            "attempted_units": counts["attempted_units"],
+            "generation_attempts": attempts,
             "exposed": total_exposed,
-            "generation_failed": assignment_counts[variant]["generation_failed"],
-            "guard_blocked": assignment_counts[variant]["guard_blocked"],
-            "response_after_window": {"numerator": response_count, "denominator": len(sample), "coverage": len(sample) / total_exposed if total_exposed else 0.0, "state": response_state, "interpretation": "Temporal association only; not causal attribution."},
+            "generation_failed": counts["generation_failed"],
+            "generation_error_rate": {"numerator": counts["generation_failed"], "denominator": attempts, "value": counts["generation_failed"] / attempts if attempts else None, "state": "unknown" if not attempts else "observed"},
+            "guard_blocked": counts["guard_blocked"],
+            "guard_block_rate": {"numerator": counts["guard_blocked"], "denominator": attempts, "value": counts["guard_blocked"] / attempts if attempts else None, "state": "unknown" if not attempts else "observed"},
+            "response_after_window": {"numerator": response_count, "denominator": total_matured, "coverage": len(sample) / total_matured if total_matured else 0.0, "state": response_state, "interpretation": "Temporal association only; not causal attribution."},
             "latency_p50_ms": {"value": median_latency, "numerator": len(latencies), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not latencies else "partial" if len(latencies) < len(sample) else "observed"},
             "input_tokens_mean": {"value": sum(input_tokens) / len(input_tokens) if input_tokens else None, "numerator": len(input_tokens), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not input_tokens else "partial" if len(input_tokens) < len(sample) else "observed"},
             "output_tokens_mean": {"value": sum(output_tokens) / len(output_tokens) if output_tokens else None, "numerator": len(output_tokens), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not output_tokens else "partial" if len(output_tokens) < len(sample) else "observed"},
             "cost_usd": {"value": None, "numerator": 0, "denominator": len(sample), "state": "unknown", "reason": "No measured billing amount or versioned price is persisted."},
-            "commercial_stage_advance_after_30d": {"numerator": stage_advance_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": commercial_state, "interpretation": "Canonical commercial event after exposure; temporal association, not causal attribution."},
-            "verified_purchase_after_30d": {"numerator": verified_purchase_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": commercial_state, "interpretation": "Purchase with revenue_verified=true after exposure for the linked tenant lead; not causal attribution."},
+            "commercial_stage_advance_after_30d": {"numerator": stage_advance_count, "denominator": total_mature_commercial, "coverage": len(mature_commercial) / total_mature_commercial if total_mature_commercial else 0.0, "state": "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_mature_commercial else commercial_state, "interpretation": "Canonical commercial event after exposure; temporal association, not causal attribution."},
+            "verified_purchase_after_30d": {"numerator": verified_purchase_count, "denominator": total_mature_commercial, "coverage": len(mature_commercial) / total_mature_commercial if total_mature_commercial else 0.0, "state": "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_mature_commercial else commercial_state, "interpretation": "Purchase with revenue_verified=true after exposure for the linked tenant lead; not causal attribution."},
         }
-    total = len(assignments)
-    assignment_completion_count = sum(1 for row in assignments if row.status in {"exposed", "generation_failed", "guard_blocked"})
-    assignments_state = "unknown" if not total else "partial" if assignments_truncated or any(row.status == "assigned" for row in assignments) else "observed"
+
+    assignments_state = "unknown" if not total_assignments else "partial" if completed_assignments < total_assignments else "observed"
     truncation_reasons = []
-    if assignments_truncated:
-        truncation_reasons.append("assignment_limit")
     if exposures_truncated:
-        truncation_reasons.append("exposure_limit")
+        truncation_reasons.append("exposure_metric_limit")
     if inbound_truncated:
         truncation_reasons.append("response_event_limit")
     if commerce_events_truncated:
@@ -628,7 +712,7 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
     return {
         "experiment_id": str(experiment.id), "status": experiment.status,
         "assignment_unit": "conversation", "distribution": {"control_percent": 100 - experiment.candidate_percent, "candidate_percent": experiment.candidate_percent},
-        "assignments": {"numerator": assignment_completion_count, "denominator": total, "coverage": assignment_completion_count / total if total else 0.0, "state": assignments_state},
+        "assignments": {"numerator": completed_assignments, "denominator": total_assignments, "coverage": completed_assignments / total_assignments if total_assignments else 0.0, "state": assignments_state},
         "by_variant": by_variant,
         "metric": "response_after_7d",
         "commercial_event_rows_evaluated": len(commerce_events),
@@ -636,6 +720,7 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
         "evidence": "persisted conversation/message link; response is post-exposure correlation, not campaign/prompt causality",
         "truncated": bool(truncation_reasons),
         "truncation_reasons": truncation_reasons,
+        "sample_limits": {"experiments_per_dashboard": A11_EXPERIMENT_DASHBOARD_LIMIT, "exposures": A11_EXPOSURE_METRIC_LIMIT, "response_events": A11_RESPONSE_EVENT_LIMIT, "commercial_events": A11_COMMERCIAL_EVENT_LIMIT},
     }
 
 
@@ -674,9 +759,8 @@ async def promotion_decision(db: AsyncSession, tenant_id, experiment: A11PromptE
     p_value = _two_proportion_pvalue(control["numerator"], control["denominator"], candidate["numerator"], candidate["denominator"])
     lift = (candidate["numerator"] / candidate["denominator"] - control["numerator"] / control["denominator"]) if control["denominator"] and candidate["denominator"] else None
     candidate_counts = metrics["by_variant"]["candidate"]
-    candidate_assignments = candidate_counts["assigned"]
-    candidate_error_rate = candidate_counts["generation_failed"] / candidate_assignments if candidate_assignments else None
-    candidate_guard_block_rate = candidate_counts["guard_blocked"] / candidate_assignments if candidate_assignments else None
+    candidate_error_rate = candidate_counts["generation_error_rate"]["value"]
+    candidate_guard_block_rate = candidate_counts["guard_block_rate"]["value"]
     reason = "eligible_for_promotion"
     if control["state"] != "observed" or candidate["state"] != "observed":
         reason = "outcomes_unknown_or_immature"
@@ -686,6 +770,8 @@ async def promotion_decision(db: AsyncSession, tenant_id, experiment: A11PromptE
         reason = "assignment_instrumentation_incomplete"
     elif metrics["truncated"]:
         reason = "evaluation_volume_truncated"
+    elif candidate_counts["generation_error_rate"]["state"] != "observed" or candidate_counts["guard_block_rate"]["state"] != "observed":
+        reason = "generation_or_safety_guardrail_unknown"
     elif metrics["by_variant"]["control"]["verified_purchase_after_30d"]["state"] != "observed" or metrics["by_variant"]["candidate"]["verified_purchase_after_30d"]["state"] != "observed":
         reason = "verified_purchase_outcome_unknown_or_immature"
     elif metrics["by_variant"]["control"]["commercial_stage_advance_after_30d"]["state"] != "observed" or metrics["by_variant"]["candidate"]["commercial_stage_advance_after_30d"]["state"] != "observed":
@@ -749,14 +835,19 @@ async def rollback_experiment(db: AsyncSession, tenant_id, experiment: A11Prompt
 
 
 async def dashboard(db: AsyncSession, tenant_id):
+    version_total = int(await db.scalar(select(func.count(A11PromptVersion.id)).where(A11PromptVersion.empresa_id == tenant_id)) or 0)
+    experiment_total = int(await db.scalar(select(func.count(A11PromptExperiment.id)).where(A11PromptExperiment.empresa_id == tenant_id)) or 0)
+    evaluation_total = int(await db.scalar(select(func.count(A11PromptEvaluation.id)).where(A11PromptEvaluation.empresa_id == tenant_id)) or 0)
+    audit_total = int(await db.scalar(select(func.count(A11PromptAudit.id)).where(A11PromptAudit.empresa_id == tenant_id)) or 0)
     versions = (await db.execute(select(A11PromptVersion).where(A11PromptVersion.empresa_id == tenant_id).order_by(A11PromptVersion.module_key, A11PromptVersion.version_number.desc()).limit(500))).scalars().all()
     states = (await db.execute(select(A11PromptModuleState).where(A11PromptModuleState.empresa_id == tenant_id))).scalars().all()
-    experiments = (await db.execute(select(A11PromptExperiment).where(A11PromptExperiment.empresa_id == tenant_id).order_by(A11PromptExperiment.created_at.desc()).limit(100))).scalars().all()
+    experiments = (await db.execute(select(A11PromptExperiment).where(A11PromptExperiment.empresa_id == tenant_id).order_by(A11PromptExperiment.created_at.desc()).limit(A11_EXPERIMENT_DASHBOARD_LIMIT))).scalars().all()
     evaluations = (await db.execute(select(A11PromptEvaluation).where(A11PromptEvaluation.empresa_id == tenant_id).order_by(A11PromptEvaluation.evaluated_at.desc()).limit(100))).scalars().all()
     audits = (await db.execute(select(A11PromptAudit).where(A11PromptAudit.empresa_id == tenant_id).order_by(A11PromptAudit.created_at.desc()).limit(100))).scalars().all()
     settings = await db.scalar(select(A11OptimizerSettings).where(A11OptimizerSettings.empresa_id == tenant_id))
     version_ids = [row.id for row in versions]
     approvals = set()
+    latest_evaluations_by_version = {}
     if version_ids:
         approvals = set((await db.execute(select(A11PromptAudit.object_id).where(
             A11PromptAudit.empresa_id == tenant_id,
@@ -764,12 +855,32 @@ async def dashboard(db: AsyncSession, tenant_id):
             A11PromptAudit.action == "version_approved",
             A11PromptAudit.object_id.in_(version_ids),
         ))).scalars().all())
+        ranked_evaluations = select(
+            A11PromptEvaluation.prompt_version_id.label("version_id"),
+            A11PromptEvaluation.passed.label("passed"),
+            A11PromptEvaluation.result_json.label("result_json"),
+            func.row_number().over(
+                partition_by=A11PromptEvaluation.prompt_version_id,
+                order_by=(A11PromptEvaluation.evaluated_at.desc(), A11PromptEvaluation.id.desc()),
+            ).label("rank"),
+        ).where(
+            A11PromptEvaluation.empresa_id == tenant_id,
+            A11PromptEvaluation.prompt_version_id.in_(version_ids),
+        ).subquery()
+        latest_rows = (await db.execute(select(ranked_evaluations.c.version_id, ranked_evaluations.c.passed, ranked_evaluations.c.result_json).where(ranked_evaluations.c.rank == 1))).all()
+        latest_evaluations_by_version = {row.version_id: row for row in latest_rows}
     by_id = {row.id: row for row in versions}
     modules = []
     for module_key, (title, _) in MODULES.items():
         rows = [row for row in versions if row.module_key == module_key]
         state = next((row for row in states if row.module_key == module_key), None)
-        modules.append({"id": module_key, "title": title, "state": state.state if state else "OFFLINE", "stable_version_id": str(state.stable_version_id) if state and state.stable_version_id else None, "active_version_id": str(state.active_version_id) if state and state.active_version_id else None, "versions": [{"id": str(row.id), "version": row.version_number, "content": row.content, "content_hash": row.content_hash, "source_version_id": str(row.source_version_id) if row.source_version_id else None, "change_summary": row.change_summary, "hypothesis": row.hypothesis, "primary_metric": row.primary_metric, "approved": row.id in approvals, "created_at": row.created_at.isoformat() if row.created_at else None} for row in rows]})
+        version_views = []
+        for row in rows:
+            evaluation = latest_evaluations_by_version.get(row.id)
+            evaluation_result = evaluation.result_json if evaluation else {}
+            approval_eligible = bool(evaluation and evaluation.passed and evaluation_result.get("evaluation_state") == "observed" and evaluation_result.get("approval_eligible") is True)
+            version_views.append({"id": str(row.id), "version": row.version_number, "content": row.content, "content_hash": row.content_hash, "source_version_id": str(row.source_version_id) if row.source_version_id else None, "change_summary": row.change_summary, "hypothesis": row.hypothesis, "primary_metric": row.primary_metric, "approved": row.id in approvals, "approval_eligible": approval_eligible, "evaluation_state": evaluation_result.get("evaluation_state", "unknown"), "created_at": row.created_at.isoformat() if row.created_at else None})
+        modules.append({"id": module_key, "title": title, "state": state.state if state else "OFFLINE", "stable_version_id": str(state.stable_version_id) if state and state.stable_version_id else None, "active_version_id": str(state.active_version_id) if state and state.active_version_id else None, "versions": version_views})
     experiments_view = []
     for experiment in experiments:
         metrics = await experiment_metrics(db, tenant_id, experiment)
@@ -782,7 +893,13 @@ async def dashboard(db: AsyncSession, tenant_id):
         "experiments": experiments_view,
         "evaluations": [{"id": str(row.id), "prompt_version_id": str(row.prompt_version_id), "suite_version": row.suite_version, "source_kind": row.source_kind, "passed": row.passed, "result": row.result_json, "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None} for row in evaluations],
         "audit": [{"id": str(row.id), "action": row.action, "object_type": row.object_type, "object_id": str(row.object_id) if row.object_id else None, "details": row.details_json, "created_at": row.created_at.isoformat() if row.created_at else None} for row in audits],
-        "version_count": len(versions),
+        "version_count": version_total,
+        "history_coverage": {
+            "versions": {"shown": len(versions), "total": version_total, "state": "partial" if version_total > len(versions) else "observed"},
+            "experiments": {"shown": len(experiments), "total": experiment_total, "metrics_limit": A11_EXPERIMENT_DASHBOARD_LIMIT, "state": "partial" if experiment_total > len(experiments) else "observed"},
+            "evaluations": {"shown": len(evaluations), "total": evaluation_total, "state": "partial" if evaluation_total > len(evaluations) else "observed"},
+            "audit": {"shown": len(audits), "total": audit_total, "scope": "recent", "state": "partial" if audit_total > len(audits) else "observed"},
+        },
         "states": ["OFFLINE", "SHADOW", "READY_FOR_PILOT", "LIVE_DISABLED", "PAUSED", "ROLLED_BACK"],
         "synthetic_evaluations_count_as_exposures": False,
     }

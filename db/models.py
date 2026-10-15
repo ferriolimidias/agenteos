@@ -261,6 +261,7 @@ class A11PromptAssignment(Base):
     __table_args__ = (
         UniqueConstraint("empresa_id", "experiment_id", "conversation_id", name="uq_a11_assignment_unit"),
         Index("ix_a11_assignments_tenant_state", "empresa_id", "status", "assigned_at"),
+        Index("ix_a11_assignments_tenant_experiment_variant", "empresa_id", "experiment_id", "variant"),
         CheckConstraint("variant IN ('control','candidate')", name="ck_a11_assignment_variant"),
         CheckConstraint("status IN ('assigned','exposed','generation_failed','guard_blocked')", name="ck_a11_assignment_status"),
     )
@@ -275,6 +276,9 @@ class A11PromptAssignment(Base):
     status = Column(String(24), nullable=False, default="assigned", server_default=sa_text("'assigned'"))
     assigned_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
     completed_at = Column(DateTime, nullable=True)
+    generation_attempt_count = Column(Integer, nullable=False, default=0, server_default=sa_text("0"))
+    generation_failure_count = Column(Integer, nullable=False, default=0, server_default=sa_text("0"))
+    guard_block_count = Column(Integer, nullable=False, default=0, server_default=sa_text("0"))
 
 
 class A11PromptExposure(Base):
@@ -282,6 +286,7 @@ class A11PromptExposure(Base):
     __table_args__ = (
         UniqueConstraint("empresa_id", "experiment_id", "conversation_id", name="uq_a11_exposure_unit"),
         Index("ix_a11_exposures_tenant_time", "empresa_id", "exposed_at"),
+        Index("ix_a11_exposures_tenant_experiment_time", "empresa_id", "experiment_id", "exposed_at"),
         CheckConstraint("variant IN ('control','candidate')", name="ck_a11_exposure_variant"),
     )
 
@@ -304,6 +309,7 @@ class A11PromptEvaluation(Base):
     __tablename__ = "a11_prompt_evaluations"
     __table_args__ = (
         Index("ix_a11_eval_tenant_version", "empresa_id", "prompt_version_id"),
+        Index("ix_a11_eval_tenant_version_time", "empresa_id", "prompt_version_id", "evaluated_at"),
         CheckConstraint("source_kind IN ('synthetic','anonymized')", name="ck_a11_eval_source_kind"),
     )
 
@@ -319,7 +325,10 @@ class A11PromptEvaluation(Base):
 
 class A11PromptAudit(Base):
     __tablename__ = "a11_prompt_audits"
-    __table_args__ = (Index("ix_a11_audit_tenant_time", "empresa_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_a11_audit_tenant_time", "empresa_id", "created_at"),
+        Index("ix_a11_audit_tenant_version_approval", "empresa_id", "object_type", "action", "object_id"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)

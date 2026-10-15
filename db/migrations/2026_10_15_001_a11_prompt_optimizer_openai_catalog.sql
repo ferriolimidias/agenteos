@@ -96,9 +96,16 @@ CREATE TABLE IF NOT EXISTS a11_prompt_assignments (
     status VARCHAR(24) NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned','exposed','generation_failed','guard_blocked')),
     assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
+    generation_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_attempt_count >= 0),
+    generation_failure_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_failure_count >= 0),
+    guard_block_count INTEGER NOT NULL DEFAULT 0 CHECK (guard_block_count >= 0),
     CONSTRAINT uq_a11_assignment_unit UNIQUE (empresa_id, experiment_id, conversation_id)
 );
+ALTER TABLE a11_prompt_assignments ADD COLUMN IF NOT EXISTS generation_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_attempt_count >= 0);
+ALTER TABLE a11_prompt_assignments ADD COLUMN IF NOT EXISTS generation_failure_count INTEGER NOT NULL DEFAULT 0 CHECK (generation_failure_count >= 0);
+ALTER TABLE a11_prompt_assignments ADD COLUMN IF NOT EXISTS guard_block_count INTEGER NOT NULL DEFAULT 0 CHECK (guard_block_count >= 0);
 CREATE INDEX IF NOT EXISTS ix_a11_assignments_tenant_state ON a11_prompt_assignments(empresa_id, status, assigned_at);
+CREATE INDEX IF NOT EXISTS ix_a11_assignments_tenant_experiment_variant ON a11_prompt_assignments(empresa_id, experiment_id, variant);
 
 CREATE TABLE IF NOT EXISTS a11_prompt_exposures (
     id UUID PRIMARY KEY,
@@ -117,6 +124,7 @@ CREATE TABLE IF NOT EXISTS a11_prompt_exposures (
     CONSTRAINT uq_a11_exposure_unit UNIQUE (empresa_id, experiment_id, conversation_id)
 );
 CREATE INDEX IF NOT EXISTS ix_a11_exposures_tenant_time ON a11_prompt_exposures(empresa_id, exposed_at);
+CREATE INDEX IF NOT EXISTS ix_a11_exposures_tenant_experiment_time ON a11_prompt_exposures(empresa_id, experiment_id, exposed_at);
 
 CREATE TABLE IF NOT EXISTS a11_prompt_evaluations (
     id UUID PRIMARY KEY,
@@ -129,6 +137,7 @@ CREATE TABLE IF NOT EXISTS a11_prompt_evaluations (
     evaluated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS ix_a11_eval_tenant_version ON a11_prompt_evaluations(empresa_id, prompt_version_id);
+CREATE INDEX IF NOT EXISTS ix_a11_eval_tenant_version_time ON a11_prompt_evaluations(empresa_id, prompt_version_id, evaluated_at);
 
 CREATE TABLE IF NOT EXISTS a11_prompt_audits (
     id UUID PRIMARY KEY,
@@ -141,10 +150,19 @@ CREATE TABLE IF NOT EXISTS a11_prompt_audits (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS ix_a11_audit_tenant_time ON a11_prompt_audits(empresa_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_a11_audit_tenant_version_approval ON a11_prompt_audits(empresa_id, object_type, action, object_id);
 
 CREATE OR REPLACE FUNCTION a11_prompt_version_immutable() RETURNS trigger AS $$
 BEGIN
-    RAISE EXCEPTION 'A11 prompt versions are immutable';
+    -- Tenant deletion must be able to cascade through the immutable history.
+    -- While the tenant still exists, neither updates nor direct deletes are allowed.
+    IF EXISTS (SELECT 1 FROM empresas WHERE id = OLD.empresa_id) THEN
+        RAISE EXCEPTION 'A11 prompt versions are immutable';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_a11_prompt_versions_immutable ON a11_prompt_versions;
