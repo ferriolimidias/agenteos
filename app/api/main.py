@@ -43,6 +43,7 @@ from app.api.routers import mercado_pago_leoft
 from app.api.routers import company_payments
 from app.services.followup_service import processar_followups_pendentes
 from app.services.campaign_central_dispatch_service import process_campaign_outbox_once
+from app.services.a11_runtime import automatic_promotion_loop
 from app.core.security import validate_security_settings, decode_access_token
 from db.models import is_meta_app_reviewer_role
 from app.core.startup_database_mode import StartupDatabaseMode
@@ -135,6 +136,10 @@ async def lifespan(app: FastAPI):
         _conversion_outbox_reconciliation_loop(),
         name="canonical-conversion-outbox-reconciliation",
     )
+    a11_automatic_promotion_task = asyncio.create_task(
+        automatic_promotion_loop(),
+        name="a11-automatic-promotion",
+    )
     logger.info(
         "WORKER_CONFIGURATION startup_database_mode=%s followup_enabled=%s campaign_enabled=%s",
         startup_database_mode.value,
@@ -146,6 +151,8 @@ async def lifespan(app: FastAPI):
     finally:
         outbox_reconciliation_task.cancel()
         await asyncio.gather(outbox_reconciliation_task, return_exceptions=True)
+        a11_automatic_promotion_task.cancel()
+        await asyncio.gather(a11_automatic_promotion_task, return_exceptions=True)
         await worker_runtime.stop_workers(worker_tasks, redis_client)
         close_redis = getattr(redis_client, "close", None) or getattr(redis_client, "aclose", None)
         if close_redis is not None:

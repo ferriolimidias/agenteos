@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 
@@ -18,6 +19,20 @@ MODEL_OPTIONS: Final[tuple[dict[str, str], ...]] = (
 )
 
 ALLOWED_MODEL_IDS: Final[frozenset[str]] = frozenset(item["value"] for item in MODEL_OPTIONS)
+_REASONING_CHAT_MODEL_ID: Final[re.Pattern[str]] = re.compile(r"^o(?:1|3|4)(?:-|$)", re.IGNORECASE)
+
+
+def model_requires_minimal_chat_parameters(model_id: str | None) -> bool:
+    """Avoid optional sampling fields for known reasoning model families.
+
+    OpenAI's model list does not publish parameter capabilities. Current
+    reasoning families have model-specific Chat Completions restrictions, so
+    the AgentOS sends only the required model/messages fields for these IDs.
+    Unknown newly listed IDs already use this minimal profile after explicit
+    tenant validation.
+    """
+    normalized = str(model_id or "").strip().lower()
+    return normalized == "gpt-5.6-luna" or bool(_REASONING_CHAT_MODEL_ID.match(normalized))
 
 
 def is_allowed_model_id(value: str | None) -> bool:

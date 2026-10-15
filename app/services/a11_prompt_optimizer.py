@@ -512,9 +512,11 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
     assignments = (await db.execute(select(A11PromptAssignment).where(
         A11PromptAssignment.empresa_id == tenant_id, A11PromptAssignment.experiment_id == experiment.id,
     ).order_by(A11PromptAssignment.assigned_at).limit(20000))).scalars().all()
+    assignments_truncated = len(assignments) >= 20000
     exposures = (await db.execute(select(A11PromptExposure).where(
         A11PromptExposure.empresa_id == tenant_id, A11PromptExposure.experiment_id == experiment.id,
     ).order_by(A11PromptExposure.exposed_at).limit(20000))).scalars().all()
+    exposures_truncated = len(exposures) >= 20000
     now = datetime.utcnow()
     cutoff_days = int((experiment.criteria_json or {}).get("maturity_days", 7))
     matured = [row for row in exposures if row.exposed_at <= now - timedelta(days=cutoff_days)]
@@ -590,30 +592,50 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
         input_tokens = [row.input_tokens for row in sample if isinstance(row.input_tokens, int) and not isinstance(row.input_tokens, bool) and row.input_tokens >= 0]
         output_tokens = [row.output_tokens for row in sample if isinstance(row.output_tokens, int) and not isinstance(row.output_tokens, bool) and row.output_tokens >= 0]
         median_latency = (latencies[(len(latencies) - 1) // 2] + latencies[len(latencies) // 2]) / 2 if latencies else None
+        assignment_total = sum(assignment_counts[variant].values())
+        response_state = "unknown" if not total_exposed else "partial" if len(sample) < total_exposed or exposures_truncated or inbound_truncated else "observed"
+        commercial_state = "unknown" if not total_exposed else "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_exposed else "observed" if mature_commercial else "unknown"
+        assignment_state = "unknown" if not assignment_total else "partial" if assignments_truncated or assignment_counts[variant]["assigned"] > 0 else "observed"
         by_variant[variant] = {
-            "assigned": assignment_counts[variant]["assigned"],
+            # `assigned` is the total assigned unit count across lifecycle
+            # states; pending assignments are exposed separately.
+            "assigned": assignment_total,
+            "assignment_state": assignment_state,
+            "pending_assignments": assignment_counts[variant]["assigned"],
             "exposed": total_exposed,
             "generation_failed": assignment_counts[variant]["generation_failed"],
             "guard_blocked": assignment_counts[variant]["guard_blocked"],
-            "response_after_window": {"numerator": response_count, "denominator": len(sample), "coverage": len(sample) / total_exposed if total_exposed else 0.0, "state": "unknown" if not total_exposed else "partial" if len(sample) < total_exposed else "observed", "interpretation": "Temporal association only; not causal attribution."},
-            "latency_p50_ms": {"value": median_latency, "numerator": len(latencies), "denominator": len(sample), "state": "unknown" if not sample or not latencies else "partial" if len(latencies) < len(sample) else "observed"},
-            "input_tokens_mean": {"value": sum(input_tokens) / len(input_tokens) if input_tokens else None, "numerator": len(input_tokens), "denominator": len(sample), "state": "unknown" if not sample or not input_tokens else "partial" if len(input_tokens) < len(sample) else "observed"},
-            "output_tokens_mean": {"value": sum(output_tokens) / len(output_tokens) if output_tokens else None, "numerator": len(output_tokens), "denominator": len(sample), "state": "unknown" if not sample or not output_tokens else "partial" if len(output_tokens) < len(sample) else "observed"},
+            "response_after_window": {"numerator": response_count, "denominator": len(sample), "coverage": len(sample) / total_exposed if total_exposed else 0.0, "state": response_state, "interpretation": "Temporal association only; not causal attribution."},
+            "latency_p50_ms": {"value": median_latency, "numerator": len(latencies), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not latencies else "partial" if len(latencies) < len(sample) else "observed"},
+            "input_tokens_mean": {"value": sum(input_tokens) / len(input_tokens) if input_tokens else None, "numerator": len(input_tokens), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not input_tokens else "partial" if len(input_tokens) < len(sample) else "observed"},
+            "output_tokens_mean": {"value": sum(output_tokens) / len(output_tokens) if output_tokens else None, "numerator": len(output_tokens), "denominator": len(sample), "state": "partial" if exposures_truncated else "unknown" if not sample or not output_tokens else "partial" if len(output_tokens) < len(sample) else "observed"},
             "cost_usd": {"value": None, "numerator": 0, "denominator": len(sample), "state": "unknown", "reason": "No measured billing amount or versioned price is persisted."},
-            "commercial_stage_advance_after_30d": {"numerator": stage_advance_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": "unknown" if not total_exposed or not mature_commercial else "partial" if len(mature_commercial) < total_exposed else "observed", "interpretation": "Canonical commercial event after exposure; temporal association, not causal attribution."},
-            "verified_purchase_after_30d": {"numerator": verified_purchase_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": "unknown" if not total_exposed or not mature_commercial else "partial" if len(mature_commercial) < total_exposed else "observed", "interpretation": "Purchase with revenue_verified=true after exposure for the linked tenant lead; not causal attribution."},
+            "commercial_stage_advance_after_30d": {"numerator": stage_advance_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": commercial_state, "interpretation": "Canonical commercial event after exposure; temporal association, not causal attribution."},
+            "verified_purchase_after_30d": {"numerator": verified_purchase_count, "denominator": len(mature_commercial), "coverage": len(mature_commercial) / total_exposed if total_exposed else 0.0, "state": commercial_state, "interpretation": "Purchase with revenue_verified=true after exposure for the linked tenant lead; not causal attribution."},
         }
     total = len(assignments)
+    assignment_completion_count = sum(1 for row in assignments if row.status in {"exposed", "generation_failed", "guard_blocked"})
+    assignments_state = "unknown" if not total else "partial" if assignments_truncated or any(row.status == "assigned" for row in assignments) else "observed"
+    truncation_reasons = []
+    if assignments_truncated:
+        truncation_reasons.append("assignment_limit")
+    if exposures_truncated:
+        truncation_reasons.append("exposure_limit")
+    if inbound_truncated:
+        truncation_reasons.append("response_event_limit")
+    if commerce_events_truncated:
+        truncation_reasons.append("commercial_event_limit")
     return {
         "experiment_id": str(experiment.id), "status": experiment.status,
         "assignment_unit": "conversation", "distribution": {"control_percent": 100 - experiment.candidate_percent, "candidate_percent": experiment.candidate_percent},
-        "assignments": {"numerator": sum(1 for row in assignments if row.status in {"exposed", "generation_failed", "guard_blocked"}), "denominator": total, "coverage": sum(1 for row in assignments if row.status in {"exposed", "generation_failed", "guard_blocked"}) / total if total else 0.0, "state": "unknown" if not total else "partial" if any(row.status == "assigned" for row in assignments) else "observed"},
+        "assignments": {"numerator": assignment_completion_count, "denominator": total, "coverage": assignment_completion_count / total if total else 0.0, "state": assignments_state},
         "by_variant": by_variant,
         "metric": "response_after_7d",
         "commercial_event_rows_evaluated": len(commerce_events),
         "maturity_days": cutoff_days,
         "evidence": "persisted conversation/message link; response is post-exposure correlation, not campaign/prompt causality",
-        "truncated": total >= 20000 or len(exposures) >= 20000 or inbound_truncated or commerce_events_truncated,
+        "truncated": bool(truncation_reasons),
+        "truncation_reasons": truncation_reasons,
     }
 
 
@@ -733,7 +755,15 @@ async def dashboard(db: AsyncSession, tenant_id):
     evaluations = (await db.execute(select(A11PromptEvaluation).where(A11PromptEvaluation.empresa_id == tenant_id).order_by(A11PromptEvaluation.evaluated_at.desc()).limit(100))).scalars().all()
     audits = (await db.execute(select(A11PromptAudit).where(A11PromptAudit.empresa_id == tenant_id).order_by(A11PromptAudit.created_at.desc()).limit(100))).scalars().all()
     settings = await db.scalar(select(A11OptimizerSettings).where(A11OptimizerSettings.empresa_id == tenant_id))
-    approvals = {(row.object_id) for row in audits if row.action == "version_approved" and row.object_type == "prompt_version"}
+    version_ids = [row.id for row in versions]
+    approvals = set()
+    if version_ids:
+        approvals = set((await db.execute(select(A11PromptAudit.object_id).where(
+            A11PromptAudit.empresa_id == tenant_id,
+            A11PromptAudit.object_type == "prompt_version",
+            A11PromptAudit.action == "version_approved",
+            A11PromptAudit.object_id.in_(version_ids),
+        ))).scalars().all())
     by_id = {row.id: row for row in versions}
     modules = []
     for module_key, (title, _) in MODULES.items():

@@ -251,6 +251,7 @@ class A11PromptExperiment(Base):
     starts_at = Column(DateTime, nullable=True)
     ends_at = Column(DateTime, nullable=True)
     criteria_json = Column(JSONB, nullable=False, default=dict)
+    last_auto_evaluated_at = Column(DateTime, nullable=True)
     created_by = Column(String(128), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=sa_text("CURRENT_TIMESTAMP"))
 

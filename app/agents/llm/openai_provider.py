@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from app.core.secret_sanitizer import sanitize_for_log
+from app.core.model_catalog import model_requires_minimal_chat_parameters
 from app.agents.llm.base import AgentLLM
 
 logger = logging.getLogger(__name__)
@@ -83,9 +84,10 @@ class OpenAIAgentLLM(AgentLLM):
             "model": self._model,
             "messages": payload_messages,
         }
-        # GPT-5.6 Luna only accepts the provider default sampling value.
-        # Do not send temperature=0.2, which OpenAI rejects before execution.
-        if self._request_profile == "legacy" and self._model.lower() != "gpt-5.6-luna":
+        # Keep GPT-5.6 Luna's existing exact exception, and avoid sampling
+        # parameters for reasoning families whose Chat Completions support is
+        # model-specific. New IDs remain minimal unless explicitly profiled.
+        if self._request_profile == "legacy" and not model_requires_minimal_chat_parameters(self._model):
             request_kwargs["temperature"] = 0.2
         try:
             response = await client.chat.completions.create(

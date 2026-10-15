@@ -93,13 +93,13 @@ async def test_luna_request_omits_unsupported_temperature_while_other_models_kee
             self.chat = SimpleNamespace(completions=FakeCompletions())
 
     with patch("openai.AsyncOpenAI", FakeOpenAI):
-        for model in ("gpt-5.6-luna", "gpt-5.4-mini"):
+        for model in ("gpt-5.6-luna", "o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5.4-mini"):
             await OpenAIAgentLLM.from_config(
                 {"modelo_ia": model, "_openai_api_key": "REDACTED_FOR_TEST", "empresa_id": "tenant-test"}
             ).generate(system_prompt="system", messages=[{"role": "user", "content": "hello"}])
 
-    assert "temperature" not in captured[0]
-    assert captured[1]["temperature"] == 0.2
+    assert all("temperature" not in request for request in captured[:6])
+    assert captured[6]["temperature"] == 0.2
 
 
 @pytest.mark.asyncio

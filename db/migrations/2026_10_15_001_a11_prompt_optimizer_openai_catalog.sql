@@ -77,9 +77,11 @@ CREATE TABLE IF NOT EXISTS a11_prompt_experiments (
     starts_at TIMESTAMP,
     ends_at TIMESTAMP,
     criteria_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_auto_evaluated_at TIMESTAMP,
     created_by VARCHAR(128),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE a11_prompt_experiments ADD COLUMN IF NOT EXISTS last_auto_evaluated_at TIMESTAMP;
 CREATE INDEX IF NOT EXISTS ix_a11_experiment_tenant_state ON a11_prompt_experiments(empresa_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_a11_one_running_experiment_per_tenant ON a11_prompt_experiments(empresa_id) WHERE status = 'RUNNING';
 

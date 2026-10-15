@@ -7,7 +7,7 @@ const app = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");
 const tenantRoutes = app.split('{/* Rota do Cliente (Tenant) */}')[1];
 const patterns = ["", ...[...tenantRoutes.matchAll(/<Route path="([^"]+)"/g)].map((match) => match[1]).filter((path) => path !== "/painel")];
 const entries = TENANT_NAVIGATION_GROUPS.flatMap((group) => group.items);
-const role = "tenant_admin";
+const role = "admin_empresa";
 
 function storage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -15,7 +15,7 @@ function storage(initial = {}) {
 }
 
 test("every declared Tenant route family resolves to a reachable module", () => {
-  assert.equal(patterns.length, 34, "new routes need an explicit navigation audit");
+  assert.equal(patterns.length, 35, "new routes need an explicit navigation audit");
   for (const pattern of patterns) {
     const concrete = `/painel${pattern ? `/${pattern.replace(/:id/g, "synthetic-id").replace(/\*/g, "legacy-detail")}` : ""}`;
     assert.ok(resolveTenantNavigation(concrete, role), `route missing from map: ${pattern || "index"}`);

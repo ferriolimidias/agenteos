@@ -1040,10 +1040,11 @@ async def put_ia_config(
     if data.modelo_ia is not None:
         if data.modelo_ia != str(empresa.modelo_ia or ""):
             from app.services.openai_model_catalog import classify_model, model_is_validated
+            from app.core.model_catalog import model_requires_minimal_chat_parameters
             if not await model_is_validated(db, empresa.id, data.modelo_ia):
                 raise HTTPException(status_code=422, detail="Valide este modelo com a credencial do tenant antes de selecioná-lo.")
             compatibility, _, _ = classify_model(data.modelo_ia)
-            empresa.modelo_ia_request_profile = "legacy" if compatibility == "known_compatible" else "chat_minimal"
+            empresa.modelo_ia_request_profile = "chat_minimal" if model_requires_minimal_chat_parameters(data.modelo_ia) or compatibility != "known_compatible" else "legacy"
         empresa.modelo_ia = data.modelo_ia
     if data.followup_ativo is not None:
         empresa.followup_ativo = data.followup_ativo
