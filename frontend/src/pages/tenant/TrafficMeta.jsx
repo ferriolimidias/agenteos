@@ -1,11 +1,12 @@
 import "../../styles/ux05-analytics.css";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, CheckCircle2, Eye, Loader2, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
 import { loadFacebookSdk, startMetaMarketingAuthorization, sanitizeMetaBrowserError } from "../../utils/metaEmbeddedSignup";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
 import ExistingPostPicker from "./ExistingPostPicker";
+import { describeMetaReadError } from "../../utils/metaReadErrors";
 
 const emptyConfig = {
   ad_account_id: "",
@@ -309,6 +310,9 @@ export default function TrafficMeta() {
   const [savingMappingSources, setSavingMappingSources] = useState("");
   const [pages, setPages] = useState([]);
   const [assets, setAssets] = useState(null);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsReadError, setAssetsReadError] = useState(null);
+  const assetsRequestSequence = useRef(0);
   const [assetForm, setAssetForm] = useState({ page_id: "", whatsapp_connection_id: "", dataset_id: "" });
   const [savingAssets, setSavingAssets] = useState(false);
   const [campaigns, setCampaigns] = useState([]);
@@ -364,6 +368,7 @@ export default function TrafficMeta() {
   const datasetAsset = datasetDisplay(config, officialWhatsapp);
   const conversionSourceOptions = conversions?.conversion_engine?.source_options || fallbackSourceOptions;
   const conversionGoalOptions = campaignReadiness?.supported_goals || [];
+  const existingPostAdsEnabled = Boolean(status?.existing_post_ads_enabled);
 
   const capabilityBadges = useMemo(() => {
     const data = credentials || {};
@@ -406,6 +411,11 @@ export default function TrafficMeta() {
   };
 
   const loadStatus = async () => {
+    const assetsRequestId = ++assetsRequestSequence.current;
+    setAssets(null);
+    setPages([]);
+    setAssetsReadError(null);
+    setAssetsLoading(false);
     if (!empresaId) {
       setStatus(emptyStatus);
       setCredentials(null);
@@ -451,9 +461,12 @@ export default function TrafficMeta() {
         }
       }
       if (normalizedSavedId) {
+        setAssetsLoading(true);
         try {
           const assetResponse = await api.get(`/empresas/${empresaId}/traffic/meta/assets`, { timeout: 20000 });
+          if (assetsRequestId !== assetsRequestSequence.current) return;
           setAssets(assetResponse.data);
+          setAssetsReadError(null);
           const graphPages = assetResponse.data?.pages || [];
           const graphWhatsapps = assetResponse.data?.whatsapps || [];
           const compatible = graphWhatsapps.filter((item) => item.page_compatible);
@@ -469,8 +482,13 @@ export default function TrafficMeta() {
             page_id: assetResponse.data?.selected_page?.id || config.page_id || current.page_id,
             whatsapp_connection_id: defaultWhatsappId || current.whatsapp_connection_id,
           }));
-        } catch {
+        } catch (assetError) {
+          if (assetsRequestId !== assetsRequestSequence.current) return;
           setAssets(null);
+          setPages([]);
+          setAssetsReadError(describeMetaReadError(assetError));
+        } finally {
+          if (assetsRequestId === assetsRequestSequence.current) setAssetsLoading(false);
         }
       }
     } catch (err) {
@@ -508,6 +526,27 @@ export default function TrafficMeta() {
     } catch (err) {
       setConversionHistory([]);
       setError((current) => current || safeError(err, "Não foi possível carregar o histórico de conversões Meta."));
+    }
+  };
+
+  const retryMetaAssets = async () => {
+    if (!empresaId) return;
+    const requestId = ++assetsRequestSequence.current;
+    setAssetsLoading(true);
+    setAssetsReadError(null);
+    try {
+      const response = await api.get(`/empresas/${empresaId}/traffic/meta/assets`, { timeout: 20000 });
+      if (requestId !== assetsRequestSequence.current) return;
+      setAssets(response.data);
+      setPages(response.data?.pages || []);
+      setAssetsReadError(null);
+    } catch (requestError) {
+      if (requestId !== assetsRequestSequence.current) return;
+      setAssets(null);
+      setPages([]);
+      setAssetsReadError(describeMetaReadError(requestError));
+    } finally {
+      if (requestId === assetsRequestSequence.current) setAssetsLoading(false);
     }
   };
 
@@ -1447,9 +1486,10 @@ export default function TrafficMeta() {
                       <input type="radio" name="traffic-meta-creative-source" value="new" checked={creativeSource === "new"} onChange={() => setCreativeSource("new")} className="mr-2" />
                       <span className="font-semibold">Novo criativo</span><span className="mt-1 block pl-6 text-xs text-slate-600">Manter o fluxo atual com imagem e copy próprias.</span>
                     </label>
-                    <label className={`cursor-pointer rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
-                      <input type="radio" name="traffic-meta-creative-source" value="existing" checked={creativeSource === "existing"} onChange={() => { setCreativeSource("existing"); setConfirmingCampaign(false); }} className="mr-2" />
-                      <span className="font-semibold">Publicação existente</span><span className="mt-1 block pl-6 text-xs text-slate-600">Consultar e gerar uma prévia simulada de Facebook ou Instagram.</span>
+                    <label className={`${existingPostAdsEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"} rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                      <input type="radio" name="traffic-meta-creative-source" value="existing" checked={creativeSource === "existing"} disabled={!existingPostAdsEnabled} aria-describedby="existing-post-feature-status" onChange={() => { setCreativeSource("existing"); setConfirmingCampaign(false); }} className="mr-2 disabled:cursor-not-allowed" />
+                      <span className="font-semibold">Publicação existente</span><span className="mt-1 block pl-6 text-xs text-slate-600">{existingPostAdsEnabled ? "Consultar publicações e gerar uma prévia local de Facebook ou Instagram." : "Indisponível até liberação operacional da integração de leitura."}</span>
+                      <span id="existing-post-feature-status" className="sr-only">{existingPostAdsEnabled ? "Integração liberada em modo somente leitura." : "Integração desativada por segurança."}</span>
                     </label>
                   </div>
                 </fieldset>
@@ -1490,6 +1530,10 @@ export default function TrafficMeta() {
                   empresaId={empresaId}
                   pages={assetPages}
                   adAccountId={configuredAdAccountId}
+                  enabled={existingPostAdsEnabled}
+                  pagesLoading={assetsLoading}
+                  pagesError={assetsReadError}
+                  onRetryPages={retryMetaAssets}
                   initialPageId={campaignForm.page_id || config.page_id || ""}
                   campaignDraft={{
                     daily_budget_brl: campaignForm.daily_budget_brl,

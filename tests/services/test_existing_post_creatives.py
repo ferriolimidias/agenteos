@@ -12,6 +12,7 @@ from app.api.routers.traffic_meta import (
     list_existing_ad_posts,
     preview_existing_post_campaign,
     preview_existing_post_ad_creative,
+    _raise_existing_post_read_error,
 )
 from app.services.meta.existing_post_creatives import (
     ExistingPostSelectionError,
@@ -19,7 +20,9 @@ from app.services.meta.existing_post_creatives import (
     issue_existing_post_selection_token,
     verify_existing_post_selection_token,
 )
+from app.services.meta.graph_client import MetaGraphError
 from app.services.meta.marketing_api import MetaMarketingApiClient
+from app.services.meta.settings import meta_settings
 
 
 class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
@@ -43,6 +46,42 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
             media_type=media_type,
             media_product_type=product,
         )
+
+    def test_existing_posts_feature_flag_defaults_off(self):
+        with patch.dict(os.environ, {"META_EXISTING_POST_ADS_ENABLED": "false"}, clear=False):
+            self.assertFalse(meta_settings().existing_post_ads_enabled)
+        with patch.dict(os.environ, {"META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False):
+            self.assertTrue(meta_settings().existing_post_ads_enabled)
+
+    async def test_disabled_feature_fails_closed_before_database_or_graph_reads(self):
+        with patch.dict(os.environ, {"META_EXISTING_POST_ADS_ENABLED": "false"}, clear=False), \
+             patch("app.api.routers.traffic_meta._get_config", AsyncMock()) as get_config, \
+             patch("app.api.routers.traffic_meta._client", AsyncMock()) as get_client:
+            with self.assertRaises(HTTPException) as raised:
+                await list_existing_ad_posts(
+                    str(self.tenant_id), "instagram", self.page_id, q=None, limit=25, after=None,
+                    db=object(), _=self.admin,
+                )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["code"], "META_EXISTING_POST_ADS_DISABLED")
+        get_config.assert_not_awaited()
+        get_client.assert_not_awaited()
+
+    def test_graph_read_failures_have_stable_safe_http_mapping(self):
+        cases = (
+            (MetaGraphError("invalid_auth", "secret must not leak", status_code=401), 401, "META_CREDENTIAL_INVALID"),
+            (MetaGraphError("missing_permission", "private", status_code=403), 403, "META_READ_PERMISSION_REQUIRED"),
+            (MetaGraphError("rate_limit", "private", status_code=429), 429, "META_RATE_LIMIT"),
+            (MetaGraphError("timeout", "private", status_code=None), 504, "META_READ_TIMEOUT"),
+            (MetaGraphError("temporary_error", "private", status_code=503), 503, "META_READ_TEMPORARILY_UNAVAILABLE"),
+        )
+        for error, expected_status, expected_code in cases:
+            with self.subTest(code=error.code), self.assertRaises(HTTPException) as raised:
+                _raise_existing_post_read_error(error)
+            self.assertEqual(raised.exception.status_code, expected_status)
+            self.assertEqual(raised.exception.detail["code"], expected_code)
+            self.assertNotIn("private", str(raised.exception.detail))
+            self.assertNotIn("secret", str(raised.exception.detail))
 
     def test_signed_selection_is_tenant_scoped_tamper_evident_and_short_lived(self):
         with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False):
@@ -137,7 +176,7 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(media_id, "ig_media_456")
                 return {"id": media_id, "media_type": "VIDEO", "media_product_type": "REELS"}
 
-        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False), \
+        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48, "META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False), \
              patch("app.api.routers.traffic_meta._get_config", AsyncMock(return_value=self.config)), \
              patch("app.api.routers.traffic_meta._client", AsyncMock(return_value=(Client(), {"read_only": True, "graph_version": "v26.0"}))) as get_client:
             listing = await list_existing_ad_posts(
@@ -160,7 +199,7 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_client.await_count, 2)
 
     async def test_tenant_cannot_reuse_another_tenants_signed_selection(self):
-        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False):
+        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48, "META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False):
             token = self._token()
             other_admin = SimpleNamespace(role="admin_empresa", empresa_id=self.other_tenant_id, email="other@example.test")
             request = TrafficMetaExistingPostPreviewRequest(selection_token=token)
@@ -206,7 +245,7 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
             "phone_number_id": "phone_789",
             "whatsapp_phone_number": "+55 11 90000-0000",
         }
-        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48}, clear=False), \
+        with patch.dict(os.environ, {"SECRET_KEY": "a" * 48, "META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False), \
              patch("app.api.routers.traffic_meta._get_config", AsyncMock(return_value=self.config)), \
              patch("app.api.routers.traffic_meta._client", AsyncMock(return_value=(Client(), {"graph_version": "v26.0"}))), \
              patch("app.api.routers.traffic_meta._resolve_campaign_assets_for_write", AsyncMock(return_value=assets)) as resolve_assets:

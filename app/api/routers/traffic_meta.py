@@ -233,6 +233,7 @@ def _settings_flags() -> dict[str, bool]:
         "adset_create_enabled": settings.marketing_adset_create_enabled,
         "creative_create_enabled": settings.marketing_creative_create_enabled,
         "ad_create_enabled": settings.marketing_ad_create_enabled,
+        "existing_post_ads_enabled": settings.existing_post_ads_enabled,
     }
 
 
@@ -584,12 +585,22 @@ def _serialize_existing_post(
 
 def _raise_existing_post_read_error(exc: Exception) -> None:
     code = str(getattr(exc, "code", "") or "")
+    if code in {"invalid_auth", "token_expired"}:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "META_CREDENTIAL_INVALID", "message": "A credencial de anúncios da empresa foi recusada ou expirou. Reautorize a conexão Meta."},
+        ) from exc
     if code == "rate_limit":
         raise HTTPException(status_code=429, detail={"code": "META_RATE_LIMIT", "message": "A Meta limitou temporariamente a consulta. Tente novamente em instantes."}) from exc
     if code == "timeout":
         raise HTTPException(status_code=504, detail={"code": "META_READ_TIMEOUT", "message": "A consulta de publicações excedeu o tempo limite."}) from exc
     if code == "missing_permission":
         raise HTTPException(status_code=403, detail={"code": "META_READ_PERMISSION_REQUIRED", "message": "A credencial da empresa não possui permissão para ler estas publicações."}) from exc
+    if code == "temporary_error" or int(getattr(exc, "status_code", 0) or 0) >= 500:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "META_READ_TEMPORARILY_UNAVAILABLE", "message": "A Meta está temporariamente indisponível. Tente novamente mais tarde."},
+        ) from exc
     _raise_marketing_read_error(exc)
 
 
@@ -598,6 +609,17 @@ def _current_configured_ad_account_id(config: TrafficMetaConfig) -> str:
     if not account_id:
         raise HTTPException(status_code=409, detail="Conta de anúncios não vinculada para esta empresa.")
     return account_id
+
+
+def _require_existing_post_ads_feature() -> None:
+    if not meta_settings().existing_post_ads_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "META_EXISTING_POST_ADS_DISABLED",
+                "message": "A leitura de publicações existentes está desativada até a integração ser habilitada pelo operador.",
+            },
+        )
 
 
 def _validate_campaign_whatsapp_connection(connection: Conexao | None, empresa_id: uuid.UUID) -> Conexao:
@@ -2864,6 +2886,7 @@ async def list_existing_ad_posts(
     _: Usuario = Depends(require_tenant_access),
 ):
     """List tenant-owned posts using bounded Graph GETs only."""
+    _require_existing_post_ads_feature()
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     page_id = _clean(page_id) or ""
     config = await _get_config(db, empresa_uuid)
@@ -2942,6 +2965,7 @@ async def preview_existing_post_ad_creative(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     """Validate selection ownership and return a local-only creative mock."""
+    _require_existing_post_ads_feature()
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     _ensure_ad_account_binding_admin(current_user, empresa_uuid)
     try:
@@ -3008,6 +3032,7 @@ async def preview_existing_post_campaign(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     """Simulate the existing campaign builder without persisting or writing to Meta."""
+    _require_existing_post_ads_feature()
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     _ensure_ad_account_binding_admin(current_user, empresa_uuid)
     try:

@@ -2,12 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Image as ImageIcon, Loader2, RefreshCw, Search, Video } from "lucide-react";
 import api from "../../services/api";
 import { ActionButton, InfoBanner } from "../../components/ui";
-
-function errorText(error) {
-  const detail = error?.response?.data?.detail;
-  if (detail && typeof detail === "object") return detail.message || "A consulta à Meta não foi concluída.";
-  return typeof detail === "string" ? detail : "Não foi possível carregar as publicações. Verifique as permissões da credencial Meta da empresa.";
-}
+import { describeMetaReadError } from "../../utils/metaReadErrors";
 
 function formatDate(value) {
   if (!value) return "Data não informada";
@@ -15,7 +10,10 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? "Data não informada" : date.toLocaleString("pt-BR");
 }
 
-export default function ExistingPostPicker({ empresaId, pages = [], adAccountId = "", initialPageId = "", campaignDraft = {}, onPageChange }) {
+export default function ExistingPostPicker({
+  empresaId, pages = [], adAccountId = "", initialPageId = "", campaignDraft = {}, onPageChange,
+  enabled = false, pagesLoading = false, pagesError = null, onRetryPages,
+}) {
   const [platform, setPlatform] = useState("instagram");
   const [pageId, setPageId] = useState("");
   const [posts, setPosts] = useState([]);
@@ -23,13 +21,17 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [listError, setListError] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const requestSequence = useRef(0);
+  const previewSequence = useRef(0);
+  const previewInFlight = useRef(false);
   const selectedPageId = selected?.id_mapping?.page_id || "";
   const campaignReadyForPreview = Boolean(
-    selected?.selection_token
+    enabled
+    && selected?.selection_token
     && campaignDraft.daily_budget_brl
     && campaignDraft.page_id
     && campaignDraft.page_id === selectedPageId
@@ -43,16 +45,23 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
     return posts.filter((post) => `${post.caption || ""} ${post.source_id || ""}`.toLocaleLowerCase("pt-BR").includes(query));
   }, [posts, search]);
 
+  const previewContextKey = JSON.stringify([
+    empresaId, selected?.selection_token, pageId, platform, campaignDraft.daily_budget_brl,
+    campaignDraft.page_id, campaignDraft.whatsapp_connection_id, campaignDraft.location_type,
+    campaignDraft.latitude, campaignDraft.longitude, campaignDraft.radius_km, campaignDraft.gender_mode,
+  ]);
+
   useEffect(() => {
     if (!pageId && initialPageId && availablePages.some((page) => page.id === initialPageId)) setPageId(initialPageId);
   }, [availablePages, initialPageId, pageId]);
 
   const loadPosts = useCallback(async ({ append = false, nextCursor = "" } = {}) => {
-    if (!empresaId || !pageId) return;
+    if (!enabled || !empresaId || !pageId || (append && !nextCursor)) return;
     const requestId = ++requestSequence.current;
     setLoading(true);
-    setError("");
+    setListError(null);
     setPreview(null);
+    setPreviewError(null);
     try {
       const response = await api.get(`/empresas/${empresaId}/traffic/meta/existing-posts`, {
         params: { platform, page_id: pageId, limit: 30, ...(nextCursor ? { after: nextCursor } : {}) },
@@ -60,30 +69,56 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
       });
       if (requestId !== requestSequence.current) return;
       const nextPosts = response.data?.items || [];
-      setPosts((current) => append ? [...current, ...nextPosts] : nextPosts);
+      setPosts((current) => {
+        const merged = append ? [...current, ...nextPosts] : nextPosts;
+        const seen = new Set();
+        return merged.filter((post) => {
+          const key = `${post.source_platform}:${post.source_id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      });
+      if (!append) {
+        setSelected((current) => current
+          ? nextPosts.find((post) => post.source_platform === current.source_platform && post.source_id === current.source_id) || null
+          : null);
+      }
       setCursor(response.data?.next_cursor || "");
     } catch (requestError) {
       if (requestId !== requestSequence.current) return;
-      setError(errorText(requestError));
-      if (!append) setPosts([]);
+      setListError(describeMetaReadError(requestError));
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [empresaId, pageId, platform]);
+  }, [enabled, empresaId, pageId, platform]);
 
   useEffect(() => {
     setSelected(null);
     setPreview(null);
+    setListError(null);
+    setPreviewError(null);
     setPosts([]);
     setCursor("");
-    if (pageId) loadPosts();
+    setSearch("");
+    if (enabled && pageId) loadPosts();
     return () => { requestSequence.current += 1; };
-  }, [loadPosts, pageId]);
+  }, [enabled, loadPosts, pageId]);
+
+  useEffect(() => {
+    previewSequence.current += 1;
+    previewInFlight.current = false;
+    setPreviewLoading(false);
+    setPreview(null);
+    setPreviewError(null);
+  }, [previewContextKey]);
 
   const simulateCampaign = async () => {
-    if (!selected?.selection_token) return;
+    if (!enabled || !selected?.selection_token || !campaignReadyForPreview || previewInFlight.current) return;
+    const requestId = ++previewSequence.current;
+    previewInFlight.current = true;
     setPreviewLoading(true);
-    setError("");
+    setPreviewError(null);
     try {
       const response = await api.post(`/empresas/${empresaId}/traffic/meta/existing-posts/campaign-preview`, {
         selection_token: selected.selection_token,
@@ -97,22 +132,32 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
         radius_km: campaignDraft.location_type === "radius" ? Number(campaignDraft.radius_km) : null,
         gender_mode: campaignDraft.gender_mode || "all",
       }, { timeout: 30000 });
-      setPreview(response.data || null);
+      if (requestId !== previewSequence.current) return;
+      if (response.data?.creation_mode !== "local_mock" || response.data?.meta_write_performed !== false
+        || response.data?.database_write_performed !== false || response.data?.external_side_effects !== false) {
+        setPreviewError({ message: "A resposta não confirmou uma simulação local sem efeitos. A prévia foi bloqueada.", retryable: false });
+        return;
+      }
+      setPreview(response.data);
     } catch (requestError) {
-      setError(errorText(requestError));
+      if (requestId === previewSequence.current) setPreviewError(describeMetaReadError(requestError));
     } finally {
-      setPreviewLoading(false);
+      if (requestId === previewSequence.current) {
+        previewInFlight.current = false;
+        setPreviewLoading(false);
+      }
     }
   };
 
   return (
-    <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5" aria-label="Selecionar publicação existente">
+    <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 sm:p-5" aria-label="Selecionar publicação existente" aria-busy={loading || previewLoading}>
       <div className="space-y-1">
         <h3 className="text-sm font-semibold text-slate-900">Publicação existente</h3>
         <p className="text-sm text-slate-600">Consulte publicações da Página ou do Instagram vinculado. Nesta candidata, a seleção gera apenas uma prévia local do criativo.</p>
       </div>
-      <InfoBanner tone="warning">Somente leitura: nenhuma publicação, criativo, anúncio, campanha ou orçamento será enviado à Meta.</InfoBanner>
+      {!enabled ? <div role="status"><InfoBanner tone="warning">A leitura de publicações existentes está desativada por segurança até o operador liberar a integração. O fluxo de novo criativo continua disponível.</InfoBanner></div> : <InfoBanner tone="warning">Somente leitura e prévia local: nenhuma publicação, criativo, anúncio, campanha ou orçamento será enviado à Meta.</InfoBanner>}
 
+      {enabled ? <>
       <div className="grid gap-3 md:grid-cols-3">
         <label className="space-y-1 text-sm font-medium text-slate-700">
           Conta de anúncios configurada
@@ -134,8 +179,10 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
         </label>
       </div>
 
-      {!availablePages.length ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Nenhuma Página compatível foi retornada pela credencial autorizada.</p> : null}
-      {error ? <InfoBanner tone="warning">{error}</InfoBanner> : null}
+      {pagesLoading && !availablePages.length ? <div role="status" aria-live="polite" className="text-sm text-slate-600">Carregando Páginas vinculadas…</div> : null}
+      {!pagesLoading && !availablePages.length && !pagesError ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Nenhuma Página compatível foi retornada pela credencial da empresa.</p> : null}
+      {pagesError ? <div role="alert" className="space-y-2"><InfoBanner tone="warning">{pagesError.message}</InfoBanner>{pagesError.retryable && onRetryPages ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={onRetryPages} disabled={pagesLoading}>{pagesLoading ? "Atualizando Páginas…" : "Tentar novamente"}</ActionButton> : null}</div> : null}
+      {listError ? <div role="alert" className="space-y-2"><InfoBanner tone="warning">{listError.message}{posts.length ? " A lista anterior continua visível." : ""}</InfoBanner>{listError.retryable && pageId ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => loadPosts()} disabled={loading}>{loading ? "Consultando…" : "Tentar novamente"}</ActionButton> : null}</div> : null}
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <label className="relative min-w-0 flex-1">
@@ -145,8 +192,8 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
         <ActionButton type="button" variant="secondary" icon={loading ? Loader2 : RefreshCw} onClick={() => loadPosts()} disabled={!pageId || loading}>{loading ? "Carregando..." : "Atualizar lista"}</ActionButton>
       </div>
 
-      {loading && !posts.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="h-52 animate-pulse rounded-lg bg-slate-100" />)}</div> : null}
-      {!loading && pageId && !posts.length && !error ? <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">Nenhuma publicação retornada para esta conta.</p> : null}
+      {loading && !posts.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" role="status" aria-label="Carregando publicações">{[0, 1, 2].map((item) => <div key={item} className="h-52 animate-pulse rounded-lg bg-slate-100" />)}</div> : null}
+      {!loading && pageId && !posts.length && !listError ? <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">Nenhuma publicação retornada para esta conta.</p> : null}
 
       {visiblePosts.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {visiblePosts.map((post) => {
@@ -174,12 +221,14 @@ export default function ExistingPostPicker({ empresaId, pages = [], adAccountId 
         </div>
         {!campaignReadyForPreview ? <p className="text-xs text-amber-800">Preencha orçamento e WhatsApp da campanha e mantenha a Página do anúncio igual à publicação selecionada para simular no builder.</p> : null}
         <p className="text-xs text-slate-600">A compatibilidade exibida é preliminar. A confirmação final de formato, objetivo e permissões depende de validação da Marketing API em uma etapa real autorizada.</p>
+        {previewError ? <div role="alert" className="space-y-2"><InfoBanner tone="warning">{previewError.message}{preview ? " A última simulação válida continua visível." : " Nenhuma criação foi confirmada."}</InfoBanner>{previewError.retryable ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={simulateCampaign} disabled={previewLoading || !campaignReadyForPreview}>{previewLoading ? "Validando novamente…" : "Tentar validar novamente"}</ActionButton> : null}</div> : null}
         {preview ? <div className="space-y-2 rounded-lg border border-emerald-200 bg-white p-3" role="status" data-testid="existing-post-preview-result">
-          <p className="text-sm font-semibold text-emerald-900">Fluxo completo simulado · nenhuma estrutura foi salva ou criada na Meta</p>
+          <p className="text-sm font-semibold text-emerald-900">Prévia local do fluxo · nada foi salvo ou criado na Meta</p>
           <p className="text-xs text-slate-600">Post ID, Media ID, Comment ID e Creative ID são identificadores diferentes. A simulação deixa os que não existem como null.</p>
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs text-slate-700">{JSON.stringify({ state: preview.state, meta_write_performed: preview.meta_write_performed, database_write_performed: preview.database_write_performed, id_mapping: preview.id_mapping, compatibility: preview.compatibility, builder_preview: preview.builder_preview }, null, 2)}</pre>
         </div> : null}
       </div> : null}
+      </> : null}
     </section>
   );
 }

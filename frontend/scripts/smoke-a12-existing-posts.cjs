@@ -35,8 +35,10 @@ async function main() {
   const origin = new URL(process.env.A12_PANEL_ORIGIN || 'http://127.0.0.1:4173').origin;
   const screenshotDir = process.env.A12_SCREENSHOT_DIR || '/tmp';
   fs.mkdirSync(screenshotDir, { recursive: true });
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
-  const results = { origin, viewports: [], mock_preview_calls: 0, forbidden_writes: [], external_requests: [], page_errors: [] };
+  const launchOptions = { headless: true, args: ['--no-sandbox'] };
+  if (process.env.A12_CHROMIUM_EXECUTABLE_PATH) launchOptions.executablePath = process.env.A12_CHROMIUM_EXECUTABLE_PATH;
+  const browser = await chromium.launch(launchOptions);
+  const results = { origin, viewports: [], mock_preview_calls: 0, existing_post_list_calls: 0, existing_post_list_requests: [], forbidden_writes: [], external_requests: [], page_errors: [] };
   try {
     for (const viewport of [
       { name: 'desktop', width: 1440, height: 900 },
@@ -44,11 +46,19 @@ async function main() {
       { name: 'mobile', width: 390, height: 844 },
     ]) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+      const scenarios = {
+        featureEnabled: viewport.name !== 'desktop',
+        assetFailures: 0,
+        listRateLimits: 0,
+        listMode: 'success',
+        previewFailures: 0,
+      };
       await context.addInitScript(({ tenant }) => {
         localStorage.setItem('token', 'synthetic-browser-session-only');
         localStorage.setItem('user', JSON.stringify({ id: 'synthetic-admin', nome: 'Admin Sintético', role: 'admin_empresa', empresa_id: tenant }));
       }, { tenant: TENANT });
       const page = await context.newPage();
+      await page.exposeFunction('__setA12Scenario', (key, value) => { scenarios[key] = value; });
       page.on('pageerror', (error) => results.page_errors.push(`${viewport.name}:${error.message}`));
       await page.route('**/*', async (route) => {
         const request = route.request();
@@ -65,6 +75,10 @@ async function main() {
           const isLocalPreview = request.method() === 'POST' && url.pathname === `/api/empresas/${TENANT}/traffic/meta/existing-posts/campaign-preview`;
           if (isLocalPreview) {
             results.mock_preview_calls += 1;
+            if (scenarios.previewFailures > 0) {
+              scenarios.previewFailures -= 1;
+              return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'META_READ_TEMPORARILY_UNAVAILABLE', message: 'synthetic outage' } }) });
+            }
             const body = JSON.parse(request.postData() || '{}');
             const isInstagram = String(body.selection_token).includes('instagram');
             const post = isInstagram ? instagramPost : facebookPost;
@@ -94,14 +108,21 @@ async function main() {
           marketing_graph_version: 'v26.0',
           config: { configured: true, status: 'active', business_id: 'biz_synthetic', ad_account_id: ACCOUNT, page_id: PAGE, instagram_account_id: IG, whatsapp_connection_id: '11111111-1111-4111-8111-111111111111', dataset_id: null },
           active_official_whatsapps: [{ connection_id: '11111111-1111-4111-8111-111111111111', display_number: '+55••••0000', page_compatible: true, status: 'connected' }],
+          existing_post_ads_enabled: scenarios.featureEnabled,
           official_whatsapp: { detected: true }, official_whatsapps: [],
           meta_write_enabled: false, campaign_create_enabled: false, adset_create_enabled: false, creative_create_enabled: false, ad_create_enabled: false,
         };
         else if (url.pathname === `${prefix}/adaccounts/123456`) data = { adaccount: { id: ACCOUNT, account_id: '123456', name: 'Conta Sintética', account_status: 1, currency: 'BRL', timezone_name: 'America/Sao_Paulo' } };
-        else if (url.pathname === `${prefix}/assets`) data = {
-          ad_account: { id: ACCOUNT, name: 'Conta Sintética' }, pages, selected_page: pages[0],
-          instagram: { account_id: IG, username: 'marca_teste' }, whatsapps: [{ connection_id: '11111111-1111-4111-8111-111111111111', page_compatible: true }],
-        };
+        else if (url.pathname === `${prefix}/assets`) {
+          if (scenarios.assetFailures > 0) {
+            scenarios.assetFailures -= 1;
+            return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'META_READ_PERMISSION_REQUIRED' } }) });
+          }
+          data = {
+            ad_account: { id: ACCOUNT, name: 'Conta Sintética' }, pages, selected_page: pages[0],
+            instagram: { account_id: IG, username: 'marca_teste' }, whatsapps: [{ connection_id: '11111111-1111-4111-8111-111111111111', page_compatible: true }],
+          };
+        }
         else if (url.pathname === `${prefix}/credentials/status`) data = { marketing_readiness_status: 'READY_TENANT_OAUTH', token_present: true, permissions: { ads_read: true } };
         else if (url.pathname === `${prefix}/conversions`) data = { status: 'unknown', mappings: [] };
         else if (url.pathname === `${prefix}/conversions/optimization-eligibility`) data = { status: 'unknown', eligible_goals: [] };
@@ -110,9 +131,21 @@ async function main() {
         else if (url.pathname === `${prefix}/pages`) data = { pages };
         else if (url.pathname === `${prefix}/campaigns/conversion-readiness`) data = { ready: false, selected_goal: null, eligible_goals: [] };
         else if (url.pathname === `${prefix}/existing-posts`) {
+          results.existing_post_list_calls += 1;
+          results.existing_post_list_requests.push({ viewport: viewport.name, platform: url.searchParams.get('platform'), page_id: url.searchParams.get('page_id') });
+          if (scenarios.listRateLimits > 0) {
+            scenarios.listRateLimits -= 1;
+            return route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'META_RATE_LIMIT' } }) });
+          }
           const isInstagram = url.searchParams.get('platform') === 'instagram';
           const cursor = url.searchParams.get('after');
-          data = { items: cursor ? [] : (isInstagram ? [instagramPost] : [facebookPost, facebookVideoPost]), next_cursor: null, has_more: false, query_scope: 'current_graph_page', write_performed: false };
+          if (scenarios.listMode === 'empty') {
+            data = { items: [], next_cursor: null, has_more: false, query_scope: 'current_graph_page', write_performed: false };
+          } else {
+            const firstPage = isInstagram ? [instagramPost] : [facebookPost, facebookVideoPost];
+            const nextPage = isInstagram ? [instagramPost, { ...instagramPost, source_id: 'ig_media_457', caption: 'Segunda publicação sintética' }] : [facebookPost];
+            data = { items: cursor ? nextPage : firstPage, next_cursor: cursor ? null : 'cursor-synthetic-next', has_more: !cursor, query_scope: 'current_graph_page', write_performed: false };
+          }
         }
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
       });
@@ -120,6 +153,29 @@ async function main() {
       await page.goto(`${origin}/painel/trafego/meta`, { waitUntil: 'networkidle' });
       await page.getByRole('heading', { name: 'Tráfego / Meta Ads' }).waitFor();
       await page.getByRole('button', { name: 'Nova campanha' }).click();
+      if (viewport.name === 'desktop') {
+        const existingOption = page.getByRole('radio', { name: /Publicação existente/ });
+        await existingOption.waitFor();
+        assert.equal(await existingOption.isDisabled(), true, 'the unverified integration defaults off');
+        assert.equal(results.existing_post_list_calls, 0, 'no Graph listing occurs while feature flag is off');
+        await page.evaluate(() => window.__setA12Scenario('featureEnabled', true));
+        await page.evaluate(() => window.__setA12Scenario('assetFailures', 1));
+        await page.reload({ waitUntil: 'networkidle' });
+        await page.getByRole('heading', { name: 'Tráfego / Meta Ads' }).waitFor();
+        await page.getByRole('button', { name: 'Nova campanha' }).click();
+        await page.getByRole('radio', { name: /Publicação existente/ }).check();
+        await page.getByRole('alert').filter({ hasText: /não tem permissão/ }).waitFor();
+        assert.equal(await page.getByRole('button', { name: 'Tentar novamente' }).count(), 0, 'permission failures require authorization rather than blind retry');
+        await page.evaluate(() => window.__setA12Scenario('assetFailures', 0));
+        await page.evaluate(() => window.__setA12Scenario('listRateLimits', 1));
+        await page.reload({ waitUntil: 'networkidle' });
+        await page.getByRole('heading', { name: 'Tráfego / Meta Ads' }).waitFor();
+        await page.getByRole('button', { name: 'Nova campanha' }).click();
+        await page.getByRole('radio', { name: /Publicação existente/ }).check();
+        await page.getByRole('alert').filter({ hasText: /limitou temporariamente/ }).waitFor();
+        await page.getByRole('button', { name: 'Tentar novamente' }).click();
+        await page.getByRole('button', { name: /Publicação sintética de Reels/ }).waitFor();
+      }
       await page.getByRole('radio', { name: /Publicação existente/ }).waitFor();
       await page.getByRole('radio', { name: /Publicação existente/ }).check();
       await page.getByLabel('Orçamento diário').fill('30,00');
@@ -132,16 +188,36 @@ async function main() {
         throw new Error(`campaign preview button missing: ${await page.locator('[aria-label="Selecionar publicação existente"]').innerText()}`);
       }
       assert.equal(await instagramSimulate.isDisabled(), false, `campaign preview should be enabled: ${await page.locator('[aria-label="Selecionar publicação existente"]').innerText()}`);
-      await instagramSimulate.click();
+      if (viewport.name === 'desktop') {
+        await page.evaluate(() => window.__setA12Scenario('previewFailures', 1));
+        await instagramSimulate.click();
+        await page.getByRole('alert').filter({ hasText: /temporariamente indisponível/ }).waitFor();
+        assert.equal(await page.getByTestId('existing-post-preview-result').count(), 0, 'an API error is never displayed as a successful preview');
+        await page.getByRole('button', { name: 'Tentar validar novamente' }).click();
+      } else {
+        await instagramSimulate.click();
+      }
       await page.getByTestId('existing-post-preview-result').waitFor();
       const instagramPreview = await page.getByTestId('existing-post-preview-result').innerText();
-      assert.match(instagramPreview, /nenhuma estrutura foi salva ou criada na Meta/i);
+      assert.match(instagramPreview, /nada foi salvo ou criado na Meta/i);
       assert.match(instagramPreview, /campaign/);
       assert.match(instagramPreview, /adset/);
       assert.match(instagramPreview, /creative/);
       assert.match(instagramPreview, /ad/);
       assert.match(instagramPreview, /source_instagram_media_id/);
       assert.doesNotMatch(instagramPreview, /object_story_id/);
+      if (viewport.name === 'desktop') {
+        const loadMore = page.getByRole('button', { name: 'Carregar mais publicações' });
+        await loadMore.click();
+        await page.getByText('Segunda publicação sintética').waitFor();
+        assert.equal(await page.getByRole('button', { name: /Publicação sintética de Reels/ }).count(), 1, 'pagination deduplicates overlapping items');
+        await page.evaluate(() => window.__setA12Scenario('listMode', 'empty'));
+        await page.getByRole('button', { name: 'Atualizar lista' }).click();
+        await page.getByText('Nenhuma publicação retornada para esta conta.').waitFor();
+        await page.evaluate(() => window.__setA12Scenario('listMode', 'success'));
+        await page.getByRole('button', { name: 'Atualizar lista' }).click();
+        await page.getByRole('button', { name: /Publicação sintética de Reels/ }).waitFor();
+      }
       await page.getByPlaceholder('Buscar nas publicações carregadas').fill('texto inexistente');
       await page.getByText(/Nenhuma publicação carregada corresponde à busca/).waitFor();
       await page.getByPlaceholder('Buscar nas publicações carregadas').fill('');
@@ -171,7 +247,7 @@ async function main() {
       results.viewports.push({ name: viewport.name, width: viewport.width, height: viewport.height, overflow_px: overflow, root_count: 1, facebook_and_instagram_preview: true, existing_post_screenshot: true, new_creative_form_visible: true });
       await context.close();
     }
-    assert.equal(results.mock_preview_calls, 6, 'only local campaign-builder preview POSTs were allowed');
+    assert.equal(results.mock_preview_calls, 7, 'only local campaign-builder preview POSTs were allowed, including one failed read-only simulation retry');
     assert.deepEqual(results.forbidden_writes, [], 'no external or live Meta write path was called');
     assert.deepEqual(results.external_requests, [], 'all APIs and media use synthetic fixtures');
     assert.deepEqual(results.page_errors, [], 'browser has no unhandled JavaScript exceptions');
