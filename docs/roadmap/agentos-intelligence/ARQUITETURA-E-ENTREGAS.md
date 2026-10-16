@@ -5,10 +5,10 @@
 ```text
 Meta Ads (post existente ou novo criativo) → CTWA/Inbox → Lead/Conversa
   → Estado comercial do tenant/FunnelSpec
-  → JEV: intenções simultâneas, objeções, oportunidade, estágio, opções de tag
+  → JEV ACTIVE: intenções simultâneas, objeções, oportunidade, estágio e DECISÃO de tags
   → Compositor de módulos de prompt + ferramentas da etapa/assuntos
   → Resposta única coerente / follow-up programado ou inteligente
-  → Aplicação das TAGS EXISTENTES (manual ou agente, sempre via serviço oficial)
+  → JEV aplica TAGS EXISTENTES pelo serviço oficial (sem aprovação manual por evento)
   → Commercial Event e Attribution Ledger → Meta sender legado/canônico controlado
   → Checkout, pagamento aprovado/refund verificado → Receita
   → Funil e análise de gargalos → melhoria dos prompts / recomendação Ads
@@ -18,7 +18,7 @@ Campanhas WhatsApp são intervenção para reativação e resposta; não elimina
 
 ## Invariantes
 
-1. Tags continuam o trigger canônico definido no FunnelSpec para conversões; JEV **sugere** tags elegíveis, código valida evidência e serviço existente aplica. Não permitir segunda rota JEV→Meta. Compra necessita pagamento aprovado real verificado.
+1. Tags continuam o trigger canônico definido no FunnelSpec para conversões; JEV ACTIVE **decide e aplica automaticamente** tags elegíveis utilizando exclusivamente a ferramenta canônica existente, com escopo tenant, evidência, idempotência e possibilidade de correção posterior. Não permitir segunda rota JEV→Meta. Compra necessita pagamento aprovado real verificado; intenção ou afirmação da IA não comprovam pagamento. A passagem SHADOW→ACTIVE depende de validação de provider e operação autorizada, não de aprovação humana por cada tag.
 2. `unknown` vs `0` vs `partial` vs `not_applicable` sempre diferenciados. HTTP 200 Meta não prova melhoria de entrega/atribuição.
 3. Não remover RBAC, isolamento por tenant, limites de gastos, idempotência, opt-out, follow-up stop rules ou credenciais por capacidade.
 4. Mensagens podem conter múltiplos assuntos: separar **etapa principal** e **assuntos ativos**. Um compositor traz módulos preço, confiança, produto, agenda, oferta, objeções, fechamento conforme necessário. A conversa não fica rigidamente roteada a apenas um especialista.
@@ -40,6 +40,6 @@ Campanhas WhatsApp são intervenção para reativação e resposta; não elimina
 
 ## Plano incremental
 
-Tarefas independentes com contrato de aceite nas [Issues #1 a #15](https://github.com/ferriolimidias/agenteos/issues). Prioridade: A00 migração verdadeira do código → jornada e funil observáveis → JEV sombra e prompts combináveis → diagnóstico/follow-up/campanhas → experimentos automáticos → anúncios existentes e otimização. P1C pode ser concluído **em paralelo** (A01 observação; A02 LIVE apenas com autorização específica) e não bloqueia os dashboards. Checkout/pagamento A03 é iterável mesmo sem LIVE Meta.
+Tarefas independentes com contrato de aceite nas [Issues #1 a #15](https://github.com/ferriolimidias/agenteos/issues). Prioridade atualizada pelo proprietário em 16/10/2026: P0 comprovar conversões reais (#33), JEV aplicar tags (#31), rastrear event_id/outbox/delivery da Meta (#2/#3) e medir/otimizar por anúncio + versão do prompt (#9/#12/#14). Em paralelo, preparar as funções com token manual TEMPORÁRIO para demonstrar uso no App Review (#13/#32); após aprovação, o MESMO contrato de API deve usar credencial conectada automaticamente, com equivalência funcional. A fase SHADOW anterior e o token manual não são o estado final do produto. P1C pode ser concluído **em paralelo** (A01 observação; A02 LIVE apenas com autorização específica) e não bloqueia os dashboards. Checkout/pagamento A03 é iterável mesmo sem LIVE Meta.
 
 Cada etapa deve poder ser implantada isoladamente com rollback, sob feature flag quando necessário. Não deve exigir completar o roadmap para voltar a usar o sistema.
