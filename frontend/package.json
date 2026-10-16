@@ -29,7 +29,8 @@
     "test:jev-smoke": "node scripts/smoke-jev-diagnostics.cjs",
     "test:quality-browser": "node scripts/smoke-attendance-quality.cjs",
     "test:a11": "node --test src/pages/tenant/PromptOptimizer.test.js",
-    "test:a11-browser": "node scripts/smoke-a11.cjs"
+    "test:a11-browser": "node scripts/smoke-a11.cjs",
+    "test:a12-browser": "node scripts/smoke-a12-existing-posts.cjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

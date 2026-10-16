@@ -7,13 +7,13 @@ from decimal import Decimal
 from typing import Any, Iterable
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.commercial_events import meta_signal_status
 from db.models import (
     AttributionTouch, AttributionTouchResolution, CanonicalCommercialEvent,
-    ChannelConversation, CommercialMetaEventLink, MetaAdsInsightDaily,
+    ChannelConversation, CommercialMetaEventLink, MetaAdsInsightDaily, MetaConversionEvent,
 )
 
 FUNNEL_EVENTS = ("ViewContent", "LeadSubmitted", "QualifiedLead", "AddToCart", "InitiateCheckout", "Purchase")
@@ -223,6 +223,94 @@ def _campaign_name(events: Iterable[CanonicalCommercialEvent], insight_rows: Ite
     return None
 
 
+def _events_received(response_preview: Any) -> int:
+    preview = response_preview if isinstance(response_preview, dict) else {}
+    body = preview.get("body") if isinstance(preview.get("body"), dict) else preview
+    try:
+        return max(0, int(body.get("events_received") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _meta_acceptance_for_events(
+    events: Iterable[CanonicalCommercialEvent],
+    linked_attempts: dict[str, list[tuple[str, str, Any]]],
+) -> dict[str, Any]:
+    """Summarize exact CRM→provider links without implying ad optimization.
+
+    The denominator is canonical CRM events attributed to this ad. An event
+    counts as accepted only when an exact persisted link has status `sent` and
+    the Meta response reports events_received > 0. A missing link or pending
+    status makes coverage partial; no linked event is never presented as a
+    confirmed zero rejection.
+    """
+    rows = list(events)
+    denominator = len(rows)
+    if not denominator:
+        unknown = {"numerator": 0, "denominator": 0, "coverage": 0.0, "value": None, "state": "unknown"}
+        return {"crm_events": 0, "exact_link_coverage": dict(unknown), "meta_endpoint_acceptance": dict(unknown)}
+
+    exact_linked = 0
+    accepted = 0
+    terminal = 0
+    for event in rows:
+        attempts = [row for row in linked_attempts.get(str(event.id), []) if str(row[0]).upper() == "LINKED_EXACT"]
+        if not attempts:
+            continue
+        exact_linked += 1
+        accepted_attempts = [row for row in attempts if str(row[1] or "").lower() == "sent" and _events_received(row[2]) > 0]
+        if accepted_attempts:
+            accepted += 1
+            terminal += 1
+        elif any(str(row[1] or "").lower() in {"sent", "failed", "rejected", "cancelled", "canceled"} for row in attempts):
+            terminal += 1
+
+    coverage_state = "observed" if exact_linked == denominator else "partial" if exact_linked else "unknown"
+    outcome_state = "observed" if terminal == denominator else "partial" if exact_linked or terminal else "unknown"
+    return {
+        "crm_events": denominator,
+        "exact_link_coverage": {
+            "numerator": exact_linked, "denominator": denominator,
+            "coverage": exact_linked / denominator, "value": exact_linked, "state": coverage_state,
+        },
+        "meta_endpoint_acceptance": {
+            "numerator": accepted, "denominator": denominator,
+            "coverage": terminal / denominator, "value": accepted / denominator,
+            "state": outcome_state,
+            "interpretation": "Meta endpoint acceptance only; this does not prove ad-level optimization or causality.",
+        },
+    }
+
+
+async def _load_exact_meta_acceptance(
+    session: AsyncSession, *, empresa_id: Any, events: Iterable[CanonicalCommercialEvent],
+) -> dict[str, list[tuple[str, str, Any]]]:
+    event_ids = [event.id for event in events]
+    if not event_ids:
+        return {}
+    rows = (await session.execute(
+        select(
+            CommercialMetaEventLink.commercial_event_id,
+            CommercialMetaEventLink.classification,
+            MetaConversionEvent.status,
+            MetaConversionEvent.response_preview,
+        ).join(
+            MetaConversionEvent,
+            and_(
+                MetaConversionEvent.empresa_id == CommercialMetaEventLink.empresa_id,
+                MetaConversionEvent.id == CommercialMetaEventLink.meta_event_id,
+            ),
+        ).where(
+            CommercialMetaEventLink.empresa_id == uuid.UUID(str(empresa_id)),
+            CommercialMetaEventLink.commercial_event_id.in_(event_ids),
+        )
+    )).all()
+    by_event: dict[str, list[tuple[str, str, Any]]] = defaultdict(list)
+    for commercial_event_id, classification, status, response_preview in rows:
+        by_event[str(commercial_event_id)].append((str(classification or ""), str(status or ""), response_preview))
+    return by_event
+
+
 async def performance(
     session: AsyncSession, *, empresa_id: Any, start_date: date, end_date: date,
     attribution_model: str = "last_touch", level: str = "campaign",
@@ -237,6 +325,7 @@ async def performance(
         actual_adset=_entity_id(event, attribution_model, "adset"),
         actual_ad=_entity_id(event, attribution_model, "ad"),
     )]
+    linked_attempts = await _load_exact_meta_acceptance(session, empresa_id=empresa_id, events=events)
     level_insights = [row for row in insights if row.entity_level == level]
     if not level_insights:
         fallback_levels = {"campaign": ("adset", "ad"), "adset": ("ad",), "ad": ()}[level]
@@ -308,6 +397,7 @@ async def performance(
         metrics["roas"] = roas
         for key, state in count_states.items():
             metrics[key] = _metric(counts[key], state=state)
+        crm_event_acceptance = _meta_acceptance_for_events(group_events, linked_attempts)
         rows.append({
             "entity_id": entity_id, "name": _campaign_name(events, group_insights, entity_id, attribution_model, level),
             "level": level, "attribution_model": attribution_model,
@@ -316,6 +406,7 @@ async def performance(
             "impressions": _metric(int(impressions_sum[0]) if impressions_sum[0] is not None else None, state=impressions_sum[1]),
             "clicks": _metric(int(clicks_sum[0]) if clicks_sum[0] is not None else None, state=clicks_sum[1]),
             **metrics, "revenue": revenue,
+            "meta_conversion_evidence": crm_event_acceptance,
         })
     # Orphans with attribution but no entity IDs remain visible as data quality gaps.
     unresolved_event_count = sum(1 for event in events if event.event_name in set(EVENT_LABELS) and not _entity_id(event, attribution_model, level))

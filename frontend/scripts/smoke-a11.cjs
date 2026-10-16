@@ -3,6 +3,24 @@ const { chromium } = require('playwright');
 
 const TENANT = '00000000-0000-0000-0000-000000000011';
 const VERSION = '10000000-0000-0000-0000-000000000011';
+const AD = 'synthetic_ad_123';
+const arm = {
+  exposed: 2, assigned: 2, generation_attempts: 0, generation_failed: 0, guard_blocked: 0,
+  response_after_window: { numerator: 0, denominator: 0, state: 'unknown' },
+  verified_purchase_after_30d: { numerator: 0, denominator: 0, state: 'unknown' },
+  commercial_stage_advance_after_30d: { numerator: 0, denominator: 0, state: 'unknown' },
+  generation_error_rate: { numerator: 0, denominator: 0, value: null, state: 'unknown' },
+  guard_block_rate: { numerator: 0, denominator: 0, value: null, state: 'unknown' },
+  latency_p50_ms: { value: null }, input_tokens_mean: { value: null }, cost_usd: { state: 'unknown' },
+  ad_assisted_outcomes: {
+    state: 'partial', prompt_exposures: 2, unresolved_or_ambiguous_ad_exposures: 0,
+    rows: [{
+      ad_id: AD, prompt_exposures: 2, mature_exposures: 1,
+      commercial_advances_after_30d: { numerator: 1, denominator: 1, state: 'partial' },
+      verified_purchases_after_30d: { numerator: 0, denominator: 1, state: 'partial' },
+    }],
+  },
+};
 const dashboard = {
   modules: [{
     id: 'qualification', title: 'Qualificação', state: 'OFFLINE',
@@ -16,7 +34,10 @@ const dashboard = {
       created_at: '2026-10-15T12:00:00Z',
     }],
   }],
-  experiments: [], audit: [], evaluator: { model_id: null, cost_state: 'unknown' },
+  experiments: [{
+    id: 'synthetic-experiment', module_key: 'qualification', status: 'DRAFT', candidate_percent: 50,
+    metrics: { distribution: { control_percent: 50, candidate_percent: 50 }, maturity_days: 7, truncated: false, by_variant: { control: arm, candidate: arm } },
+  }], audit: [], evaluator: { model_id: null, cost_state: 'unknown' },
   live: {
     ab_live: false, automatic_promotion_live: false, automatic_rollback_live: false,
     automatic_prompt_mutation: false, pilot_tenant_enabled: false, live_activation: 'OFF',
@@ -73,14 +94,20 @@ async function main() {
       await page.getByRole('heading', { name: 'Prompt Optimizer · A11' }).waitFor();
       await page.getByText('Atendimento LIVE permanece desligado.').waitFor();
       await page.getByText('Módulos e versões imutáveis').waitFor();
+      await page.getByText('Evidências por anúncio').first().waitFor();
+      await page.getByText(AD, { exact: false }).first().waitFor();
+      await page.getByText('Resultado temporal; não prova causalidade do anúncio nem do prompt.').first().waitFor();
       assert.equal(await page.locator('#root').count(), 1, 'single React root');
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(overflow <= 1, `${viewport.name} horizontal overflow: ${overflow}px`);
       if (viewport.name === 'mobile') {
         await page.getByRole('button', { name: 'Abrir menu' }).click();
         await page.getByRole('link', { name: 'Prompt Optimizer A11' }).waitFor();
+        await page.getByRole('dialog', { name: 'Navegação do cliente' }).getByRole('button', { name: 'Fechar menu' }).click();
       }
       await page.screenshot({ path: `/tmp/a11-${viewport.name}.png`, fullPage: true });
+      await page.getByText(AD, { exact: false }).first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `/tmp/issue33-a11-prompt-ad-${viewport.name}.png` });
       results.viewports.push({ name: viewport.name, width: viewport.width, height: viewport.height, overflow_px: overflow, root_count: 1, live_activation: 'OFF' });
       await page.goto(`${origin}/admin/empresas/${TENANT}?tab=agente`, { waitUntil: 'networkidle' });
       await page.getByText('Modelo principal').waitFor();

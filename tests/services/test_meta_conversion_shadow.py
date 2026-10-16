@@ -17,6 +17,7 @@ from app.services.meta.canonical_conversion_shadow import (
     _eligibility_classification,
     _legacy_delivery_state,
     _reason_categories,
+    canonical_delivery_event_id,
     canonical_conversion_event_id,
     shadow_status,
 )
@@ -138,37 +139,46 @@ class MetaConversionShadowTests(unittest.IsolatedAsyncioTestCase):
         event = SimpleNamespace(status="failed", response_preview={})
         self.assertEqual(_legacy_delivery_state(event), "LEGACY_FAILED")
 
-    def test_exact_legacy_comparison_records_event_id_mismatch_without_claiming_delivery_quality(self):
+    def test_exact_legacy_comparison_reuses_only_exact_provider_identity(self):
         legacy = SimpleNamespace(
             event_name="LeadSubmitted",
-            event_id="legacy-event-id",
+            event_id="f" * 64,
             empresa_id=uuid.UUID("00000000-0000-0000-0000-000000000022"),
+            lead_id=uuid.UUID("00000000-0000-0000-0000-000000000033"),
             conversion_context="business_messaging_whatsapp",
             dataset_id_masked="***4321",
             payload_preview={"data": [{
-                "event_name": "LeadSubmitted", "event_id": "legacy-event-id", "event_time": 1791504000,
+                "event_name": "LeadSubmitted", "event_id": "f" * 64, "event_time": 1791504000,
                 "action_source": "business_messaging", "messaging_channel": "whatsapp", "user_data": {
                     "whatsapp_business_account_id": "1234...8765", "ctwa_clid": "cl***id",
                 }, "custom_data": {},
             }]},
         )
+        event = self._event(lead_id=legacy.lead_id)
+        delivery_id, source = canonical_delivery_event_id(
+            event, canonical_event_id="canonical-event-id",
+            legacy_reference_classification="EXACT_LINKED", legacy_event=legacy,
+        )
+        self.assertEqual(delivery_id, legacy.event_id)
+        self.assertEqual(source, "exact_legacy_delivery")
         item = {
-            "event_name": "LeadSubmitted", "event_id": "canonical-event-id", "event_time": 1791504000,
+            "event_name": "LeadSubmitted", "event_id": delivery_id, "event_time": 1791504000,
             "action_source": "business_messaging", "messaging_channel": "whatsapp",
             "user_data": {"whatsapp_business_account_id": "12345678765", "ctwa_clid": "click-id"},
             "custom_data": {},
         }
         classification, diff = _compare_payloads(
-            event_name="LeadSubmitted", canonical_event_id="canonical-event-id", canonical_item=item,
+            event_name="LeadSubmitted", canonical_event_id=delivery_id, canonical_item=item,
             legacy=legacy, dataset_id_masked="99994321", tenant_id=legacy.empresa_id, unsupported=False,
             missing_fields=[], missing_attribution=False,
         )
-        self.assertEqual(classification, "EVENT_ID_MISMATCH")
-        self.assertFalse(diff["field_matches"]["event_id"])
+        self.assertEqual(classification, "SEMANTICALLY_EQUIVALENT")
+        self.assertTrue(diff["field_matches"]["event_id"])
         self.assertTrue(diff["field_matches"]["dataset"])
 
         legacy.event_id = "canonical-event-id"
         legacy.payload_preview["data"][0]["event_id"] = "canonical-event-id"
+        item["event_id"] = "canonical-event-id"
         legacy.payload_preview["data"][0]["custom_data"] = {"value": 5, "currency": "BRL"}
         item["custom_data"] = {"value": 5.0, "currency": "BRL"}
         classification, diff = _compare_payloads(
@@ -179,6 +189,19 @@ class MetaConversionShadowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(classification, "SEMANTICALLY_EQUIVALENT")
         self.assertTrue(diff["field_matches"]["ctwa_masked_match"])
         self.assertNotIn("click-id", str(diff))
+
+    def test_probable_or_cross_tenant_link_never_reuses_provider_event_id(self):
+        event = self._event(lead_id=uuid.UUID("00000000-0000-0000-0000-000000000033"))
+        legacy = SimpleNamespace(
+            event_id="f" * 64, event_name="LeadSubmitted", lead_id=event.lead_id,
+            empresa_id=event.empresa_id,
+        )
+        for classification, tenant in (("PROBABLE_ONLY", event.empresa_id), ("EXACT_LINKED", uuid.uuid4())):
+            candidate, source = canonical_delivery_event_id(
+                event, canonical_event_id="canonical", legacy_reference_classification=classification,
+                legacy_event=SimpleNamespace(**{**vars(legacy), "empresa_id": tenant}),
+            )
+            self.assertEqual((candidate, source), ("canonical", "canonical_commercial_event"))
 
     async def test_shadow_status_queries_are_scoped_to_requested_tenant(self):
         tenant_id = uuid.uuid4()

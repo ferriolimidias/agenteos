@@ -592,14 +592,17 @@ class TrafficMetaFoundationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("get_meta_optimization_eligibility", route_source)
         self.assertIn("conversions_status(session, empresa_id)", route_source)
 
-    def test_campaign_request_accepts_business_goal_intent_without_frontend_meta_enum(self):
+    def test_campaign_request_uses_one_server_owned_strategy_not_customer_selected_goals(self):
         route_source = Path("app/api/routers/traffic_meta.py").read_text(encoding="utf-8")
         request_source = route_source.split("class TrafficMetaCampaignCreateRequest", 1)[1].split("class TrafficMetaFullCampaignCreateRequest", 1)[0]
         full_request_source = route_source.split("class TrafficMetaFullCampaignCreateRequest", 1)[1].split("class TrafficMetaAdCopyGenerateRequest", 1)[0]
-        self.assertIn("business_goal: str | None", request_source)
-        self.assertIn("business_goal: str | None", full_request_source)
-        self.assertIn("def _requested_business_goal", route_source)
-        self.assertIn('getattr(payload, "business_goal", None) or getattr(payload, "conversion_goal_key", None)', route_source)
+        for request in (request_source, full_request_source):
+            self.assertNotIn("business_goal:", request)
+            self.assertNotIn("conversion_goal_key:", request)
+        self.assertNotIn("_requested_business_goal(payload)", route_source)
+        self.assertIn('"strategy": "agentos_ctwa_sales_v1"', route_source)
+        self.assertIn('"crm_dataset_ctwa_optimization": {', route_source)
+        self.assertIn('"state": "unverified"', route_source)
 
     def test_campaign_creation_uses_eligibility_and_blocks_without_silent_conversations_fallback(self):
         route_source = Path("app/api/routers/traffic_meta.py").read_text(encoding="utf-8")

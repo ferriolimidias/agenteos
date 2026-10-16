@@ -1,8 +1,9 @@
 from decimal import Decimal
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
-from app.services.commercial_analytics import _cost_metrics, _ratio, _sum_known
+from app.services.commercial_analytics import _cost_metrics, _meta_acceptance_for_events, _ratio, _sum_known
 from app.services.meta.marketing_api import MetaMarketingApiClient
 
 
@@ -35,6 +36,30 @@ class CommercialAnalyticsMetricTests(unittest.TestCase):
 
     def test_roas_formula_is_net_revenue_over_spend(self):
         self.assertEqual(_ratio(Decimal("360"), Decimal("120"))["value"], 3.0)
+
+    def test_meta_endpoint_acceptance_uses_exact_links_and_keeps_missing_status_partial(self):
+        accepted = SimpleNamespace(id="event-1")
+        failed = SimpleNamespace(id="event-2")
+        missing = SimpleNamespace(id="event-3")
+        result = _meta_acceptance_for_events(
+            [accepted, failed, missing],
+            {
+                "event-1": [("LINKED_EXACT", "sent", {"events_received": 1})],
+                "event-2": [("LINKED_EXACT", "failed", {"events_received": 0})],
+                # A probable reconciliation is intentionally not delivery evidence.
+                "event-3": [("LINKED_PROBABLE", "sent", {"events_received": 1})],
+            },
+        )
+        self.assertEqual(result["meta_endpoint_acceptance"]["numerator"], 1)
+        self.assertEqual(result["meta_endpoint_acceptance"]["denominator"], 3)
+        self.assertEqual(result["meta_endpoint_acceptance"]["state"], "partial")
+        self.assertEqual(result["exact_link_coverage"]["numerator"], 2)
+        self.assertIn("does not prove ad-level optimization", result["meta_endpoint_acceptance"]["interpretation"])
+
+    def test_no_crm_events_is_unknown_not_zero(self):
+        result = _meta_acceptance_for_events([], {})
+        self.assertEqual(result["meta_endpoint_acceptance"]["state"], "unknown")
+        self.assertIsNone(result["meta_endpoint_acceptance"]["value"])
 
 
 if __name__ == "__main__":

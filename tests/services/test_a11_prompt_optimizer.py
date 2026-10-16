@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from fastapi import HTTPException
 from starlette.requests import Request
+from sqlalchemy.dialects import postgresql
 
 import pytest
 
@@ -92,6 +93,67 @@ def test_a11_normalizes_naive_exposures_and_aware_commercial_events_to_utc():
     event = datetime(2026, 10, 1, 15, 0, tzinfo=timezone(timedelta(hours=3)))
     assert a11._utc_naive(event) == exposed
     assert a11._utc_aware(exposed) == datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_ad_assisted_prompt_metrics_require_unique_ctwa_ad_and_report_partial_temporal_evidence():
+    now = datetime(2026, 10, 16, 12, 0)
+    old = now - timedelta(days=40)
+    exposures = [
+        SimpleNamespace(id="e1", variant="control", conversation_id="c1", exposed_at=old),
+        SimpleNamespace(id="e2", variant="control", conversation_id="c2", exposed_at=old),
+        SimpleNamespace(id="e3", variant="candidate", conversation_id="c3", exposed_at=old),
+    ]
+    result = a11.aggregate_ad_assisted_prompt_outcomes(
+        exposures,
+        [("e1", "ad-1", "resolved"), ("e2", "ad-1", "resolved"), ("e3", "ad-2", "resolved"), ("e3", "ad-3", "resolved")],
+        [("c1", "QualifiedLead", old + timedelta(days=2), False),
+         ("c1", "Purchase", old + timedelta(days=3), False),
+         ("c2", "Purchase", old + timedelta(days=3), True)],
+        now=now,
+    )
+    control = result["by_variant"]["control"]
+    assert control["rows"][0]["ad_id"] == "ad-1"
+    assert control["rows"][0]["commercial_advances_after_30d"]["numerator"] == 2
+    assert control["rows"][0]["verified_purchases_after_30d"]["numerator"] == 1
+    assert control["rows"][0]["commercial_advances_after_30d"]["state"] == "partial"
+    assert result["by_variant"]["candidate"]["unresolved_or_ambiguous_ad_exposures"] == 1
+    assert result["by_variant"]["candidate"]["rows"] == []
+
+
+@pytest.mark.asyncio
+async def test_ad_assisted_prompt_queries_are_tenant_scoped_and_bounded():
+    tenant = UUID("00000000-0000-0000-0000-000000000011")
+    experiment = UUID("00000000-0000-0000-0000-000000000012")
+    exposure = SimpleNamespace(
+        id=UUID("00000000-0000-0000-0000-000000000013"), variant="control",
+        conversation_id=UUID("00000000-0000-0000-0000-000000000014"),
+        exposed_at=datetime(2026, 9, 1),
+    )
+
+    class Result:
+        def all(self):
+            return []
+
+    class FakeDB:
+        statements = []
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return Result()
+
+    db = FakeDB()
+    result = await a11._ad_assisted_prompt_outcomes(db, tenant, experiment, [exposure], truncated=False)
+    assert len(db.statements) == 2
+    for statement in db.statements:
+        compiled = statement.compile(dialect=postgresql.dialect())
+        assert tenant in compiled.params.values()
+        assert "LIMIT" in str(compiled).upper()
+    touch_sql = str(db.statements[0]).lower()
+    touch_params = db.statements[0].compile(dialect=postgresql.dialect()).params.values()
+    assert "ctwa_referral" in touch_params
+    assert "timezone" in touch_sql
+    assert experiment in db.statements[0].compile(dialect=postgresql.dialect()).params.values()
+    assert result["by_variant"]["control"]["state"] == "partial"
 
 
 @pytest.mark.asyncio
@@ -378,7 +440,7 @@ async def test_truncated_experiment_metrics_are_marked_partial():
         conversation_id = UUID(int=index + 1)
         variant = "control" if index % 2 == 0 else "candidate"
         exposures.append(SimpleNamespace(
-            exposed_at=now - timedelta(days=40), variant=variant,
+            id=UUID(int=index + 10001), exposed_at=now - timedelta(days=40), variant=variant,
             conversation_id=conversation_id, generation_latency_ms=100,
             input_tokens=20, output_tokens=10,
         ))
@@ -396,6 +458,10 @@ async def test_truncated_experiment_metrics_are_marked_partial():
     class FakeDB:
         async def execute(self, statement):
             sql = str(statement)
+            if "JOIN attribution_touches" in sql:
+                return QueryResult([])
+            if "canonical_events.conversation_id IN" in sql:
+                return QueryResult([])
             if "a11_prompt_assignments" in sql:
                 return QueryResult([
                     ("control", 2501, 0, 2501, 2501, 0, 0),

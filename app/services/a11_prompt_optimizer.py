@@ -25,6 +25,8 @@ from db.models import (
     A11PromptModuleState,
     A11OptimizerSettings,
     A11PromptVersion,
+    AttributionTouch,
+    AttributionTouchResolution,
     CanonicalCommercialEvent,
     ChannelConversation,
     MensagemHistorico,
@@ -36,6 +38,7 @@ A11_ASSIGNMENT_METRIC_LIMIT = 5000
 A11_EXPOSURE_METRIC_LIMIT = 5000
 A11_RESPONSE_EVENT_LIMIT = 20000
 A11_COMMERCIAL_EVENT_LIMIT = 20000
+A11_AD_ASSOCIATION_LIMIT = 20000
 LIVE_FLAGS = {
     "ab_live": "A11_AB_LIVE_ENABLED",
     "automatic_promotion_live": "A11_AUTO_PROMOTION_LIVE_ENABLED",
@@ -90,6 +93,179 @@ def _utc_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def aggregate_ad_assisted_prompt_outcomes(
+    exposures: list[Any],
+    touch_rows: list[tuple[Any, Any, str]],
+    event_rows: list[tuple[Any, str, datetime, bool]],
+    *,
+    now: datetime | None = None,
+    query_truncated: bool = False,
+) -> dict[str, Any]:
+    """Summarize persisted prompt outcomes by resolved CTWA ad.
+
+    This analysis never feeds A11 promotion decisions. Conversations with
+    zero or multiple resolved ads are counted as unresolved/ambiguous rather
+    than assigned by guesswork.
+    """
+    now = _utc_naive(now or datetime.utcnow())
+    exposure_rows = list(exposures)
+    ad_by_exposure: dict[str, set[str]] = {}
+    partial_resolution: set[str] = set()
+    for exposure_id, ad_id, status in touch_rows:
+        key = str(exposure_id)
+        if ad_id:
+            ad_by_exposure.setdefault(key, set()).add(str(ad_id))
+            if str(status or "").lower() == "partial":
+                partial_resolution.add(key)
+
+    events_by_conversation: dict[str, list[tuple[str, datetime, bool]]] = {}
+    for conversation_id, event_name, occurred_at, revenue_verified in event_rows:
+        if conversation_id and occurred_at:
+            events_by_conversation.setdefault(str(conversation_id), []).append(
+                (str(event_name), _utc_naive(occurred_at), bool(revenue_verified))
+            )
+
+    by_variant: dict[str, dict[str, Any]] = {}
+    for variant in ("control", "candidate"):
+        selected = [row for row in exposure_rows if str(getattr(row, "variant", "")) == variant]
+        resolved: dict[str, list[Any]] = {}
+        unresolved = 0
+        for exposure in selected:
+            ads = ad_by_exposure.get(str(exposure.id), set())
+            if len(ads) != 1:
+                unresolved += 1
+                continue
+            resolved.setdefault(next(iter(ads)), []).append(exposure)
+
+        ad_rows = []
+        for resolved_ad, ad_exposures in sorted(resolved.items()):
+            matured = [row for row in ad_exposures if _utc_naive(row.exposed_at) + timedelta(days=30) <= now]
+            advances = purchases = 0
+            for exposure in matured:
+                start = _utc_naive(exposure.exposed_at)
+                deadline = start + timedelta(days=30)
+                observed = [
+                    item for item in events_by_conversation.get(str(exposure.conversation_id), [])
+                    if start < item[1] <= deadline
+                ]
+                if any(name in {"QualifiedLead", "InitiateCheckout", "OrderCreated", "Purchase"} for name, _, _ in observed):
+                    advances += 1
+                if any(name == "Purchase" and verified for name, _, verified in observed):
+                    purchases += 1
+            resolution_state = "partial" if unresolved or any(str(row.id) in partial_resolution for row in ad_exposures) else "observed"
+            maturity_state = "unknown" if not matured else "partial" if len(matured) < len(ad_exposures) else "observed"
+            # Canonical event persistence does not prove complete CRM history
+            # capture; expose its counts as partial evidence, never a causal KPI.
+            event_state = "unknown" if not matured else "partial"
+            if query_truncated:
+                resolution_state = "partial"
+                maturity_state = "partial" if matured else "unknown"
+                event_state = "partial"
+            ad_rows.append({
+                "ad_id": resolved_ad,
+                "prompt_exposures": len(ad_exposures),
+                "mature_exposures": len(matured),
+                "ad_resolution_coverage": {
+                    "numerator": len(ad_exposures), "denominator": len(selected),
+                    "coverage": len(ad_exposures) / len(selected) if selected else 0.0,
+                    "state": resolution_state if selected else "unknown",
+                },
+                "maturity_coverage": {
+                    "numerator": len(matured), "denominator": len(ad_exposures),
+                    "coverage": len(matured) / len(ad_exposures) if ad_exposures else 0.0,
+                    "state": maturity_state,
+                },
+                "commercial_advances_after_30d": {
+                    "numerator": advances, "denominator": len(matured),
+                    "coverage": len(matured) / len(ad_exposures) if ad_exposures else 0.0,
+                    "state": event_state,
+                    "interpretation": "Canonical CRM events observed after prompt exposure; temporal association only, not campaign or prompt causality.",
+                },
+                "verified_purchases_after_30d": {
+                    "numerator": purchases, "denominator": len(matured),
+                    "coverage": len(matured) / len(ad_exposures) if ad_exposures else 0.0,
+                    "state": event_state,
+                    "interpretation": "Only persisted Purchase events with revenue_verified=true; temporal association only.",
+                },
+            })
+        by_variant[variant] = {
+            "prompt_exposures": len(selected),
+            "unresolved_or_ambiguous_ad_exposures": unresolved,
+            "rows": ad_rows,
+            "state": "unknown" if not selected else "partial" if unresolved or query_truncated or any(
+                row["maturity_coverage"]["state"] != "observed"
+                or row["commercial_advances_after_30d"]["state"] != "observed"
+                for row in ad_rows
+            ) else "observed",
+            "interpretation": "Ad association comes from a persisted CTWA referral resolved to one ad before prompt exposure; temporal association is not causal attribution.",
+        }
+    return {"by_variant": by_variant, "truncated": bool(query_truncated), "source": "persisted_prompt_exposure_ctwa_touch_and_canonical_events"}
+
+
+async def _ad_assisted_prompt_outcomes(
+    db: AsyncSession, tenant_id: Any, experiment_id: Any, exposures: list[Any], *, truncated: bool,
+) -> dict[str, Any]:
+    if not exposures:
+        return aggregate_ad_assisted_prompt_outcomes([], [], [], query_truncated=truncated)
+    exposure_ids = [row.id for row in exposures if getattr(row, "id", None)]
+    conversation_ids = list({row.conversation_id for row in exposures if getattr(row, "conversation_id", None)})
+    if not exposure_ids or not conversation_ids:
+        return aggregate_ad_assisted_prompt_outcomes(exposures, [], [], query_truncated=True)
+
+    touch_rows = (await db.execute(
+        select(A11PromptExposure.id, AttributionTouchResolution.ad_id, AttributionTouchResolution.resolution_status)
+        .select_from(A11PromptExposure)
+        .join(AttributionTouch, and_(
+            AttributionTouch.empresa_id == A11PromptExposure.empresa_id,
+            AttributionTouch.conversation_id == A11PromptExposure.conversation_id,
+            AttributionTouch.event_kind == "ctwa_referral",
+            AttributionTouch.occurred_at <= func.timezone("UTC", A11PromptExposure.exposed_at),
+        ))
+        .join(AttributionTouchResolution, and_(
+            AttributionTouchResolution.empresa_id == AttributionTouch.empresa_id,
+            AttributionTouchResolution.touch_id == AttributionTouch.id,
+            AttributionTouchResolution.ad_id.is_not(None),
+            AttributionTouchResolution.resolution_status.in_(["resolved", "partial"]),
+        ))
+        .where(
+            A11PromptExposure.empresa_id == tenant_id,
+            A11PromptExposure.experiment_id == experiment_id,
+            A11PromptExposure.id.in_(exposure_ids),
+        )
+        .limit(A11_AD_ASSOCIATION_LIMIT + 1)
+    )).all()
+    touch_truncated = len(touch_rows) > A11_AD_ASSOCIATION_LIMIT
+    touch_rows = touch_rows[:A11_AD_ASSOCIATION_LIMIT]
+
+    start = min(_utc_aware(row.exposed_at) for row in exposures)
+    stop = max(_utc_aware(row.exposed_at) + timedelta(days=30) for row in exposures)
+    event_rows = (await db.execute(
+        select(
+            CanonicalCommercialEvent.conversation_id,
+            CanonicalCommercialEvent.event_name,
+            CanonicalCommercialEvent.occurred_at,
+            CanonicalCommercialEvent.revenue_verified,
+        ).where(
+            CanonicalCommercialEvent.empresa_id == tenant_id,
+            CanonicalCommercialEvent.conversation_id.in_(conversation_ids),
+            CanonicalCommercialEvent.occurred_at > start,
+            CanonicalCommercialEvent.occurred_at <= stop,
+            CanonicalCommercialEvent.event_name.in_(["QualifiedLead", "InitiateCheckout", "OrderCreated", "Purchase"]),
+        ).order_by(CanonicalCommercialEvent.occurred_at).limit(A11_COMMERCIAL_EVENT_LIMIT + 1)
+    )).all()
+    event_truncated = len(event_rows) > A11_COMMERCIAL_EVENT_LIMIT
+    event_rows = event_rows[:A11_COMMERCIAL_EVENT_LIMIT]
+    result = aggregate_ad_assisted_prompt_outcomes(
+        exposures, list(touch_rows), list(event_rows), query_truncated=truncated or touch_truncated or event_truncated,
+    )
+    result["sample_limits"] = {
+        "exposures": A11_EXPOSURE_METRIC_LIMIT,
+        "ctwa_ad_associations": A11_AD_ASSOCIATION_LIMIT,
+        "commercial_events": A11_COMMERCIAL_EVENT_LIMIT,
+    }
+    return result
 
 
 def _audit(tenant_id, *, actor_id, action, object_type, object_id=None, details=None):
@@ -598,6 +774,9 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
     ).order_by(A11PromptExposure.exposed_at).limit(A11_EXPOSURE_METRIC_LIMIT + 1))).scalars().all()
     exposures_truncated = len(exposure_rows) > A11_EXPOSURE_METRIC_LIMIT
     exposures = exposure_rows[:A11_EXPOSURE_METRIC_LIMIT]
+    ad_assisted_outcomes = await _ad_assisted_prompt_outcomes(
+        db, tenant_id, experiment.id, exposures, truncated=exposures_truncated,
+    )
     matured = [row for row in exposures if row.exposed_at <= maturity_cutoff]
     conversation_ids = list({row.conversation_id for row in matured})
     inbound = []
@@ -699,6 +878,7 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
             "cost_usd": {"value": None, "numerator": 0, "denominator": len(sample), "state": "unknown", "reason": "No measured billing amount or versioned price is persisted."},
             "commercial_stage_advance_after_30d": {"numerator": stage_advance_count, "denominator": total_mature_commercial, "coverage": len(mature_commercial) / total_mature_commercial if total_mature_commercial else 0.0, "state": "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_mature_commercial else commercial_state, "interpretation": "Canonical commercial event after exposure; temporal association, not causal attribution."},
             "verified_purchase_after_30d": {"numerator": verified_purchase_count, "denominator": total_mature_commercial, "coverage": len(mature_commercial) / total_mature_commercial if total_mature_commercial else 0.0, "state": "partial" if exposures_truncated or commerce_events_truncated or len(mature_commercial) < total_mature_commercial else commercial_state, "interpretation": "Purchase with revenue_verified=true after exposure for the linked tenant lead; not causal attribution."},
+            "ad_assisted_outcomes": ad_assisted_outcomes["by_variant"][variant],
         }
 
     assignments_state = "unknown" if not total_assignments else "partial" if completed_assignments < total_assignments else "observed"
@@ -718,9 +898,10 @@ async def experiment_metrics(db: AsyncSession, tenant_id, experiment: A11PromptE
         "commercial_event_rows_evaluated": len(commerce_events),
         "maturity_days": cutoff_days,
         "evidence": "persisted conversation/message link; response is post-exposure correlation, not campaign/prompt causality",
+        "ad_assisted_evidence": ad_assisted_outcomes,
         "truncated": bool(truncation_reasons),
         "truncation_reasons": truncation_reasons,
-        "sample_limits": {"experiments_per_dashboard": A11_EXPERIMENT_DASHBOARD_LIMIT, "exposures": A11_EXPOSURE_METRIC_LIMIT, "response_events": A11_RESPONSE_EVENT_LIMIT, "commercial_events": A11_COMMERCIAL_EVENT_LIMIT},
+        "sample_limits": {"experiments_per_dashboard": A11_EXPERIMENT_DASHBOARD_LIMIT, "exposures": A11_EXPOSURE_METRIC_LIMIT, "response_events": A11_RESPONSE_EVENT_LIMIT, "commercial_events": A11_COMMERCIAL_EVENT_LIMIT, "ctwa_ad_associations": A11_AD_ASSOCIATION_LIMIT},
     }
 
 

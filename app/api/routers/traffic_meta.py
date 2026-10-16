@@ -6,7 +6,8 @@ import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -27,6 +28,13 @@ from app.services.meta.business_messaging_conversions import (
 )
 from app.services.meta.embedded_signup import mask_meta_id
 from app.services.meta.marketing_api import MetaMarketingApiClient, graph_post_data, normalize_ad_account_id, sanitize_graph_error
+from app.services.meta.existing_post_creatives import (
+    ExistingPostSelectionError,
+    build_existing_post_creative_preview,
+    issue_existing_post_selection_token,
+    normalize_existing_post_media_type,
+    verify_existing_post_selection_token,
+)
 from app.services.meta.meta_tenant_provisioner import audit_business_meta_surfaces, audit_meta_tenant, provision_meta_conversion_infrastructure
 from app.services.meta.marketing_credentials import (
     ADMIN_MARKETING_SOURCE,
@@ -101,8 +109,6 @@ class TrafficMetaCampaignCreateRequest(BaseModel):
     radius_km: float | None = None
     page_id: str | None = None
     whatsapp_connection_id: str | None = Field(default=None, max_length=80)
-    business_goal: str | None = Field(default=None, max_length=40)
-    conversion_goal_key: str | None = Field(default=None, max_length=40)
 
 
 class TrafficMetaFullCampaignCreateRequest(BaseModel):
@@ -116,8 +122,6 @@ class TrafficMetaFullCampaignCreateRequest(BaseModel):
     gender_mode: str = Field(default="all", pattern="^(all|women|men)$")
     page_id: str | None = None
     whatsapp_connection_id: str | None = Field(default=None, max_length=80)
-    business_goal: str | None = Field(default=None, max_length=40)
-    conversion_goal_key: str | None = Field(default=None, max_length=40)
     ads: list[dict[str, Any]] = Field(default_factory=list, max_length=5)
     idempotency_key: str | None = Field(default=None, max_length=160)
     resume_creation_id: str | None = Field(default=None, max_length=80)
@@ -135,6 +139,25 @@ class TrafficMetaImageCopyGenerateRequest(BaseModel):
     filename: str | None = Field(default=None, max_length=240)
     objective: str | None = Field(default=None, max_length=80)
     destination: str = Field(default="whatsapp", max_length=40)
+
+
+class TrafficMetaExistingPostPreviewRequest(BaseModel):
+    selection_token: str = Field(min_length=20, max_length=2048)
+    objective: str = Field(default=CAMPAIGN_OBJECTIVE, max_length=40)
+    creative_name: str = Field(default="Criativo de publicação existente", min_length=1, max_length=120)
+
+
+class TrafficMetaExistingPostCampaignPreviewRequest(BaseModel):
+    selection_token: str = Field(min_length=20, max_length=2048)
+    creative_name: str = Field(default="Criativo de publicação existente", min_length=1, max_length=120)
+    page_id: str = Field(min_length=1, max_length=80)
+    whatsapp_connection_id: str | None = Field(default=None, max_length=80)
+    daily_budget_brl: str = Field(min_length=1, max_length=40)
+    location_type: str = Field(default="brazil", pattern="^(brazil|radius)$")
+    latitude: float | None = None
+    longitude: float | None = None
+    radius_km: float | None = None
+    gender_mode: str = Field(default="all", pattern="^(all|women|men)$")
 
 
 class TrafficMetaBatchCreateRequest(BaseModel):
@@ -206,6 +229,7 @@ def _settings_flags() -> dict[str, bool]:
         "adset_create_enabled": settings.marketing_adset_create_enabled,
         "creative_create_enabled": settings.marketing_creative_create_enabled,
         "ad_create_enabled": settings.marketing_ad_create_enabled,
+        "existing_post_ads_enabled": settings.existing_post_ads_enabled,
     }
 
 
@@ -468,11 +492,130 @@ def _serialize_page(page: dict[str, Any], *, selected: bool = False) -> dict[str
     }
 
 
+def _https_preview_url(value: Any) -> str | None:
+    raw = _clean(value)
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return raw[:2048]
+
+
+def _post_preview_urls(post: dict[str, Any], *, platform: str, media_type: str) -> tuple[str | None, str | None]:
+    if platform == "instagram":
+        video_url = _https_preview_url(post.get("media_url")) if media_type == "VIDEO" else None
+        thumbnail_url = _https_preview_url(post.get("thumbnail_url") or (post.get("media_url") if media_type == "IMAGE" else None))
+        return video_url, thumbnail_url
+    attachments = post.get("attachments") if isinstance(post.get("attachments"), dict) else {}
+    data = attachments.get("data") if isinstance(attachments.get("data"), list) else []
+    first = data[0] if data and isinstance(data[0], dict) else {}
+    media = first.get("media") if isinstance(first.get("media"), dict) else {}
+    image = media.get("image") if isinstance(media.get("image"), dict) else first.get("image")
+    image_url = _https_preview_url((image or {}).get("src")) if isinstance(image, dict) else None
+    video_url = _https_preview_url(media.get("source")) if media_type == "VIDEO" else None
+    thumbnail_url = image_url or _https_preview_url(post.get("full_picture"))
+    return video_url, thumbnail_url
+
+
+def _serialize_existing_post(
+    post: dict[str, Any], *, platform: str, page_id: str, instagram_account_id: str | None,
+    empresa_id: uuid.UUID, ad_account_id: str,
+) -> dict[str, Any]:
+    source_id = _clean(post.get("id")) or ""
+    media_type, media_product_type = normalize_existing_post_media_type(platform, post)
+    media_url, thumbnail_url = _post_preview_urls(post, platform=platform, media_type=media_type)
+    caption = _clean(post.get("caption") if platform == "instagram" else post.get("message")) or ""
+    permalink = _clean(post.get("permalink") if platform == "instagram" else post.get("permalink_url"))
+    supported_preview = media_type in {"IMAGE", "VIDEO"} and (
+        (platform == "instagram" and media_product_type in {"FEED", "REELS"})
+        or (platform == "facebook" and source_id.startswith(f"{page_id}_"))
+    )
+    selection_token = None
+    if source_id and supported_preview:
+        selection_token = issue_existing_post_selection_token(
+            empresa_id=empresa_id,
+            ad_account_id=ad_account_id,
+            page_id=page_id,
+            instagram_account_id=instagram_account_id,
+            platform=platform,
+            source_id=source_id,
+            media_type=media_type,
+            media_product_type=media_product_type,
+        )
+    id_mapping = {
+        "source_platform": platform,
+        "page_id": page_id,
+        "instagram_account_id": instagram_account_id,
+        "post_id": source_id if platform == "facebook" else None,
+        "media_id": source_id if platform == "instagram" else None,
+        "creative_id": None,
+        "comment_id": None,
+    }
+    if platform == "facebook":
+        id_mapping["object_story_id_candidate"] = source_id if source_id.startswith(f"{page_id}_") else None
+    return {
+        "source_id": source_id,
+        "source_platform": platform,
+        "caption": caption[:2000],
+        "created_at": _clean(post.get("timestamp") or post.get("created_time")),
+        "permalink": permalink,
+        "media_type": media_type,
+        "media_product_type": media_product_type,
+        "media_url": media_url,
+        "thumbnail_url": thumbnail_url,
+        "preview_available": bool(media_url or thumbnail_url),
+        "video_preview_available": bool(media_url) if media_type == "VIDEO" else None,
+        "id_mapping": id_mapping,
+        "compatibility": {
+            "status": "preliminary" if supported_preview else "unsupported_or_unverified_format",
+            "selectable_for_mock": bool(selection_token),
+            "meta_acceptance_verified": False,
+        },
+        "selection_token": selection_token,
+    }
+
+
+def _raise_existing_post_read_error(exc: Exception) -> None:
+    code = str(getattr(exc, "code", "") or "")
+    if code in {"invalid_auth", "token_expired"}:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "META_CREDENTIAL_INVALID", "message": "A credencial de anúncios da empresa foi recusada ou expirou. Reautorize a conexão Meta."},
+        ) from exc
+    if code == "rate_limit":
+        raise HTTPException(status_code=429, detail={"code": "META_RATE_LIMIT", "message": "A Meta limitou temporariamente a consulta. Tente novamente em instantes."}) from exc
+    if code == "timeout":
+        raise HTTPException(status_code=504, detail={"code": "META_READ_TIMEOUT", "message": "A consulta de publicações excedeu o tempo limite."}) from exc
+    if code == "missing_permission":
+        raise HTTPException(status_code=403, detail={"code": "META_READ_PERMISSION_REQUIRED", "message": "A credencial da empresa não possui permissão para ler estas publicações."}) from exc
+    if code == "temporary_error" or int(getattr(exc, "status_code", 0) or 0) >= 500:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "META_READ_TEMPORARILY_UNAVAILABLE", "message": "A Meta está temporariamente indisponível. Tente novamente mais tarde."},
+        ) from exc
+    _raise_marketing_read_error(exc)
+
+
 def _current_configured_ad_account_id(config: TrafficMetaConfig) -> str:
     account_id = normalize_ad_account_id(config.ad_account_id)
     if not account_id:
         raise HTTPException(status_code=409, detail="Conta de anúncios não vinculada para esta empresa.")
     return account_id
+
+
+def _require_existing_post_ads_feature() -> None:
+    if not meta_settings().existing_post_ads_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "META_EXISTING_POST_ADS_DISABLED",
+                "message": "A leitura de publicações existentes está desativada até a integração ser habilitada pelo operador.",
+            },
+        )
 
 
 def _validate_campaign_whatsapp_connection(connection: Conexao | None, empresa_id: uuid.UUID) -> Conexao:
@@ -865,6 +1008,8 @@ async def get_meta_conversions_dataset(
 @router.get("/campaigns/conversion-readiness")
 async def get_meta_campaign_conversion_readiness(
     empresa_id: str,
+    # Kept as a backwards-compatible query parameter. Campaign strategy is
+    # server-owned; client-supplied technical goals are deliberately ignored.
     conversion_goal_key: str | None = Query(default=None, max_length=40),
     page_id: str | None = Query(default=None, max_length=80),
     whatsapp_connection_id: str | None = Query(default=None, max_length=80),
@@ -877,7 +1022,6 @@ async def get_meta_campaign_conversion_readiness(
         return await _campaign_conversion_readiness(
             db,
             empresa_uuid,
-            conversion_goal_key=conversion_goal_key,
             page_id=page_id,
             whatsapp_connection_id=selected_whatsapp_id,
         )
@@ -1383,12 +1527,6 @@ def _conversion_goal_by_key(value: str | None) -> dict[str, Any] | None:
     return next((item for item in CONVERSION_GOAL_CATALOG if item["key"] == key), None)
 
 
-def _requested_business_goal(payload: Any) -> str | None:
-    value = getattr(payload, "business_goal", None) or getattr(payload, "conversion_goal_key", None)
-    key = str(value or "").strip().lower()
-    return key or None
-
-
 def _conversion_goal_options(goals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_key = {item["key"]: item for item in goals}
     return [
@@ -1419,6 +1557,15 @@ def _campaign_conversion_contract(readiness: dict[str, Any]) -> dict[str, Any]:
         None,
     )
     return {
+        "strategy": "agentos_ctwa_sales_v1",
+        "destination": "WHATSAPP",
+        "campaign_objective": CONVERSION_CAMPAIGN_OBJECTIVE,
+        "promoted_object_contract": ["facebook_page_id", "official_whatsapp_phone_number_id"],
+        "initial_status": "PAUSED",
+        "crm_dataset_ctwa_optimization": {
+            "state": "unverified",
+            "reason": "Meta endpoint acceptance and CRM event persistence do not establish campaign-level CTWA optimization. This requires authorized campaign/insights evidence.",
+        },
         "infrastructure_ready": bool(optimization.get("infrastructure_ready") if "infrastructure_ready" in optimization else status.get("conversion_ready")),
         "optimization_state": optimization.get("state") or ("READY_TO_CREATE" if readiness.get("ready") else readiness.get("reason") or "UNKNOWN"),
         "eligible_goals": eligible_goals,
@@ -1587,11 +1734,12 @@ async def _campaign_conversion_readiness(
             },
             "credential": meta,
         })
-    goal_key = str(conversion_goal_key or "").strip().lower()
-    goals = [_conversion_goal_by_key(goal_key)] if goal_key else list(CONVERSION_GOAL_CATALOG)
-    goals = [goal for goal in goals if goal]
-    if not goals:
-        goals = list(CONVERSION_GOAL_CATALOG)
+    # There is one AgentOS acquisition strategy. A legacy client may still
+    # send conversion_goal_key, but it cannot select an arbitrary Meta goal.
+    # Probe the approved internal catalog and choose only a goal confirmed by
+    # the account. If none is accepted, keep the campaign blocked rather than
+    # silently falling back to conversation-volume optimization.
+    goals = list(CONVERSION_GOAL_CATALOG)
     probe_results = [
         await _probe_conversion_goal_support(
             client,
@@ -1935,7 +2083,6 @@ async def create_full_paused_campaign(
     readiness = await _campaign_conversion_readiness(
         db,
         empresa_uuid,
-        conversion_goal_key=_requested_business_goal(payload),
         page_id=asset_snapshot["page_id"],
         whatsapp_connection_id=selected_whatsapp_id,
     )
@@ -2451,7 +2598,6 @@ async def create_paused_campaign_and_adset(
     readiness = await _campaign_conversion_readiness(
         db,
         empresa_uuid,
-        conversion_goal_key=_requested_business_goal(payload),
         page_id=asset_snapshot["page_id"],
         whatsapp_connection_id=selected_whatsapp_id,
     )
@@ -2725,6 +2871,260 @@ async def list_pages(
         return {"credential": meta, "pages": await client.list_pages()}
     except Exception as exc:
         _raise_marketing_read_error(exc)
+
+
+@router.get("/existing-posts")
+async def list_existing_ad_posts(
+    empresa_id: str,
+    platform: Literal["facebook", "instagram"],
+    page_id: str = Query(min_length=1, max_length=80),
+    q: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=25, ge=1, le=50),
+    after: str | None = Query(default=None, max_length=500),
+    db: AsyncSession = Depends(get_db),
+    _: Usuario = Depends(require_tenant_access),
+):
+    """List tenant-owned posts using bounded Graph GETs only."""
+    _require_existing_post_ads_feature()
+    empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    page_id = _clean(page_id) or ""
+    config = await _get_config(db, empresa_uuid)
+    if not config or not config.ad_account_id:
+        raise HTTPException(status_code=409, detail="Configure uma conta de anúncios para consultar publicações.")
+    ad_account_id = _current_configured_ad_account_id(config)
+    try:
+        client, credential_meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+        )
+        pages = await client.list_pages()
+        page = next((item for item in pages if str(item.get("id") or "").strip() == page_id), None)
+        if not page:
+            raise HTTPException(status_code=403, detail="A Página não está vinculada à credencial desta empresa.")
+        instagram_account_id = _page_instagram_id(page)
+        if platform == "instagram" and not instagram_account_id:
+            raise HTTPException(status_code=409, detail="A Página selecionada não possui conta Instagram profissional vinculada.")
+        body = (
+            await client.list_page_published_posts(page_id, limit=limit, after=after)
+            if platform == "facebook"
+            else await client.list_instagram_media_page(str(instagram_account_id), limit=limit, after=after)
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_existing_post_read_error(exc)
+        raise AssertionError("unreachable")
+
+    data = body.get("data") if isinstance(body.get("data"), list) else []
+    items = [
+        _serialize_existing_post(
+            item,
+            platform=platform,
+            page_id=page_id,
+            instagram_account_id=instagram_account_id,
+            empresa_id=empresa_uuid,
+            ad_account_id=ad_account_id,
+        )
+        for item in data
+        if isinstance(item, dict)
+    ]
+    query = str(q or "").strip().casefold()
+    if query:
+        items = [
+            item for item in items
+            if query in str(item.get("caption") or "").casefold()
+            or query in str(item.get("source_id") or "").casefold()
+        ]
+    paging = body.get("paging") if isinstance(body.get("paging"), dict) else {}
+    cursors = paging.get("cursors") if isinstance(paging.get("cursors"), dict) else {}
+    next_cursor = str(cursors.get("after") or "").strip() or None
+    return {
+        "source_platform": platform,
+        "account": {
+            "ad_account_id": ad_account_id,
+            "page_id": page_id,
+            "page_name": _clean(page.get("name")),
+            "instagram_account_id": instagram_account_id,
+            "instagram_username": (page.get("instagram_business_account") or page.get("connected_instagram_account") or {}).get("username") if isinstance(page.get("instagram_business_account") or page.get("connected_instagram_account"), dict) else None,
+        },
+        "credential": credential_meta,
+        "graph_api_version": credential_meta.get("graph_version"),
+        "items": items,
+        "next_cursor": next_cursor,
+        "has_more": bool(next_cursor),
+        "query_scope": "current_graph_page",
+        "write_performed": False,
+    }
+
+
+@router.post("/existing-posts/creative-preview")
+async def preview_existing_post_ad_creative(
+    empresa_id: str,
+    payload: TrafficMetaExistingPostPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_tenant_access),
+):
+    """Validate selection ownership and return a local-only creative mock."""
+    _require_existing_post_ads_feature()
+    empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    try:
+        claims = verify_existing_post_selection_token(payload.selection_token, empresa_id=empresa_uuid)
+    except ExistingPostSelectionError as exc:
+        raise HTTPException(status_code=403, detail={"code": str(exc), "message": "Atualize a lista e selecione novamente a publicação."}) from exc
+    config = await _get_config(db, empresa_uuid)
+    if not config or not config.ad_account_id:
+        raise HTTPException(status_code=409, detail="Configure uma conta de anúncios antes de preparar a prévia.")
+    ad_account_id = _current_configured_ad_account_id(config)
+    if claims.get("ad_account_id") != ad_account_id:
+        raise HTTPException(status_code=403, detail="A seleção não pertence à conta de anúncios configurada nesta empresa.")
+    try:
+        client, credential_meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+        )
+        pages = await client.list_pages()
+        page = next((item for item in pages if str(item.get("id") or "").strip() == claims["page_id"]), None)
+        if not page:
+            raise HTTPException(status_code=403, detail="A Página não está mais vinculada à credencial desta empresa.")
+        linked_instagram_id = _page_instagram_id(page)
+        if claims["platform"] == "instagram":
+            if not linked_instagram_id or linked_instagram_id != claims.get("instagram_account_id"):
+                raise HTTPException(status_code=403, detail="A conta Instagram não pertence à Página selecionada.")
+            selected_post = await client.get_instagram_media(claims["source_id"])
+            if str(selected_post.get("id") or "") != claims["source_id"]:
+                raise HTTPException(status_code=404, detail="A mídia selecionada não está mais disponível.")
+        else:
+            selected_post = await client.get_page_published_post(claims["source_id"])
+            source_page = selected_post.get("from") if isinstance(selected_post.get("from"), dict) else {}
+            if str(selected_post.get("id") or "") != claims["source_id"] or str(source_page.get("id") or "") != claims["page_id"]:
+                raise HTTPException(status_code=403, detail="A publicação não pertence à Página selecionada.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_existing_post_read_error(exc)
+        raise AssertionError("unreachable")
+
+    media_type, product_type = normalize_existing_post_media_type(claims["platform"], selected_post)
+    if media_type != claims.get("media_type") or str(product_type or "") != str(claims.get("media_product_type") or ""):
+        raise HTTPException(status_code=409, detail="O formato da publicação mudou. Atualize a lista e selecione novamente.")
+    try:
+        preview = build_existing_post_creative_preview(
+            name=payload.creative_name,
+            ad_account_id=ad_account_id,
+            page_id=claims["page_id"],
+            platform=claims["platform"],
+            source_id=claims["source_id"],
+            instagram_account_id=claims.get("instagram_account_id"),
+            media_type=media_type,
+            media_product_type=product_type,
+            objective=payload.objective.strip().upper(),
+        )
+    except TrafficCampaignValidationError as exc:
+        raise HTTPException(status_code=422, detail={"code": str(exc), "message": "Formato ou objetivo não compatível com a prévia atual."}) from exc
+    return {"preview": preview, "credential": credential_meta, "graph_api_version": credential_meta.get("graph_version")}
+
+
+@router.post("/existing-posts/campaign-preview")
+async def preview_existing_post_campaign(
+    empresa_id: str,
+    payload: TrafficMetaExistingPostCampaignPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_tenant_access),
+):
+    """Simulate the existing campaign builder without persisting or writing to Meta."""
+    _require_existing_post_ads_feature()
+    empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    try:
+        claims = verify_existing_post_selection_token(payload.selection_token, empresa_id=empresa_uuid)
+    except ExistingPostSelectionError as exc:
+        raise HTTPException(status_code=403, detail={"code": str(exc), "message": "Atualize a lista e selecione novamente a publicação."}) from exc
+    page_id = _clean(payload.page_id) or ""
+    if page_id != claims.get("page_id"):
+        raise HTTPException(status_code=409, detail="A publicação selecionada pertence a outra Página do formulário.")
+    config = await _get_config(db, empresa_uuid)
+    if not config or not config.ad_account_id:
+        raise HTTPException(status_code=409, detail="Configure uma conta de anúncios antes de preparar a prévia.")
+    ad_account_id = _current_configured_ad_account_id(config)
+    selected_whatsapp_id = _uuid_or_400(payload.whatsapp_connection_id, "whatsapp_connection_id") if payload.whatsapp_connection_id else None
+    try:
+        client, credential_meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+        )
+        if claims.get("ad_account_id") != ad_account_id:
+            raise HTTPException(status_code=403, detail="A seleção não pertence à conta de anúncios configurada nesta empresa.")
+        ad_account = await client.validate_ad_account(ad_account_id)
+        assets = await _resolve_campaign_assets_for_write(
+            db,
+            empresa_uuid,
+            config=config,
+            page_id=page_id,
+            whatsapp_connection_id=selected_whatsapp_id,
+            client=client,
+            ad_account=ad_account,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_existing_post_read_error(exc)
+        raise AssertionError("unreachable")
+
+    try:
+        daily_budget_cents = brl_to_meta_cents(payload.daily_budget_brl)
+        targeting = build_targeting(
+            location_mode=payload.location_type,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            radius_km=payload.radius_km,
+            gender_mode=payload.gender_mode,
+        )
+    except TrafficCampaignValidationError as exc:
+        raise HTTPException(status_code=422, detail={"code": str(exc), "message": "Revise orçamento e segmentação antes de simular."}) from exc
+
+    creative_result = await preview_existing_post_ad_creative(
+        empresa_id,
+        TrafficMetaExistingPostPreviewRequest(
+            selection_token=payload.selection_token,
+            objective=CONVERSION_CAMPAIGN_OBJECTIVE,
+            creative_name=payload.creative_name,
+        ),
+        db=db,
+        current_user=current_user,
+    )
+    creative = creative_result["preview"]["creative_payload_preview"]
+    campaign = build_campaign_payload("Prévia A12 · campanha", objective=CONVERSION_CAMPAIGN_OBJECTIVE)
+    adset = build_adset_payload(
+        name="Prévia A12 · conjunto",
+        campaign_id="PREVIEW_CAMPAIGN_ID",
+        daily_budget_cents=daily_budget_cents,
+        page_id=assets["page_id"],
+        phone_number="PHONE_NUMBER_REDACTED_FOR_PREVIEW",
+        targeting=targeting,
+        optimization_goal="CONVERSATIONS",
+        destination_type="WHATSAPP",
+    )
+    ad = build_ad_payload(name="Prévia A12 · anúncio", adset_id="PREVIEW_ADSET_ID", creative_id="PREVIEW_CREATIVE_ID")
+    return {
+        "state": "simulated",
+        "creation_mode": "local_mock",
+        "meta_write_performed": False,
+        "database_write_performed": False,
+        "external_side_effects": False,
+        "graph_api_version": credential_meta.get("graph_version"),
+        "id_mapping": creative_result["preview"]["id_mapping"],
+        "compatibility": creative_result["preview"]["compatibility"],
+        "builder_preview": {
+            "campaign": campaign,
+            "adset": adset,
+            "creative": creative,
+            "ad": ad,
+            "targeting": targeting,
+            "daily_budget_cents": daily_budget_cents,
+            "whatsapp_connection_present": bool(assets.get("whatsapp_connection_id")),
+            "phone_number_id_present": bool(assets.get("phone_number_id")),
+            "phone_number": "[redigido na prévia]",
+        },
+        "note": "Prévia local que reutiliza os validadores e builders atuais; nenhuma estrutura foi salva ou enviada à Meta.",
+    }
 
 
 @router.get("/campaigns")

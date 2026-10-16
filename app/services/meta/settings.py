@@ -24,6 +24,7 @@ class MetaAppSettings:
     marketing_adset_create_enabled: bool
     marketing_creative_create_enabled: bool
     marketing_ad_create_enabled: bool
+    existing_post_ads_enabled: bool
 
     @property
     def public_configured(self) -> bool:
@@ -65,4 +66,5 @@ def meta_settings() -> MetaAppSettings:
         marketing_adset_create_enabled=_env_enabled("META_MARKETING_ADSET_CREATE_ENABLED"),
         marketing_creative_create_enabled=_env_enabled("META_MARKETING_CREATIVE_CREATE_ENABLED"),
         marketing_ad_create_enabled=_env_enabled("META_MARKETING_AD_CREATE_ENABLED"),
+        existing_post_ads_enabled=_env_enabled("META_EXISTING_POST_ADS_ENABLED"),
     )

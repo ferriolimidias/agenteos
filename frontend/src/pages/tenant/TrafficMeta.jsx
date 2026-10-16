@@ -1,10 +1,12 @@
 import "../../styles/ux05-analytics.css";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, CheckCircle2, Eye, Loader2, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
 import { loadFacebookSdk, startMetaMarketingAuthorization, sanitizeMetaBrowserError } from "../../utils/metaEmbeddedSignup";
 import { ActionButton, EmptyState, InfoBanner, LoadingState, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
+import ExistingPostPicker from "./ExistingPostPicker";
+import { describeMetaReadError } from "../../utils/metaReadErrors";
 
 const emptyConfig = {
   ad_account_id: "",
@@ -139,6 +141,19 @@ function fileToDataUrl(file) {
 }
 
 const draftStoreName = "agentos-traffic-meta-drafts";
+
+function localIsoDate(offsetDays = 0) {
+  const value = new Date();
+  value.setDate(value.getDate() + offsetDays);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function analysisMetricLabel(metric) {
+  if (!metric || metric.state === "unknown" || metric.value == null) return "Desconhecido";
+  const state = metric.state === "partial" ? "parcial" : "observado";
+  if (metric.numerator != null && metric.denominator != null) return `${metric.numerator}/${metric.denominator} · ${state}`;
+  return `${metric.value} · ${state}`;
+}
 
 function openDraftStore() {
   return new Promise((resolve, reject) => {
@@ -308,9 +323,16 @@ export default function TrafficMeta() {
   const [savingMappingSources, setSavingMappingSources] = useState("");
   const [pages, setPages] = useState([]);
   const [assets, setAssets] = useState(null);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsReadError, setAssetsReadError] = useState(null);
+  const assetsRequestSequence = useRef(0);
   const [assetForm, setAssetForm] = useState({ page_id: "", whatsapp_connection_id: "", dataset_id: "" });
   const [savingAssets, setSavingAssets] = useState(false);
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignOutcomeAnalytics, setCampaignOutcomeAnalytics] = useState(null);
+  const [campaignOutcomeLoading, setCampaignOutcomeLoading] = useState(false);
+  const [campaignOutcomeError, setCampaignOutcomeError] = useState("");
+  const [campaignOutcomePeriod, setCampaignOutcomePeriod] = useState({ start_date: localIsoDate(-29), end_date: localIsoDate(0) });
   const [adsets, setAdsets] = useState([]);
   const [ads, setAds] = useState([]);
   const [form, setForm] = useState(emptyConfig);
@@ -331,6 +353,7 @@ export default function TrafficMeta() {
   const [draftCreationId, setDraftCreationId] = useState("");
   const [resolvingPin, setResolvingPin] = useState(false);
   const [draftSessionId, setDraftSessionId] = useState("");
+  const [creativeSource, setCreativeSource] = useState("new");
   const [campaignForm, setCampaignForm] = useState({
     daily_budget_brl: "",
     location_type: "brazil",
@@ -342,7 +365,6 @@ export default function TrafficMeta() {
     gender_mode: "all",
     page_id: "",
     whatsapp_connection_id: "",
-    conversion_goal_key: "",
     ads: [],
   });
 
@@ -361,7 +383,7 @@ export default function TrafficMeta() {
   const writesEnabled = Boolean(status?.meta_write_enabled && status?.campaign_create_enabled && status?.adset_create_enabled && status?.creative_create_enabled && status?.ad_create_enabled);
   const datasetAsset = datasetDisplay(config, officialWhatsapp);
   const conversionSourceOptions = conversions?.conversion_engine?.source_options || fallbackSourceOptions;
-  const conversionGoalOptions = campaignReadiness?.supported_goals || [];
+  const existingPostAdsEnabled = Boolean(status?.existing_post_ads_enabled);
 
   const capabilityBadges = useMemo(() => {
     const data = credentials || {};
@@ -404,6 +426,11 @@ export default function TrafficMeta() {
   };
 
   const loadStatus = async () => {
+    const assetsRequestId = ++assetsRequestSequence.current;
+    setAssets(null);
+    setPages([]);
+    setAssetsReadError(null);
+    setAssetsLoading(false);
     if (!empresaId) {
       setStatus(emptyStatus);
       setCredentials(null);
@@ -449,9 +476,12 @@ export default function TrafficMeta() {
         }
       }
       if (normalizedSavedId) {
+        setAssetsLoading(true);
         try {
           const assetResponse = await api.get(`/empresas/${empresaId}/traffic/meta/assets`, { timeout: 20000 });
+          if (assetsRequestId !== assetsRequestSequence.current) return;
           setAssets(assetResponse.data);
+          setAssetsReadError(null);
           const graphPages = assetResponse.data?.pages || [];
           const graphWhatsapps = assetResponse.data?.whatsapps || [];
           const compatible = graphWhatsapps.filter((item) => item.page_compatible);
@@ -467,8 +497,13 @@ export default function TrafficMeta() {
             page_id: assetResponse.data?.selected_page?.id || config.page_id || current.page_id,
             whatsapp_connection_id: defaultWhatsappId || current.whatsapp_connection_id,
           }));
-        } catch {
+        } catch (assetError) {
+          if (assetsRequestId !== assetsRequestSequence.current) return;
           setAssets(null);
+          setPages([]);
+          setAssetsReadError(describeMetaReadError(assetError));
+        } finally {
+          if (assetsRequestId === assetsRequestSequence.current) setAssetsLoading(false);
         }
       }
     } catch (err) {
@@ -506,6 +541,27 @@ export default function TrafficMeta() {
     } catch (err) {
       setConversionHistory([]);
       setError((current) => current || safeError(err, "Não foi possível carregar o histórico de conversões Meta."));
+    }
+  };
+
+  const retryMetaAssets = async () => {
+    if (!empresaId) return;
+    const requestId = ++assetsRequestSequence.current;
+    setAssetsLoading(true);
+    setAssetsReadError(null);
+    try {
+      const response = await api.get(`/empresas/${empresaId}/traffic/meta/assets`, { timeout: 20000 });
+      if (requestId !== assetsRequestSequence.current) return;
+      setAssets(response.data);
+      setPages(response.data?.pages || []);
+      setAssetsReadError(null);
+    } catch (requestError) {
+      if (requestId !== assetsRequestSequence.current) return;
+      setAssets(null);
+      setPages([]);
+      setAssetsReadError(describeMetaReadError(requestError));
+    } finally {
+      if (requestId === assetsRequestSequence.current) setAssetsLoading(false);
     }
   };
 
@@ -565,7 +621,6 @@ export default function TrafficMeta() {
     try {
       const response = await api.get(`/empresas/${empresaId}/traffic/meta/campaigns/conversion-readiness`, {
         params: {
-          conversion_goal_key: nextForm.conversion_goal_key || undefined,
           page_id: pageId || undefined,
           whatsapp_connection_id: whatsappConnectionId || undefined,
         },
@@ -635,7 +690,8 @@ export default function TrafficMeta() {
     setDraftSessionId(sessionId);
     setDraftCreationId("");
     setCreatedStructure(null);
-    setCampaignForm((current) => ({ ...current, daily_budget_brl: "", location_type: "brazil", location_input: "", location_display_name: "", latitude: "", longitude: "", radius_km: "", gender_mode: "all", conversion_goal_key: "", ads: [] }));
+    setCreativeSource("new");
+    setCampaignForm((current) => ({ ...current, daily_budget_brl: "", location_type: "brazil", location_input: "", location_display_name: "", latitude: "", longitude: "", radius_km: "", gender_mode: "all", ads: [] }));
     if (compatibleWhatsapps.length === 1) {
       setCampaignForm((current) => ({ ...current, whatsapp_connection_id: compatibleWhatsapps[0].connection_id || "" }));
     }
@@ -851,9 +907,34 @@ export default function TrafficMeta() {
     }
   };
 
+  const loadCampaignOutcomeAnalytics = async () => {
+    if (!empresaId || !selectedCampaignId) return;
+    setCampaignOutcomeLoading(true);
+    setCampaignOutcomeError("");
+    try {
+      const response = await api.get(`/empresas/${empresaId}/analytics/ads`, {
+        params: {
+          campaign_id: selectedCampaignId,
+          start_date: campaignOutcomePeriod.start_date,
+          end_date: campaignOutcomePeriod.end_date,
+          attribution_model: "last_touch",
+        },
+        timeout: 30000,
+      });
+      setCampaignOutcomeAnalytics(response.data || null);
+    } catch (caught) {
+      setCampaignOutcomeAnalytics(null);
+      setCampaignOutcomeError(safeError(caught, "Não foi possível carregar os resultados do CRM por anúncio."));
+    } finally {
+      setCampaignOutcomeLoading(false);
+    }
+  };
+
   const selectExistingCampaign = (campaignId) => {
     setSelectedCampaignId(campaignId);
     setInspection(null);
+    setCampaignOutcomeAnalytics(null);
+    setCampaignOutcomeError("");
     setAdsets([]);
     setAds([]);
     if (campaignId) inspectCampaign(campaignId);
@@ -889,7 +970,6 @@ export default function TrafficMeta() {
       const resumeId = draftCreationId || (createdStructure?.partial ? createdStructure.id : null);
       const response = await api.post(`/empresas/${empresaId}/traffic/meta/campaigns/full`, {
         ...campaignForm,
-        conversion_goal_key: campaignForm.conversion_goal_key || campaignReadiness?.selected_goal || "",
         resume_creation_id: resumeId,
         latitude: campaignForm.location_type === "radius" ? Number(campaignForm.latitude) : null,
         longitude: campaignForm.location_type === "radius" ? Number(campaignForm.longitude) : null,
@@ -958,7 +1038,7 @@ export default function TrafficMeta() {
     if (!showNewCampaign || !empresaId) return undefined;
     const timer = window.setTimeout(() => loadCampaignReadiness(campaignForm), 250);
     return () => window.clearTimeout(timer);
-  }, [showNewCampaign, empresaId, campaignForm.page_id, campaignForm.whatsapp_connection_id, campaignForm.conversion_goal_key, assetForm.page_id, assetForm.whatsapp_connection_id, config.page_id, config.whatsapp_connection_id]);
+  }, [showNewCampaign, empresaId, campaignForm.page_id, campaignForm.whatsapp_connection_id, assetForm.page_id, assetForm.whatsapp_connection_id, config.page_id, config.whatsapp_connection_id]);
 
   const visibleCreationItems = createdStructure?.pipeline?.ads?.length
     ? createdStructure.pipeline.ads.map((item, index) => ({ ...item, sequence: item.sequence || index + 1 }))
@@ -1352,35 +1432,16 @@ export default function TrafficMeta() {
               </div>
               <p className="mt-2 text-slate-600">
                 {campaignReadiness?.ready
-                  ? `Objetivo pronto: ${campaignReadiness?.selected_goal_label || "conversão"} · Meta: ${campaignReadiness?.best_available_conversion_optimization || "-"}`
+                  ? `Estratégia AgentOS para WhatsApp Oficial pronta · otimização confirmada pela conta Meta: ${campaignReadiness?.best_available_conversion_optimization || "-"}`
                   : campaignReadiness?.reason
-                    ? `A conta ainda não aceita o objetivo de conversão solicitado: ${campaignReadiness.reason}`
-                    : "A campanha será bloqueada até a conta, o Dataset e a elegibilidade da Meta estarem consistentes."}
+                    ? `A estratégia AgentOS para WhatsApp ainda não está elegível na conta Meta: ${campaignReadiness.reason}`
+                    : "A criação aguarda validação da conta, do WhatsApp Oficial, do Dataset e da elegibilidade de conversão da Meta."}
               </p>
+              <p className="mt-1 text-xs text-slate-500">Uma única jornada: anúncio AgentOS → WhatsApp Oficial → atendimento AgentOS/JEV → CRM e eventos comerciais confirmados. A otimização técnica é definida pelo sistema; se não houver opção qualificada, a criação permanece bloqueada.</p>
+              <p className="mt-1 text-xs text-amber-800">O vínculo do Dataset CRM com otimização CTWA ainda não foi comprovado por leitura autorizada de resultados da Meta. O aceite do endpoint de eventos, isoladamente, não comprova otimização.</p>
             </div>
             {!confirmingCampaign ? (
               <>
-                {conversionGoalOptions.length ? (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="space-y-1 text-sm font-medium text-slate-700">
-                      Objetivo comercial
-                      <select
-                        className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2"
-                        value={campaignForm.conversion_goal_key}
-                        onChange={(e) => setCampaignForm({ ...campaignForm, conversion_goal_key: e.target.value })}
-                      >
-                        <option value="">Auto</option>
-                        {conversionGoalOptions.map((goal) => (
-                          <option key={goal.key} value={goal.key}>{goal.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="rounded-lg border border-slate-100 bg-white px-4 py-3 text-sm text-slate-600">
-                      <p className="font-semibold text-slate-900">Meta elegível</p>
-                      <p className="mt-1">{campaignReadiness?.best_available_conversion_optimization || "Nenhuma ainda"}</p>
-                    </div>
-                  </div>
-                ) : null}
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="space-y-1 text-sm font-medium text-slate-700">
                     Orçamento diário
@@ -1437,36 +1498,74 @@ export default function TrafficMeta() {
                 <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                   Público: <strong>Advantage+ / automático ativado</strong>
                 </div>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Imagens do anúncio</h3><span className="text-xs text-slate-500">{campaignForm.ads.filter(analysisReady).length} de {campaignForm.ads.length} concluídas · análise automática</span></div>
-                  <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">
-                    {campaignForm.ads.length ? "Adicionar imagens" : "Selecionar imagens"}
-                    <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="fm-field mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
-                    <span className="mt-1 block text-xs font-normal text-slate-500">JPEG ou PNG. A IA analisa cada imagem; duplicatas e arquivos inválidos são ignorados.</span>
-                  </label>
-                  {campaignForm.ads.map((ad, index) => (
-                    <div key={ad.item_key || `ad-${index}`} className="space-y-3 rounded-lg border border-slate-200 p-4">
-                      <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900">Imagem {index + 1}</p><button type="button" title="Remover imagem" onClick={() => removeAd(index)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Trash2 size={16} /></button></div>
-                      <div className="flex items-center gap-3">
-                        {ad.thumbnail_url ? <img src={ad.thumbnail_url} alt={ad.media_name || `Imagem ${index + 1}`} className="h-20 w-20 rounded-lg object-cover" /> : null}
-                        <div className="text-sm text-slate-600"><p>{ad.media_name || "Imagem selecionada"}</p><p className="mt-1 font-medium">{creativeItemStatus(ad)}</p></div>
-                      </div>
-                      {ad.analysis_error ? <div className="flex items-center justify-between gap-3"><InfoBanner tone="warning">{ad.analysis_error}</InfoBanner><ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => retryImageAnalysis(index)}>Tentar novamente</ActionButton></div> : null}
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
-                        <div className="space-y-3">
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
-                          <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                <fieldset className="space-y-3">
+                  <legend className="text-sm font-semibold text-slate-900">Origem do criativo</legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className={`cursor-pointer rounded-lg border p-3 text-sm ${creativeSource === "new" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                      <input type="radio" name="traffic-meta-creative-source" value="new" checked={creativeSource === "new"} onChange={() => setCreativeSource("new")} className="mr-2" />
+                      <span className="font-semibold">Novo criativo</span><span className="mt-1 block pl-6 text-xs text-slate-600">Manter o fluxo atual com imagem e copy próprias.</span>
+                    </label>
+                    <label className={`${existingPostAdsEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"} rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                      <input type="radio" name="traffic-meta-creative-source" value="existing" checked={creativeSource === "existing"} disabled={!existingPostAdsEnabled} aria-describedby="existing-post-feature-status" onChange={() => { setCreativeSource("existing"); setConfirmingCampaign(false); }} className="mr-2 disabled:cursor-not-allowed" />
+                      <span className="font-semibold">Publicação existente</span><span className="mt-1 block pl-6 text-xs text-slate-600">{existingPostAdsEnabled ? "Consultar publicações e gerar uma prévia local de Facebook ou Instagram." : "Indisponível até liberação operacional da integração de leitura."}</span>
+                      <span id="existing-post-feature-status" className="sr-only">{existingPostAdsEnabled ? "Integração liberada em modo somente leitura." : "Integração desativada por segurança."}</span>
+                    </label>
+                  </div>
+                </fieldset>
+                {creativeSource === "new" ? (
+                  <>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900">Imagens do anúncio</h3><span className="text-xs text-slate-500">{campaignForm.ads.filter(analysisReady).length} de {campaignForm.ads.length} concluídas · análise automática</span></div>
+                      <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">
+                        {campaignForm.ads.length ? "Adicionar imagens" : "Selecionar imagens"}
+                        <input type="file" accept="image/jpeg,image/png" multiple onChange={selectImages} disabled={campaignForm.ads.length >= 5} className="fm-field mt-2 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50" />
+                        <span className="mt-1 block text-xs font-normal text-slate-500">JPEG ou PNG. A IA analisa cada imagem; duplicatas e arquivos inválidos são ignorados.</span>
+                      </label>
+                      {campaignForm.ads.map((ad, index) => (
+                        <div key={ad.item_key || `ad-${index}`} className="space-y-3 rounded-lg border border-slate-200 p-4">
+                          <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900">Imagem {index + 1}</p><button type="button" title="Remover imagem" onClick={() => removeAd(index)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Trash2 size={16} /></button></div>
+                          <div className="flex items-center gap-3">
+                            {ad.thumbnail_url ? <img src={ad.thumbnail_url} alt={ad.media_name || `Imagem ${index + 1}`} className="h-20 w-20 rounded-lg object-cover" /> : null}
+                            <div className="text-sm text-slate-600"><p>{ad.media_name || "Imagem selecionada"}</p><p className="mt-1 font-medium">{creativeItemStatus(ad)}</p></div>
+                          </div>
+                          {ad.analysis_error ? <div className="flex items-center justify-between gap-3"><InfoBanner tone="warning">{ad.analysis_error}</InfoBanner><ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => retryImageAnalysis(index)}>Tentar novamente</ActionButton></div> : null}
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <label className="space-y-1 text-sm font-medium text-slate-700">Texto principal{analysisBusy(ad) ? <div className="h-[104px] animate-pulse rounded-lg bg-slate-100" aria-label="Gerando texto principal" /> : <textarea rows={4} value={ad.primary_text} onChange={(event) => updateAd(index, { primary_text: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                            <div className="space-y-3">
+                              <label className="block space-y-1 text-sm font-medium text-slate-700">Título{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando título" /> : <input value={ad.headline} onChange={(event) => updateAd(index, { headline: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                              <label className="block space-y-1 text-sm font-medium text-slate-700">Descrição{analysisBusy(ad) ? <div className="h-10 animate-pulse rounded-lg bg-slate-100" aria-label="Gerando descrição" /> : <input value={ad.description} onChange={(event) => updateAd(index, { description: event.target.value })} className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2" />}</label>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-500">CTA: WhatsApp / enviar mensagem · a copy continua editável.</p>
                         </div>
-                      </div>
-                      <p className="text-xs text-slate-500">CTA: WhatsApp / enviar mensagem · a copy continua editável.</p>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <ActionButton variant="secondary" onClick={() => setShowNewCampaign(false)}>Cancelar</ActionButton>
-                  <ActionButton onClick={() => setConfirmingCampaign(true)} disabled={!writesEnabled || !campaignReadiness?.ready || !campaignForm.daily_budget_brl || !campaignForm.page_id || !compatibleWhatsapps.length || (compatibleWhatsapps.length > 1 && !campaignForm.whatsapp_connection_id) || !campaignForm.ads.length || (campaignForm.location_type === "radius" && (!campaignForm.latitude || !campaignForm.longitude || !campaignForm.location_display_name || !campaignForm.radius_km)) || campaignForm.ads.some((ad) => !ad.media_data_url || !analysisReady(ad) || analysisBusy(ad))}>Criar campanha e anúncios</ActionButton>
-                </div>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton variant="secondary" onClick={() => setShowNewCampaign(false)}>Cancelar</ActionButton>
+                      <ActionButton onClick={() => setConfirmingCampaign(true)} disabled={!writesEnabled || !campaignReadiness?.ready || !campaignForm.daily_budget_brl || !campaignForm.page_id || !compatibleWhatsapps.length || (compatibleWhatsapps.length > 1 && !campaignForm.whatsapp_connection_id) || !campaignForm.ads.length || (campaignForm.location_type === "radius" && (!campaignForm.latitude || !campaignForm.longitude || !campaignForm.location_display_name || !campaignForm.radius_km)) || campaignForm.ads.some((ad) => !ad.media_data_url || !analysisReady(ad) || analysisBusy(ad))}>Criar campanha e anúncios</ActionButton>
+                    </div>
+                  </>
+                ) : <ExistingPostPicker
+                  empresaId={empresaId}
+                  pages={assetPages}
+                  adAccountId={configuredAdAccountId}
+                  enabled={existingPostAdsEnabled}
+                  pagesLoading={assetsLoading}
+                  pagesError={assetsReadError}
+                  onRetryPages={retryMetaAssets}
+                  initialPageId={campaignForm.page_id || config.page_id || ""}
+                  campaignDraft={{
+                    daily_budget_brl: campaignForm.daily_budget_brl,
+                    location_type: campaignForm.location_type,
+                    latitude: campaignForm.latitude,
+                    longitude: campaignForm.longitude,
+                    radius_km: campaignForm.radius_km,
+                    gender_mode: campaignForm.gender_mode,
+                    page_id: campaignForm.page_id,
+                    whatsapp_connection_id: campaignForm.whatsapp_connection_id,
+                  }}
+                  onPageChange={(pageId) => setCampaignForm((current) => ({ ...current, page_id: pageId }))}
+                />}
               </>
             ) : (
               <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -1522,6 +1621,36 @@ export default function TrafficMeta() {
               <ActionButton icon={inspecting ? Loader2 : Eye} onClick={() => inspectCampaign()} disabled={!selectedCampaignId || inspecting}>
                 {inspecting ? "Carregando..." : "Carregar dados reais"}
               </ActionButton>
+            </div>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <p className="font-semibold text-slate-900">Resultados comerciais por anúncio</p>
+                  <p className="mt-1 max-w-3xl text-xs text-slate-600">Consulta somente registros persistidos do CRM atribuídos ao anúncio. Aceitação no endpoint Meta não comprova entrega ao cliente nem otimização da campanha.</p>
+                </div>
+                <div className="grid w-full gap-2 sm:grid-cols-3 lg:max-w-2xl">
+                  <label className="text-xs font-medium text-slate-600">De<input aria-label="Início do período de análise" className="fm-field mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm" type="date" value={campaignOutcomePeriod.start_date} onChange={(event) => setCampaignOutcomePeriod((current) => ({ ...current, start_date: event.target.value }))} /></label>
+                  <label className="text-xs font-medium text-slate-600">Até<input aria-label="Fim do período de análise" className="fm-field mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm" type="date" value={campaignOutcomePeriod.end_date} onChange={(event) => setCampaignOutcomePeriod((current) => ({ ...current, end_date: event.target.value }))} /></label>
+                  <div className="flex items-end"><ActionButton variant="secondary" icon={campaignOutcomeLoading ? Loader2 : BarChart3} onClick={loadCampaignOutcomeAnalytics} disabled={!selectedCampaignId || campaignOutcomeLoading}>{campaignOutcomeLoading ? "Consultando..." : "Analisar CRM"}</ActionButton></div>
+                </div>
+              </div>
+              {campaignOutcomeError ? <p role="alert" className="mt-3 text-sm text-rose-700">{campaignOutcomeError}</p> : null}
+              {campaignOutcomeAnalytics ? (
+                <div className="mt-4 space-y-3">
+                  {!campaignOutcomeAnalytics.rows?.length ? <p className="rounded-lg bg-white p-3 text-sm text-slate-600">Sem eventos CRM atribuídos a anúncios neste período; ausência de registros não confirma ausência de atividade na Meta.</p> : campaignOutcomeAnalytics.rows.map((row) => (
+                    <article key={row.entity_id} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="sm:col-span-2 xl:col-span-4"><p className="font-semibold text-slate-900">{row.name || "Anúncio"}</p><p className="break-all text-xs text-slate-500">ID {row.entity_id}</p></div>
+                      <p>Leads CRM: <strong>{analysisMetricLabel(row.leads)}</strong></p>
+                      <p>Qualificados: <strong>{analysisMetricLabel(row.qualified)}</strong></p>
+                      <p>Checkouts: <strong>{analysisMetricLabel(row.checkouts)}</strong></p>
+                      <p>Compras verificadas: <strong>{analysisMetricLabel(row.purchases)}</strong></p>
+                      <p className="sm:col-span-2 xl:col-span-4">Eventos CRM com vínculo exato ao pipeline Meta: <strong>{analysisMetricLabel(row.meta_conversion_evidence?.exact_link_coverage)}</strong></p>
+                      <p className="sm:col-span-2 xl:col-span-4">Aceitos pelo endpoint Meta: <strong>{analysisMetricLabel(row.meta_conversion_evidence?.meta_endpoint_acceptance)}</strong></p>
+                    </article>
+                  ))}
+                  <p className="text-xs text-slate-500">Período {campaignOutcomeAnalytics.start_date} a {campaignOutcomeAnalytics.end_date}. Valores são observações atribuídas no CRM; não demonstram causalidade da campanha.</p>
+                </div>
+              ) : null}
             </div>
           </div>
       </SectionCard>

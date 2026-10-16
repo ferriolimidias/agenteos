@@ -133,6 +133,31 @@ def canonical_conversion_event_id(event: CanonicalCommercialEvent) -> str:
     return hashlib.sha256(f"agentos:business-messaging:v1:{tenant}:{identity}".encode()).hexdigest()
 
 
+def canonical_delivery_event_id(
+    event: CanonicalCommercialEvent,
+    *,
+    canonical_event_id: str,
+    legacy_reference_classification: str,
+    legacy_event: MetaConversionEvent | None,
+) -> tuple[str, str]:
+    """Reuse the provider id only when the existing CRM delivery is exactly linked.
+
+    This makes a future adapter cutover idempotent with the current JEV/tag
+    executor. Probable or ambiguous matches never donate an event id.
+    """
+    if (
+        str(legacy_reference_classification).upper() == "EXACT_LINKED"
+        and legacy_event is not None
+        and str(legacy_event.empresa_id) == str(event.empresa_id)
+        and str(legacy_event.event_name) == str(event.event_name)
+        and str(legacy_event.lead_id or "") == str(event.lead_id or "")
+    ):
+        value = str(legacy_event.event_id or "").strip()
+        if len(value) == 64 and all(char in "0123456789abcdefABCDEF" for char in value):
+            return value, "exact_legacy_delivery"
+    return str(canonical_event_id), "canonical_commercial_event"
+
+
 def _payload_hash(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -444,13 +469,22 @@ async def project_commercial_event(
     if event is None:
         raise ValueError("commercial_event_not_found")
     policy_mode = await _policy_mode(session, event, persist=persist)
-    canonical_id = canonical_conversion_event_id(event)
+    canonical_identity_id = canonical_conversion_event_id(event)
     occurred = event.occurred_at
     if occurred.tzinfo is None:
         occurred = occurred.replace(tzinfo=timezone.utc)
     event_time = int(occurred.timestamp())
     legacy_class, legacy, legacy_candidates = await _legacy_reference(session, event)
     legacy_id = legacy.id if legacy_class == "EXACT_LINKED" and legacy is not None else None
+    # Provider deduplication must share the immutable external id of the
+    # already-sent JEV/CRM event when (and only when) reconciliation is exact.
+    # The canonical identity remains separately recorded for auditability.
+    canonical_id, canonical_event_id_source = canonical_delivery_event_id(
+        event,
+        canonical_event_id=canonical_identity_id,
+        legacy_reference_classification=legacy_class,
+        legacy_event=legacy,
+    )
     unsupported = event.event_name not in BUSINESS_MESSAGING_EVENTS or event.event_name not in SUPPORTED_CANONICAL_EVENTS
     missing_fields: list[str] = []
     reason_code: str | None = None
@@ -600,6 +634,8 @@ async def project_commercial_event(
     }
     safe_summary = {
         **summary,
+        "canonical_identity_id": canonical_identity_id,
+        "delivery_event_id_source": canonical_event_id_source,
         "external_dispatch": dispatch_result["state"],
         "event_occurred": True,
         "projection_valid": projection_status == "valid",

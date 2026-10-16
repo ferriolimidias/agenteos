@@ -25,3 +25,10 @@ assert.match(source, /MARKETING_RECONNECT_STATUSES = new Set\(\["REAUTH_MARKETIN
 assert.match(source, /READY_ADMIN_MANAGED_READ/);
 assert.match(source, /Credencial administrativa de Marketing \(somente leitura\)/);
 assert.match(source, /MARKETING_RECONNECT_STATUSES\.has\(credentials\?\.marketing_readiness_status\)/);
+assert.doesNotMatch(source, /Objetivo comercial|conversion_goal_key/);
+assert.match(source, /Uma única jornada: anúncio AgentOS → WhatsApp Oficial → atendimento AgentOS\/JEV/);
+assert.match(source, /analytics\/ads/);
+assert.match(source, /Resultados comerciais por anúncio/);
+assert.match(source, /Aceitação no endpoint Meta não comprova entrega ao cliente nem otimização da campanha/);
+// The A12 creative media upload path remains available while the technical goal selector is removed.
+assert.match(source, /Selecionar imagens/);

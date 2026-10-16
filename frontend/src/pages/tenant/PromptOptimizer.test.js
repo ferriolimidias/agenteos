@@ -20,6 +20,9 @@ test("A11 page exposes versions, evidence coverage, and explicit offline/live st
   assert.match(page, /Histórico parcial/);
   assert.match(page, /não causalidade|não causalidade|não causal/);
   assert.match(page, /A\/B LIVE está OFF/);
+  assert.match(page, /Evidências por anúncio/);
+  assert.match(page, /CTWA referral persistido/);
+  assert.match(page, /Resultado temporal; não prova causalidade/);
   assert.match(page, /\/pause/);
   assert.match(page, /\/complete/);
   assert.match(page, /\/rollback/);
