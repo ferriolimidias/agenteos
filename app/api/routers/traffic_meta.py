@@ -3099,9 +3099,12 @@ async def preview_existing_post_campaign(
         page_id=assets["page_id"],
         phone_number="PHONE_NUMBER_REDACTED_FOR_PREVIEW",
         targeting=targeting,
-        optimization_goal="CONVERSATIONS",
         destination_type="WHATSAPP",
     )
+    # This local preview performs no Meta readiness probe. Never imply the
+    # legacy CONVERSATIONS fallback is valid for the sales campaign; the real
+    # creation flow supplies only a goal confirmed by server-side readiness.
+    adset.pop("optimization_goal", None)
     ad = build_ad_payload(name="Prévia A12 · anúncio", adset_id="PREVIEW_ADSET_ID", creative_id="PREVIEW_CREATIVE_ID")
     return {
         "state": "simulated",
@@ -3112,6 +3115,16 @@ async def preview_existing_post_campaign(
         "graph_api_version": credential_meta.get("graph_version"),
         "id_mapping": creative_result["preview"]["id_mapping"],
         "compatibility": creative_result["preview"]["compatibility"],
+        "campaign_conversion_contract": {
+            "strategy": "agentos_ctwa_sales_v1",
+            "destination": "WHATSAPP",
+            "campaign_objective": CONVERSION_CAMPAIGN_OBJECTIVE,
+            "optimization_goal": {"state": "unknown", "reason": "local_preview_does_not_run_conversion_readiness"},
+            "crm_dataset_ctwa_optimization": {
+                "state": "unverified",
+                "reason": "A prévia local não consulta a elegibilidade de otimização por conversão no Meta.",
+            },
+        },
         "builder_preview": {
             "campaign": campaign,
             "adset": adset,
@@ -3123,7 +3136,7 @@ async def preview_existing_post_campaign(
             "phone_number_id_present": bool(assets.get("phone_number_id")),
             "phone_number": "[redigido na prévia]",
         },
-        "note": "Prévia local que reutiliza os validadores e builders atuais; nenhuma estrutura foi salva ou enviada à Meta.",
+        "note": "Prévia local que reutiliza os validadores e builders atuais. A otimização fica desconhecida até a validação de readiness no fluxo real; nenhuma estrutura foi salva ou enviada à Meta.",
     }
 
 
