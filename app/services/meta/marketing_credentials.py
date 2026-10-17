@@ -252,9 +252,15 @@ class MarketingCredentialResolver:
         metadata = dict(getattr(connection, "metadata_json", None) or {})
         stored_business = str(metadata.get("marketing_business_id") or "").strip()
         stored_account = _normalize_ad_account_id(metadata.get("marketing_ad_account_id"))
-        if stored_business and stored_business != business_id:
+        # Legacy Marketing tokens without both bindings cannot safely follow a
+        # tenant-editable Traffic Meta configuration. Require explicit binding
+        # before using them for either reads or writes; read-only admin fallback
+        # remains available only through a separately verified tenant grant.
+        if not stored_business or not stored_account:
             return None
-        if stored_account and stored_account != _normalize_ad_account_id(ad_account_id):
+        if stored_business != business_id:
+            return None
+        if stored_account != _normalize_ad_account_id(ad_account_id):
             return None
         # Never use encrypted_access_token: on this connection it belongs to
         # Meta Official WhatsApp, not to Marketing API.

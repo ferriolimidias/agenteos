@@ -38,7 +38,11 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
         connection = type("Connection", (), {
             "id": uuid.uuid4(),
             "credenciais": {"encrypted_marketing_access_token": "marketing-encrypted"},
-            "metadata_json": {"marketing_granted_permissions": ["ads_read"]},
+            "metadata_json": {
+                "marketing_granted_permissions": ["ads_read"],
+                "marketing_business_id": "business-tenant-a",
+                "marketing_ad_account_id": "12345",
+            },
         })()
         with patch.dict(os.environ, {"META_MARKETING_ADMIN_ACCESS_TOKEN": "admin-token"}, clear=False):
             with patch.object(self.resolver, "_tenant_config", AsyncMock(return_value=self.config)):
@@ -130,7 +134,7 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
         legacy_write = type("Connection", (), {
             "id": uuid.uuid4(),
             "credenciais": {("encrypted_" + "marketing_access_token"): "fixture-encrypted", "marketing_granted_permissions": ["ads_management"]},
-            "metadata_json": {},
+            "metadata_json": {"marketing_business_id": "business-tenant-a", "marketing_ad_account_id": "12345"},
         })()
         session = self.session(self.grant)
         with patch.object(self.resolver, "_tenant_config", AsyncMock(return_value=self.config)):
@@ -140,6 +144,41 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
                         credential = await self.resolver.resolve(session, self.tenant_id, "ads_management")
         self.assertEqual(credential.access_token, "legacy-write-token")
         self.assertFalse(credential.read_only)
+
+    async def test_unbound_legacy_marketing_token_is_rejected(self):
+        connection = type("Connection", (), {
+            "id": uuid.uuid4(),
+            "credenciais": {"encrypted_marketing_access_token": "marketing-encrypted", "marketing_granted_permissions": ["ads_management"]},
+            "metadata_json": {},
+        })()
+        with patch("app.services.meta.marketing_credentials.decrypt_meta_secret") as decrypt:
+            credential = self.resolver._tenant_marketing_credential(
+                str(self.tenant_id), connection, MetaMarketingCapability.ADS_MANAGEMENT,
+                "business-tenant-a", "12345",
+            )
+        self.assertIsNone(credential)
+        decrypt.assert_not_called()
+
+    async def test_unbound_legacy_read_token_uses_only_verified_admin_fallback(self):
+        unbound = type("Connection", (), {
+            "id": uuid.uuid4(),
+            "credenciais": {"encrypted_marketing_access_token": "marketing-encrypted", "marketing_granted_permissions": ["ads_read"]},
+            "metadata_json": {},
+        })()
+        with patch.dict(os.environ, {"META_MARKETING_ADMIN_ACCESS_TOKEN": "admin-token"}, clear=False):
+            with patch.object(self.resolver, "_tenant_config", AsyncMock(return_value=self.config)):
+                with patch.object(self.resolver, "_embedded_connection", AsyncMock(return_value=unbound)):
+                    with patch.object(self.resolver, "_legacy_marketing_connections", AsyncMock(return_value=[unbound])):
+                        with patch("app.services.meta.marketing_credentials.decrypt_meta_secret") as decrypt:
+                            credential = await self.resolver.resolve(
+                                self.session(self.grant), self.tenant_id, MetaMarketingCapability.ADS_READ,
+                                ad_account_id="12345", allow_admin_fallback=True,
+                            )
+        self.assertEqual(credential.credential_source, ADMIN_MARKETING_SOURCE)
+        self.assertTrue(credential.read_only)
+        self.assertEqual(credential.business_id, "business-tenant-a")
+        self.assertEqual(credential.ad_account_id, "12345")
+        decrypt.assert_not_called()
 
     async def test_admin_read_only_client_blocks_create_even_if_environment_flags_are_on(self):
         client = MetaMarketingApiClient("opaque-token", read_only=True)

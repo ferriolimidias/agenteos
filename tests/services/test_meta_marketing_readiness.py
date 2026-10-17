@@ -190,7 +190,11 @@ class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
         connection = type("Connection", (), {
             "id": uuid.uuid4(),
             "credenciais": {"encrypted_marketing_access_token": "encrypted"},
-            "metadata_json": {"marketing_granted_permissions": ["ads_management"]},
+            "metadata_json": {
+                "marketing_granted_permissions": ["ads_management"],
+                "marketing_business_id": "business-1",
+                "marketing_ad_account_id": "123",
+            },
         })()
         config = type("Config", (), {"ad_account_id": "123", "business_id": "business-1"})()
         resolver = MetaMarketingCredentialResolver()
@@ -213,7 +217,7 @@ class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
                 "marketing_granted_permissions": ["ads_read"],
                 "granted_permissions": ["whatsapp_business_management", "ads_management"],
             },
-            "metadata_json": {},
+            "metadata_json": {"marketing_business_id": "business-1", "marketing_ad_account_id": "123"},
         })()
         config = type("Config", (), {"ad_account_id": "123", "business_id": "business-1"})()
         resolver = MetaMarketingCredentialResolver()

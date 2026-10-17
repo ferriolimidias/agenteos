@@ -45,7 +45,11 @@ class FakeConnection:
         "encrypted_marketing_access_token": "marketing-encrypted",
         "marketing_granted_permissions": ["ads_read", "ads_management", "business_management"],
     }
-    metadata_json = {"meta_business_portfolio_id": "1234567890"}
+    metadata_json = {
+        "meta_business_portfolio_id": "1234567890",
+        "marketing_business_id": "business-1",
+        "marketing_ad_account_id": "123",
+    }
 
 
 class FakeTrafficConnection:
