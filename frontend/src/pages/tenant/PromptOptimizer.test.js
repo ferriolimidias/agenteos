@@ -34,10 +34,13 @@ test("A11 frontend has no customer message dispatch or campaign side-effect call
   assert.match(page, /Dados sintéticos e previews não são contados/);
 });
 
-test("A11 is registered behind the tenant navigation role presentation", () => {
+test("Prompt Optimizer is reachable only from company-scoped Super Admin routes, not the client menu", () => {
   const app = read("src/App.jsx");
   const navigation = read("src/utils/tenantNavigation.js");
-  assert.match(app, /path="otimizador-prompts"/);
-  assert.match(navigation, /prompt-optimizer/);
-  assert.match(navigation, /admin_empresa.*super_admin/);
+  const backend = fs.readFileSync(path.resolve(frontendRoot, "../app/api/routers/prompt_optimizer.py"), "utf8");
+  assert.match(app, /path="empresas\/:empresaId\/atendimento-ia"/);
+  assert.match(app, /path="otimizador-prompts" element={<AcessoRestritoOperacional/);
+  assert.doesNotMatch(navigation, /prompt-optimizer|Prompt Optimizer|SHADOW|A11/);
+  assert.match(backend, /dependencies=\[Depends\(require_tenant_access\), Depends\(require_super_admin\)\]/);
+  assert.doesNotMatch(backend, /is_admin_empresa_role/);
 });

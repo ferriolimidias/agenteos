@@ -1,17 +1,22 @@
 import React, { useCallback, useState, useEffect, useRef } from "react";
-import { Outlet, NavLink, Link, useLocation } from "react-router-dom";
+import { Navigate, Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { BrainCircuit, Settings, Building, LogOut, ShieldCheck, Menu, X } from "lucide-react";
 import api from "../services/api";
 import { shellStyles } from "../utils/uiStyles";
+import { getStoredUser } from "../utils/auth";
 import "../styles/admin-navigation.css";
 
 export default function SuperAdminLayout() {
+  const user = getStoredUser();
+  const isSuperAdmin = user?.role === "super_admin";
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const companiesActive = location.pathname.replace(/\/$/, "") === "/admin" || location.pathname.startsWith("/admin/empresas/");
   const companyPage = location.pathname.startsWith("/admin/empresas/");
+  const companyAiPage = companyPage && location.pathname.includes("/atendimento-ia");
+  const companyMetaPage = companyPage && (location.pathname.includes("/meta") || location.pathname.includes("/instagram"));
   const jevPage = location.pathname.startsWith("/admin/configuracoes/integracoes/jev");
-  const contextTitle = companyPage ? "Detalhes da empresa" : jevPage ? "Integração JEV" : location.pathname.startsWith("/admin/configuracoes") ? "Configurações globais" : location.pathname.startsWith("/admin/agentes") ? "Agentes por empresa" : "Empresas";
+  const contextTitle = companyAiPage ? "Atendimento e IA" : companyMetaPage ? "Canais e campanhas" : companyPage ? "Detalhes da empresa" : jevPage ? "Integração JEV" : location.pathname.startsWith("/admin/configuracoes") ? "Configurações globais" : location.pathname.startsWith("/admin/agentes") ? "Agentes por empresa" : "Empresas";
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
 
@@ -56,6 +61,7 @@ export default function SuperAdminLayout() {
   });
 
   const fetchConfig = useCallback(async () => {
+    if (!isSuperAdmin) return;
     try {
       const response = await api.get("/admin/configuracoes");
       setConfigVisual({
@@ -69,7 +75,7 @@ export default function SuperAdminLayout() {
         logoBase64: "",
       });
     }
-  }, []);
+  }, [isSuperAdmin]);
 
   useEffect(() => {
     queueMicrotask(fetchConfig);
@@ -80,6 +86,10 @@ export default function SuperAdminLayout() {
       window.removeEventListener("configuracoesUpdated", fetchConfig);
     };
   }, [fetchConfig]);
+
+  if (!isSuperAdmin) {
+    return <Navigate to={user ? "/painel/inbox" : "/"} replace state={{ from: location.pathname }} />;
+  }
 
   return (
     <div className={shellStyles.page}>

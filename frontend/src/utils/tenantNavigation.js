@@ -1,44 +1,40 @@
 const item = (id, label, to, icon, aliases = []) => ({ id, label, to, icon, aliases });
 
-// Presentation only. App.jsx and the existing role checks own route/access behavior.
+// Customer navigation is task-oriented. Internal AI/Meta tools remain reachable
+// only from the Super Admin area; this map is presentation, not authorization.
 export const TENANT_NAVIGATION_GROUPS = [
-  { id: "overview", label: "Visão geral e resultados", items: [
-    item("dashboard", "Dashboard", "/painel", "dashboard"),
-    item("funnel", "Funil e gargalos", "/painel/funil", "chart"),
-    item("quality", "Qualidade do atendimento", "/painel/qualidade", "chart"),
-    item("followup-analytics", "Resultados de follow-ups", "/painel/followups/impacto", "chart"),
-    item("results", "Resultados de campanhas", "/painel/campanhas/resultados", "chart"),
-    item("costs", "Custos de campanhas", "/painel/campanhas/resultados/custos", "costs"),
-    item("campaign-conversions", "Conversões de campanhas", "/painel/campanhas/resultados/conversoes", "chart"),
+  { id: "conversations", label: "Conversas", items: [
+    item("inbox", "Caixa de entrada", "/painel/inbox", "message", ["/painel", "/painel/chat", "/painel/conversas"]),
+    item("transfers", "Atendimento humano", "/painel/transferencias", "headphones"),
   ] },
-  { id: "attendance", label: "Atendimento e clientes", items: [
-    item("inbox", "Inbox WhatsApp", "/painel/chat", "message", ["/painel/inbox", "/painel/conversas"]),
-    item("crm", "Leads / CRM", "/painel/crm", "users"),
-    item("agenda", "Agenda", "/painel/agenda", "calendar"),
-    item("transfers", "Atendimento Humano", "/painel/transferencias", "headphones"),
-    item("tags", "Tags", "/painel/tags", "tags"),
+  { id: "customers", label: "Clientes", items: [
+    item("crm", "CRM", "/painel/crm", "users"),
+    item("funnel", "Funil comercial", "/painel/funil", "chart"),
+    item("tags", "Tags e organização", "/painel/tags", "tags"),
   ] },
-  { id: "acquisition", label: "Aquisição e tráfego", items: [
-    item("traffic", "Tráfego Meta", "/painel/trafego/meta", "chart"),
-    item("meta-conversions", "Conversões Meta", "/painel/trafego/meta/conversoes", "chart"),
-    item("instagram", "Instagram", "/painel/instagram", "instagram"),
+  { id: "schedule", label: "Agenda", items: [
+    item("agenda", "Agendamentos", "/painel/agenda", "calendar"),
   ] },
-  { id: "automation", label: "Automações e inteligência", items: [
-    item("intelligence", "Inteligência SHADOW", "/painel/inteligencia", "brain"),
-    item("prompt-optimizer", "Prompt Optimizer A11", "/painel/otimizador-prompts", "brain"),
-    item("agent", "Agente de Atendimento", "/painel/agentes", "brain"),
+  { id: "campaigns", label: "Campanhas", items: [
+    item("traffic", "Anúncios Meta", "/painel/trafego/meta", "chart"),
+    item("instagram", "Automação Instagram", "/painel/instagram", "instagram"),
+    item("campaigns", "Mensagens e campanhas", "/painel/campanhas", "campaign"),
     item("followups", "Follow-ups", "/painel/followups", "timer"),
-    item("campaigns", "Campanhas", "/painel/campanhas", "campaign"),
-    item("templates", "Templates de campanhas", "/painel/campanhas/templates", "file", ["/painel/templates-whatsapp"]),
-    item("audiences", "Públicos de campanhas", "/painel/campanhas/publicos", "users"),
-    item("simulator", "Simulação simples", "/painel/simulador", "chart"),
+    item("templates", "Modelos de mensagem", "/painel/campanhas/templates", "file", ["/painel/templates-whatsapp"]),
+    item("audiences", "Públicos", "/painel/campanhas/publicos", "users"),
   ] },
-  { id: "settings", label: "Configurações e integrações", items: [
+  { id: "results", label: "Resultados", items: [
+    item("dashboard", "Visão geral", "/painel/resultados", "dashboard", ["/painel/resultados/resumo", "/painel/dashboard"]),
+    item("quality", "Atendimento", "/painel/qualidade", "chart"),
+    item("followup-analytics", "Resultados de follow-ups", "/painel/followups/impacto", "chart"),
+    item("campaign-results", "Resultados de campanhas", "/painel/campanhas/resultados", "chart"),
+    item("costs", "Custos de campanhas", "/painel/campanhas/resultados/custos", "costs"),
+    item("campaign-conversions", "Conversões comprovadas", "/painel/campanhas/resultados/conversoes", "chart"),
+  ] },
+  { id: "settings", label: "Configurações", items: [
     item("connections", "Conexão WhatsApp", "/painel/conexoes", "message"),
-    item("knowledge", "Base de Conhecimento", "/painel/rag", "book"),
-    item("account", "Configurações da Conta", "/painel/unidades", "building"),
-    item("integrations", "Integrações técnicas", "/painel/integracoes", "settings"),
-    item("conversion-settings", "Configurações de conversão", "/painel/conversoes", "settings"),
+    item("knowledge", "Conteúdo de atendimento", "/painel/rag", "book"),
+    item("account", "Dados da empresa", "/painel/unidades", "building"),
   ] },
 ];
 
@@ -49,8 +45,7 @@ export const REVIEWER_NAVIGATION_GROUPS = [{ id: "reviewer", label: "Demonstraç
 
 export function getTenantNavigationGroups(role) {
   if (role === "meta_app_reviewer") return REVIEWER_NAVIGATION_GROUPS;
-  if (["admin_empresa", "super_admin"].includes(role)) return TENANT_NAVIGATION_GROUPS;
-  return TENANT_NAVIGATION_GROUPS.map((group) => ({ ...group, items: group.items.filter((entry) => entry.id !== "prompt-optimizer") }));
+  return TENANT_NAVIGATION_GROUPS;
 }
 
 export function normalizeTenantPath(pathname) {
@@ -67,7 +62,7 @@ export function resolveTenantNavigation(pathname, role) {
   if (!match) return null;
   let detail = null;
   if (match.item.id === "templates" && path.startsWith(`${match.item.to}/`)) {
-    detail = path === `${match.item.to}/novo` ? "Novo template" : "Detalhes do template";
+    detail = path === `${match.item.to}/novo` ? "Novo modelo" : "Detalhes do modelo";
   } else if (match.item.id === "campaigns" && path.startsWith(`${match.item.to}/`)) {
     detail = path === `${match.item.to}/nova` ? "Nova campanha" : "Detalhes da campanha";
   }
@@ -75,11 +70,11 @@ export function resolveTenantNavigation(pathname, role) {
 }
 
 export function isTenantInboxPath(pathname) {
-  return ["/painel/chat", "/painel/inbox", "/painel/conversas"].includes(normalizeTenantPath(pathname));
+  return ["/painel", "/painel/chat", "/painel/inbox", "/painel/conversas"].includes(normalizeTenantPath(pathname));
 }
 
 export function navigationPreferenceKey(empresaId, role) {
-  // Scope is a visual preference namespace, never a token or authentication decision.
+  // Scope a visual preference namespace, never a token or authentication decision.
   return `agenteos:tenant-navigation:v1:${encodeURIComponent(String(empresaId ?? "unassigned"))}:${encodeURIComponent(String(role || "tenant"))}`;
 }
 
@@ -90,7 +85,7 @@ export function sanitizeCollapsedGroups(value, groups) {
 }
 
 export function readCollapsedGroups(storage, key, groups) {
-  const defaults = groups.filter((group) => !["overview", "reviewer"].includes(group.id)).map((group) => group.id);
+  const defaults = groups.filter((group) => !["conversations", "reviewer"].includes(group.id)).map((group) => group.id);
   try {
     const raw = storage?.getItem(key);
     if (!raw) return defaults;

@@ -1,12 +1,12 @@
 import "../../styles/ux05-settings.css";
 
-import { ArrowRight, LockKeyhole } from "lucide-react";
+import { LockKeyhole, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
-import { ChecklistCard, PageHeader, RestrictedNotice } from "../../components/ui";
+import { PageHeader, RestrictedNotice } from "../../components/ui";
 
 export default function AcessoRestritoOperacional({
-  title = "Configuração gerenciada pelo Super Admin",
-  description = "Esta área envolve configurações técnicas ou credenciais sensíveis. No painel cliente, ela fica disponível apenas como solicitação operacional.",
+  title = "Área administrada pela equipe Ferrioli",
+  description = "Esta área é operada pela equipe Ferrioli. As Conversas e tarefas comerciais continuam disponíveis no painel.",
 }) {
   return (
     <div className="fm-settings fm-restricted space-y-6">
@@ -18,26 +18,17 @@ export default function AcessoRestritoOperacional({
       />
 
       <RestrictedNotice
-        title="Acesso restrito"
-        description="Prompts, modelos, ferramentas, credenciais, integrações técnicas e regras internas ficam sob governança do Super Admin."
+        title="Acesso restrito para este perfil"
+        description="Para consultar conversas, responder clientes ou transferir um atendimento, abra a Caixa de entrada."
       >
           <Link
-            to="/painel/agentes"
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-200 bg-white px-3.5 py-2 text-sm font-semibold text-amber-900 shadow-sm transition-colors hover:bg-amber-100"
+            to="/painel/inbox"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-white px-3.5 py-2 text-sm font-semibold text-amber-900 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
           >
-            <ArrowRight size={16} />
-            Ir para Agente de Atendimento
+            <MessageCircle size={16} aria-hidden="true" />
+            Abrir conversas
           </Link>
       </RestrictedNotice>
-
-      <ChecklistCard
-        title="O que permanece disponível no painel cliente"
-        items={[
-          "Atendimento, inbox, leads, agenda, tags e campanhas operacionais.",
-          "Visualização do agente e solicitação de alteração.",
-          "Simulação simples sem expor prompt, modelo, token ou configuração técnica.",
-        ]}
-      />
     </div>
   );
 }

@@ -122,6 +122,15 @@ class EmpresaResponse(EmpresaBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EmpresaClienteResponse(BaseModel):
+    """Safe company data used by the customer panel; excludes agent and Meta internals."""
+    id: UUID4
+    nome_empresa: str
+    area_atuacao: str | None = None
+    logo_url: str | None = None
+    conexao_disparo_id: UUID4 | None = None
+
+
 class IAConfigResponse(BaseModel):
     ia_personalidade: str | None = None
     ia_regras_negocio: str | None = None
@@ -140,6 +149,7 @@ class IAConfigResponse(BaseModel):
     telefone_notificacao: str | None = None
     status_openai: str = "ok"
     openai_configurada: bool = False
+    atendimento_automatico_estado: Literal["configurado", "revisao_necessaria"] = "revisao_necessaria"
     tags_ia_habilitadas: list[str] = []
 
 

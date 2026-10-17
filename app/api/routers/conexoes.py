@@ -964,9 +964,7 @@ async def meta_embedded_signup_session(
 def _ensure_meta_marketing_admin(user: Usuario, empresa_id: uuid.UUID) -> None:
     if is_root_admin_email(user.email) or is_super_admin_role(user.role):
         return
-    if is_admin_empresa_role(user.role) and user.empresa_id == empresa_id:
-        return
-    raise HTTPException(status_code=403, detail="Acesso administrativo necessário para autorizar leitura de anúncios.")
+    raise HTTPException(status_code=403, detail="A autorização técnica da Marketing API é administrada somente pelo Super Admin.")
 
 
 @router.post("/meta/marketing/session", status_code=status.HTTP_201_CREATED)

@@ -1,5 +1,6 @@
 import "../../styles/ux05-analytics.css";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { BarChart3, CheckCircle2, Eye, Loader2, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
@@ -45,7 +46,7 @@ function shouldAuthorizeMarketing(readiness) {
   const permissions = readiness?.permissions || {};
   return MARKETING_RECONNECT_STATUSES.has(readiness?.marketing_readiness_status)
     || source === "admin_managed_marketing_token"
-    || (Boolean(readiness?.token_present) && !Boolean(permissions.ads_management));
+    || (readiness?.token_present && !permissions.ads_management);
 }
 
 const makeEmptyAd = () => ({
@@ -315,8 +316,9 @@ function conversionHistoryTone(status) {
   return "default";
 }
 
-export default function TrafficMeta() {
-  const empresaId = getActiveEmpresaId();
+export default function TrafficMeta({ adminTools = false } = {}) {
+  const { empresaId: routedEmpresaId } = useParams();
+  const empresaId = adminTools ? routedEmpresaId : getActiveEmpresaId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -377,6 +379,7 @@ export default function TrafficMeta() {
   });
 
   const config = status?.config || {};
+  const configuredAdAccountId = normalizeAdAccountId(config.ad_account_id);
   const officialWhatsapp = status?.official_whatsapp;
   const activeOfficialWhatsapps = status?.active_official_whatsapps || [];
   const selectedWhatsapp = activeOfficialWhatsapps.find((item) => item.connection_id === campaignForm.whatsapp_connection_id) || null;
@@ -387,8 +390,9 @@ export default function TrafficMeta() {
     account_id: selectedPage?.instagram_account_id || config.instagram_account_id || "",
     username: selectedPage?.instagram_username || "",
   };
-  const configuredAdAccountId = normalizeAdAccountId(config.ad_account_id);
-  const writesEnabled = Boolean(status?.meta_write_enabled && status?.campaign_create_enabled && status?.adset_create_enabled && status?.creative_create_enabled && status?.ad_create_enabled);
+  const writesEnabled = Boolean(adminTools
+    ? status?.meta_write_enabled && status?.campaign_create_enabled && status?.adset_create_enabled && status?.creative_create_enabled && status?.ad_create_enabled
+    : status?.campaign_creation_available);
   const datasetAsset = datasetDisplay(config, officialWhatsapp);
   const conversionSourceOptions = conversions?.conversion_engine?.source_options || fallbackSourceOptions;
   const existingPostAdsEnabled = Boolean(status?.existing_post_ads_enabled);
@@ -472,7 +476,7 @@ export default function TrafficMeta() {
       const normalizedSavedId = normalizeAdAccountId(config.ad_account_id);
       setEditingAdAccount(!normalizedSavedId);
       setSavedAdAccount(normalizedSavedId ? { id: normalizedSavedId } : null);
-      if (normalizedSavedId) {
+      if (normalizedSavedId && adminTools) {
         try {
           const response = await api.get(`/empresas/${empresaId}/traffic/meta/adaccounts/${normalizedSavedId}`, { timeout: 15000 });
           const account = response.data?.adaccount || {};
@@ -487,7 +491,7 @@ export default function TrafficMeta() {
           setSavedAdAccount({ id: normalizedSavedId });
         }
       }
-      if (normalizedSavedId) {
+      if (config.configured) {
         setAssetsLoading(true);
         try {
           const assetResponse = await api.get(`/empresas/${empresaId}/traffic/meta/assets`, { timeout: 20000 });
@@ -525,33 +529,40 @@ export default function TrafficMeta() {
     } finally {
       setLoading(false);
     }
-    try {
-      const credentialResponse = await api.get(`/empresas/${empresaId}/traffic/meta/credentials/status`, { timeout: 15000 });
-      setCredentials(credentialResponse.data);
-    } catch (err) {
+    if (adminTools) {
+      try {
+        const credentialResponse = await api.get(`/empresas/${empresaId}/traffic/meta/credentials/status`, { timeout: 15000 });
+        setCredentials(credentialResponse.data);
+      } catch (err) {
+        setCredentials(null);
+        setError((current) => current || safeError(err, "Não foi possível carregar o status das credenciais Meta."));
+      }
+      try {
+        const conversionResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions`, { timeout: 15000 });
+        setConversions(conversionResponse.data);
+      } catch (err) {
+        setConversions(null);
+        setError((current) => current || safeError(err, "Não foi possível carregar o status de conversões Meta."));
+      }
+      try {
+        const eligibilityResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions/optimization-eligibility`, { timeout: 15000 });
+        setOptimizationEligibility(eligibilityResponse.data || null);
+      } catch (err) {
+        setOptimizationEligibility(null);
+        setError((current) => current || safeError(err, "Não foi possível carregar a elegibilidade de otimização Meta."));
+      }
+      try {
+        const historyResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions/history`, { timeout: 15000 });
+        setConversionHistory(historyResponse.data?.items || []);
+      } catch (err) {
+        setConversionHistory([]);
+        setError((current) => current || safeError(err, "Não foi possível carregar o histórico de conversões Meta."));
+      }
+    } else {
       setCredentials(null);
-      setError((current) => current || safeError(err, "Não foi possível carregar o status das credenciais Meta."));
-    }
-    try {
-      const conversionResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions`, { timeout: 15000 });
-      setConversions(conversionResponse.data);
-    } catch (err) {
       setConversions(null);
-      setError((current) => current || safeError(err, "Não foi possível carregar o status de conversões Meta."));
-    }
-    try {
-      const eligibilityResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions/optimization-eligibility`, { timeout: 15000 });
-      setOptimizationEligibility(eligibilityResponse.data || null);
-    } catch (err) {
       setOptimizationEligibility(null);
-      setError((current) => current || safeError(err, "Não foi possível carregar a elegibilidade de otimização Meta."));
-    }
-    try {
-      const historyResponse = await api.get(`/empresas/${empresaId}/traffic/meta/conversions/history`, { timeout: 15000 });
-      setConversionHistory(historyResponse.data?.items || []);
-    } catch (err) {
       setConversionHistory([]);
-      setError((current) => current || safeError(err, "Não foi possível carregar o histórico de conversões Meta."));
     }
   };
 
@@ -1067,15 +1078,17 @@ export default function TrafficMeta() {
   return (
     <div className="ux05-analytics ux05-meta space-y-6">
       <PageHeader
-        title="Tráfego / Meta Ads"
-        description="Configure a conta de anúncios utilizada por esta empresa e acompanhe os ativos Meta vinculados."
+        title={adminTools ? "Canais e campanhas Meta" : "Anúncios Meta"}
+        description={adminTools ? "Administre a configuração técnica e acompanhe campanhas desta empresa." : "Prepare anúncios para levar novos clientes à conversa oficial do WhatsApp."}
         icon={BarChart3}
         actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadStatus}>Atualizar</ActionButton>}
       />
 
       {error ? <InfoBanner tone="warning">{error}</InfoBanner> : null}
 
-      <SectionCard title="Status da integração" icon={ShieldCheck} className="ux05-integration-overview">
+      {!adminTools ? <InfoBanner tone="info" icon={ShieldCheck}>As conexões e permissões técnicas são administradas pela Ferrioli. Aqui você pode preparar campanhas usando os ativos autorizados para sua empresa.</InfoBanner> : null}
+
+      {adminTools ? <SectionCard title="Status da integração" icon={ShieldCheck} className="ux05-integration-overview">
         <div className="ux05-meta-status grid gap-4 lg:grid-cols-4">
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between gap-3">
@@ -1177,9 +1190,9 @@ export default function TrafficMeta() {
             <EmptyState title="Sem conversões registradas" description="Os eventos aparecerão aqui quando forem processados." />
           )}
         </div>
-      </SectionCard>
+      </SectionCard> : null}
 
-      <SectionCard
+      {adminTools ? <SectionCard
         title="Conta de anúncios Meta"
         description="Informe a conta de anúncios utilizada por esta empresa."
       >
@@ -1245,9 +1258,9 @@ export default function TrafficMeta() {
             </div>
           </div>
         )}
-      </SectionCard>
+      </SectionCard> : null}
 
-      <SectionCard
+      {adminTools ? <SectionCard
         title="Ativos Meta da empresa"
         description="Estes ativos formam o grafo usado para criar Campaign, AdSet, Creative e Ad."
         icon={ShieldCheck}
@@ -1308,9 +1321,9 @@ export default function TrafficMeta() {
           </ActionButton>
           <StatusBadge tone={assets?.asset_graph_valid ? "active" : "warning"}>{assets?.asset_graph_valid ? "Grafo validado" : "Validação pendente"}</StatusBadge>
         </div>
-      </SectionCard>
+      </SectionCard> : null}
 
-      <SectionCard
+      {adminTools ? <SectionCard
         title="Conversões Meta / WhatsApp"
         description="Status de mensuração, readiness e mappings. A credencial vem da conexão Meta oficial da empresa."
         icon={ShieldCheck}
@@ -1426,36 +1439,37 @@ export default function TrafficMeta() {
             ))}
           </div>
         </div>
-      </SectionCard>
+      </SectionCard> : null}
 
       <SectionCard
-        title="Campanha WhatsApp de Conversão"
-        description="Campaign, AdSet, Creatives e Ads são preparados pausados apenas quando a conta estiver elegível para conversão."
-        actions={<ActionButton icon={Plus} onClick={openNewCampaign}>Nova campanha</ActionButton>}
+        title={adminTools ? "Campanha WhatsApp de Conversão" : "Anúncios para WhatsApp"}
+        description={adminTools ? "Campaign, AdSet, Creatives e Ads são preparados pausados apenas quando a conta estiver elegível para conversão." : "Crie uma campanha para iniciar conversas no WhatsApp oficial. Uma pessoa precisa revisar e confirmar a criação; o anúncio começa pausado."}
+        actions={writesEnabled || adminTools ? <ActionButton icon={Plus} onClick={openNewCampaign}>Nova campanha</ActionButton> : null}
       >
-        {!writesEnabled ? (
+        {!writesEnabled && adminTools ? (
           <InfoBanner tone="warning">A criação real está desabilitada por configuração. O formulário pode ser preparado, mas o backend só cria quando as flags de Marketing API estiverem ativas.</InfoBanner>
         ) : null}
-        {!showNewCampaign ? (
-          <EmptyState title="Nenhuma criação em andamento" description="Abra Nova campanha para preparar uma estrutura WhatsApp otimizada por conversão." />
+        {!writesEnabled && !adminTools ? (
+          <InfoBanner tone="info">A criação de campanhas está temporariamente indisponível. A equipe Ferrioli pode ajudar a concluir a configuração.</InfoBanner>
+        ) : !showNewCampaign ? (
+          <EmptyState title="Nenhuma campanha em edição" description="Comece uma campanha para conversar com novos clientes pelo WhatsApp." />
         ) : (
           <div className="mt-4 space-y-4">
             <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <p className="font-semibold text-slate-900">Readiness da campanha</p>
                 <StatusBadge tone={campaignReadiness?.ready ? "active" : "warning"}>
-                  {loadingReadiness ? "Validando..." : campaignReadiness?.ready ? "Pronta" : "Bloqueada"}
+                  {loadingReadiness ? (adminTools ? "Validando..." : "Verificando...") : campaignReadiness?.ready ? (adminTools ? "Pronta" : "Disponível") : (adminTools ? "Bloqueada" : "Em configuração")}
                 </StatusBadge>
               </div>
-              <p className="mt-2 text-slate-600">
+              {adminTools ? <p className="mt-2 text-slate-600">
                 {campaignReadiness?.ready
                   ? `Estratégia AgentOS para WhatsApp Oficial pronta · otimização confirmada pela conta Meta: ${campaignReadiness?.best_available_conversion_optimization || "-"}`
                   : campaignReadiness?.reason
                     ? `A estratégia AgentOS para WhatsApp ainda não está elegível na conta Meta: ${campaignReadiness.reason}`
                     : "A criação aguarda validação da conta, do WhatsApp Oficial, do Dataset e da elegibilidade de conversão da Meta."}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">Uma única jornada: anúncio AgentOS → WhatsApp Oficial → atendimento AgentOS/JEV → CRM e eventos comerciais confirmados. A otimização técnica é definida pelo sistema; se não houver opção qualificada, a criação permanece bloqueada.</p>
-              <p className="mt-1 text-xs text-amber-800">O vínculo do Dataset CRM com otimização CTWA ainda não foi comprovado por leitura autorizada de resultados da Meta. O aceite do endpoint de eventos, isoladamente, não comprova otimização.</p>
+              </p> : <p className="mt-2 text-slate-600">{loadingReadiness ? "Estamos conferindo se a campanha pode ser criada." : campaignReadiness?.message || "A equipe Ferrioli está concluindo a configuração necessária para esta campanha."}</p>}
+              {adminTools ? <><p className="mt-1 text-xs text-slate-500">Uma única jornada: anúncio AgentOS → WhatsApp Oficial → atendimento AgentOS/JEV → CRM e eventos comerciais confirmados. A otimização técnica é definida pelo sistema; se não houver opção qualificada, a criação permanece bloqueada.</p><p className="mt-1 text-xs text-amber-800">O vínculo do Dataset CRM com otimização CTWA ainda não foi comprovado por leitura autorizada de resultados da Meta. O aceite do endpoint de eventos, isoladamente, não comprova otimização.</p></> : null}
             </div>
             {!confirmingCampaign ? (
               <>
@@ -1522,11 +1536,11 @@ export default function TrafficMeta() {
                       <input type="radio" name="traffic-meta-creative-source" value="new" checked={creativeSource === "new"} onChange={() => setCreativeSource("new")} className="mr-2" />
                       <span className="font-semibold">Novo criativo</span><span className="mt-1 block pl-6 text-xs text-slate-600">Manter o fluxo atual com imagem e copy próprias.</span>
                     </label>
-                    <label className={`${existingPostAdsEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"} rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
+                    {(existingPostAdsEnabled || adminTools) ? <label className={`${existingPostAdsEnabled ? "cursor-pointer" : "cursor-not-allowed opacity-70"} rounded-lg border p-3 text-sm ${creativeSource === "existing" ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>
                       <input type="radio" name="traffic-meta-creative-source" value="existing" checked={creativeSource === "existing"} disabled={!existingPostAdsEnabled} aria-describedby="existing-post-feature-status" onChange={() => { setCreativeSource("existing"); setConfirmingCampaign(false); }} className="mr-2 disabled:cursor-not-allowed" />
                       <span className="font-semibold">Publicação existente</span><span className="mt-1 block pl-6 text-xs text-slate-600">{existingPostAdsEnabled ? "Consultar publicações e gerar uma prévia local de Facebook ou Instagram." : "Indisponível até liberação operacional da integração de leitura."}</span>
                       <span id="existing-post-feature-status" className="sr-only">{existingPostAdsEnabled ? "Integração liberada em modo somente leitura." : "Integração desativada por segurança."}</span>
-                    </label>
+                    </label> : null}
                   </div>
                 </fieldset>
                 {creativeSource === "new" ? (
@@ -1565,11 +1579,12 @@ export default function TrafficMeta() {
                 ) : <ExistingPostPicker
                   empresaId={empresaId}
                   pages={assetPages}
-                  adAccountId={configuredAdAccountId}
+                  adAccountConfigured={Boolean(assets?.ad_account)}
                   enabled={existingPostAdsEnabled}
                   pagesLoading={assetsLoading}
                   pagesError={assetsReadError}
                   onRetryPages={retryMetaAssets}
+                  showTechnicalDetails={adminTools}
                   initialPageId={campaignForm.page_id || config.page_id || ""}
                   campaignDraft={{
                     daily_budget_brl: campaignForm.daily_budget_brl,
@@ -1672,7 +1687,7 @@ export default function TrafficMeta() {
           </div>
       </SectionCard>
 
-      {inspection ? (
+      {adminTools && inspection ? (
         <SectionCard title="Dados reais da campanha">
           <div className="space-y-4 text-sm text-slate-700">
             <div className="rounded-lg border border-slate-200 p-4">
@@ -1748,7 +1763,7 @@ export default function TrafficMeta() {
         </SectionCard>
       ) : null}
 
-      {inspection ? (
+      {adminTools && inspection ? (
         <SectionCard title="Diagnóstico avançado">
           <JsonPreview value={inspection} />
         </SectionCard>

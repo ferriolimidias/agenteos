@@ -101,7 +101,7 @@ assert.match(source, /break-words/);
 assert.match(source, /break-all/);
 assert.match(source, /translate="no"/);
 
-// Super-admin não possui credenciais ou área visual de Instagram.
+// Global settings keep no cross-tenant Instagram secrets; company-scoped credentials live under the company admin routes.
 for (const forbidden of [
   "Configuração global do webhook Instagram",
   "instagram_app_secret",

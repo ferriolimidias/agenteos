@@ -7,7 +7,9 @@ const dashboardSource = readFileSync(new URL("./TenantDashboard.jsx", import.met
 test("dashboard shows WhatsApp channel instead of legacy robot status", () => {
   assert.match(dashboardSource, /Canal WhatsApp/);
   assert.match(dashboardSource, /Agente de atendimento/);
-  assert.match(dashboardSource, /Conexão com IA/);
+  assert.match(dashboardSource, /Configuração do atendimento automático/);
+  assert.match(dashboardSource, /A equipe Ferrioli pode ajudar a revisar/);
+  assert.doesNotMatch(dashboardSource, /telefoneNotificacao|telefone para alertas de crédito|Creditos OpenAI|chave rejeitada/i);
   assert.doesNotMatch(dashboardSource, /Status do robô/);
 });
 

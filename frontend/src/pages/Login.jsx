@@ -55,7 +55,7 @@ export default function Login() {
       } else if (usuario.role === "meta_app_reviewer") {
         navigate("/painel/conexoes");
       } else {
-        navigate("/painel");
+        navigate("/painel/inbox");
       }
     } catch (err) {
       if (err.response && err.response.data && err.response.data.detail) {

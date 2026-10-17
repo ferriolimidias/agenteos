@@ -1,10 +1,13 @@
-import { Navigate, Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route, useLocation } from "react-router-dom";
 import React, { Suspense, lazy, useEffect } from "react";
 import api from "./services/api";
 import { LoadingState } from "./components/ui";
 
 const Login = lazy(() => import("./pages/Login"));
 const SuperAdminLayout = lazy(() => import("./layouts/SuperAdminLayout"));
+const AdminAtendimentoIA = lazy(() => import("./pages/super-admin/AdminAtendimentoIA"));
+const AdminMetaEmpresa = lazy(() => import("./pages/super-admin/AdminMetaEmpresa"));
+const AdminInstagramEmpresa = lazy(() => import("./pages/super-admin/AdminInstagramEmpresa"));
 const TenantLayout = lazy(() => import("./layouts/TenantLayout"));
 const Empresas = lazy(() => import("./pages/super-admin/Empresas"));
 const AdminAgentes = lazy(() => import("./pages/super-admin/AdminAgentes"));
@@ -17,12 +20,10 @@ const PromptOptimizer = lazy(() => import("./pages/tenant/PromptOptimizer"));
 const FollowUpAnalytics = lazy(() => import("./pages/tenant/FollowUpAnalytics"));
 const JevDiagnostics = lazy(() => import("./pages/tenant/JevDiagnostics"));
 const TenantDashboard = lazy(() => import("./pages/tenant/TenantDashboard"));
-const TenantAgentes = lazy(() => import("./pages/tenant/TenantAgentes"));
 const TenantFollowUps = lazy(() => import("./pages/tenant/TenantFollowUps"));
 const Rag = lazy(() => import("./pages/tenant/Rag"));
 const Crm = lazy(() => import("./pages/tenant/Crm"));
 const Agenda = lazy(() => import("./pages/tenant/Agenda"));
-const Simulador = lazy(() => import("./pages/tenant/Simulador"));
 const Inbox = lazy(() => import("./pages/tenant/Inbox"));
 const Conexoes = lazy(() => import("./pages/tenant/Conexoes"));
 const Transferencias = lazy(() => import("./pages/tenant/Transferencias"));
@@ -32,7 +33,15 @@ const Unidades = lazy(() => import("./pages/tenant/Unidades"));
 const AcessoRestritoOperacional = lazy(() => import("./pages/tenant/AcessoRestritoOperacional"));
 const Instagram = lazy(() => import("./pages/tenant/Instagram"));
 const TrafficMeta = lazy(() => import("./pages/tenant/TrafficMeta"));
-const ConversionOperations = lazy(() => import("./pages/tenant/ConversionOperations"));
+
+function PreserveLocationNavigate({ to }) {
+  const location = useLocation();
+  return <Navigate to={{ pathname: to, search: location.search, hash: location.hash }} state={location.state} replace />;
+}
+
+function TenantHomeRedirect() {
+  return <PreserveLocationNavigate to="/painel/inbox" />;
+}
 
 function App() {
   useEffect(() => {
@@ -88,32 +97,42 @@ function App() {
           <Route path="agente" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="orquestrador" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="empresas/:empresaId" element={<EmpresaDetalhes />} />
+          <Route path="empresas/:empresaId/atendimento-ia" element={<AdminAtendimentoIA />}>
+            <Route index element={<Navigate to="prompts" replace />} />
+            <Route path="prompts" element={<PromptOptimizer />} />
+            <Route path="jev" element={<JevDiagnostics />} />
+          </Route>
+          <Route path="empresas/:empresaId/meta" element={<AdminMetaEmpresa />} />
+          <Route path="empresas/:empresaId/instagram" element={<AdminInstagramEmpresa />} />
           <Route path="configuracoes" element={<ConfiguracoesGlobais />} />
           <Route path="configuracoes/integracoes/jev" element={<JevIntegration />} />
         </Route>
 
         {/* Rota do Cliente (Tenant) */}
         <Route path="/painel" element={<TenantLayout />}>
-          <Route index element={<TenantDashboard />} />
+          <Route index element={<TenantHomeRedirect />} />
+          <Route path="resultados" element={<TenantDashboard />} />
+          <Route path="resultados/resumo" element={<TenantDashboard />} />
+          <Route path="dashboard" element={<PreserveLocationNavigate to="/painel/resultados" />} />
           <Route path="funil" element={<FunnelDashboard />} />
           <Route path="qualidade" element={<QualityDashboard />} />
-          <Route path="otimizador-prompts" element={<PromptOptimizer />} />
+          <Route path="otimizador-prompts" element={<AcessoRestritoOperacional title="Área administrada pela equipe Ferrioli" description="A gestão técnica do atendimento fica na Administração da Plataforma. Para acompanhar e atender clientes, use as Conversas." />} />
           <Route path="followups/impacto" element={<FollowUpAnalytics />} />
-          <Route path="inteligencia" element={<JevDiagnostics />} />
-          <Route path="agentes" element={<TenantAgentes />} />
+          <Route path="inteligencia" element={<AcessoRestritoOperacional title="Área administrada pela equipe Ferrioli" description="Os diagnósticos operacionais ficam disponíveis somente na Administração da Plataforma." />} />
+          <Route path="agentes" element={<PreserveLocationNavigate to="/painel/inbox" />} />
           <Route path="followups" element={<TenantFollowUps />} />
           <Route path="crm" element={<Crm />} />
           <Route path="rag" element={<Rag />} />
           <Route path="agenda" element={<Agenda />} />
-          <Route path="simulador" element={<Simulador />} />
+          <Route path="simulador" element={<PreserveLocationNavigate to="/painel/inbox" />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="chat" element={<Inbox />} />
           <Route path="conversas" element={<Inbox />} />
           <Route path="conexoes" element={<Conexoes />} />
           <Route path="instagram" element={<Instagram />} />
           <Route path="trafego/meta" element={<TrafficMeta />} />
-          <Route path="trafego/meta/conversoes" element={<ConversionOperations />} />
-          <Route path="integracoes" element={<AcessoRestritoOperacional title="Integrações técnicas gerenciadas pelo Super Admin" />} />
+          <Route path="trafego/meta/conversoes" element={<AcessoRestritoOperacional title="Área administrada pela equipe Ferrioli" description="Diagnósticos técnicos das integrações são acessíveis somente à equipe Ferrioli." />} />
+          <Route path="integracoes" element={<AcessoRestritoOperacional title="Área administrada pela equipe Ferrioli" description="As integrações técnicas são gerenciadas pela equipe Ferrioli. A conexão WhatsApp disponível para sua empresa fica em Configurações." />} />
           <Route path="transferencias" element={<Transferencias />} />
           <Route path="campanhas/*" element={<Campanhas />} />
           <Route path="campanhas/templates" element={<Campanhas />} />
@@ -128,7 +147,7 @@ function App() {
           <Route path="templates-whatsapp" element={<Navigate to="/painel/campanhas/templates" replace />} />
           <Route path="tags" element={<GestaoTags />} />
           <Route path="unidades" element={<Unidades />} />
-          <Route path="conversoes" element={<AcessoRestritoOperacional title="Configurações de conversão gerenciadas pelo Super Admin" />} />
+          <Route path="conversoes" element={<AcessoRestritoOperacional title="Área administrada pela equipe Ferrioli" description="Configurações técnicas de conversão são gerenciadas pela equipe Ferrioli." />} />
         </Route>
       </Routes>
     </Suspense>

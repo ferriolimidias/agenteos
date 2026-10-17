@@ -38,7 +38,7 @@ import RAGManager from "../../components/RAGManager";
 const TABS = [
   { id: "visao-geral", label: "Visão Geral", icon: Building2 },
   { id: "usuarios", label: "Usuários", icon: UserCog },
-  { id: "agente", label: "Agente de Atendimento", icon: BrainCircuit },
+  { id: "agente", label: "Atendimento e IA", icon: BrainCircuit },
   { id: "regras", label: "Regras Comerciais", icon: Columns3 },
   { id: "conhecimento", label: "Base de Conhecimento", icon: Database },
   { id: "canais", label: "Canais e Credenciais", icon: Link2 },
@@ -732,7 +732,15 @@ export default function EmpresaDetalhes() {
                 não são exibidos para edição no painel cliente.
               </p>
             </div>
-            <StatusBadge tone="warning">Apenas Super Admin</StatusBadge>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge tone="warning">Apenas Super Admin</StatusBadge>
+              <Link
+                to={`/admin/empresas/${empresaId}/atendimento-ia`}
+                className="inline-flex min-h-11 items-center rounded-lg border border-indigo-200 bg-white px-3.5 py-2 text-sm font-semibold text-indigo-800 transition-colors hover:bg-indigo-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700"
+              >
+                Prompts e diagnósticos
+              </Link>
+            </div>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -1003,6 +1011,8 @@ export default function EmpresaDetalhes() {
 
       {tabAtiva === "canais" && (
         <div className="space-y-4">
+          <SectionCard title="Campanhas e integrações Meta" description="A equipe Ferrioli administra credenciais e ativos de anúncios desta empresa." icon={Link2} actions={<Link to={`/admin/empresas/${empresaId}/meta`} className="inline-flex min-h-11 items-center rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">Abrir canais e campanhas</Link>} />
+          <SectionCard title="Automação do Instagram" description="Credencial técnica administrada pelo Super Admin; publicações e regras ficam na área de campanhas do cliente." icon={Link2} actions={<Link to={`/admin/empresas/${empresaId}/instagram`} className="inline-flex min-h-11 items-center rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-800 hover:bg-indigo-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">Gerenciar conexão Instagram</Link>} />
           <div className="grid gap-4 lg:grid-cols-2">
           <form
             onSubmit={salvarEmpresa}

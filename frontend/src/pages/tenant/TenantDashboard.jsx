@@ -2,13 +2,9 @@ import "../../styles/ux05-analytics.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
-  AlertTriangle,
   Bot,
-  CheckCircle2,
-  KeyRound,
   MessageSquare,
   UserPlus,
-  WalletCards,
 } from "lucide-react";
 import {
   LineChart,
@@ -129,9 +125,7 @@ export default function TenantDashboard() {
   });
   const [activitySeries, setActivitySeries] = useState(buildLast7DaysSeries());
   const [recentLeads, setRecentLeads] = useState([]);
-  const [aiStatus, setAiStatus] = useState("ok");
-  const [aiConfigurada, setAiConfigurada] = useState(false);
-  const [telefoneNotificacao, setTelefoneNotificacao] = useState("");
+  const [aiConfigurationState, setAiConfigurationState] = useState("unknown");
   const initialLoadDoneRef = useRef(false);
 
   useEffect(() => {
@@ -245,9 +239,7 @@ export default function TenantDashboard() {
           leads24h,
           mensagensMes,
         });
-        setAiStatus(String(resIaConfig?.data?.status_openai || "ok").toLowerCase());
-        setAiConfigurada(Boolean(resIaConfig?.data?.openai_configurada));
-        setTelefoneNotificacao(String(resIaConfig?.data?.telefone_notificacao || ""));
+        setAiConfigurationState(String(resIaConfig?.data?.atendimento_automatico_estado || "unknown"));
         setRecentLeads(recent);
         setActivitySeries(baseSeries);
       } catch (err) {
@@ -285,45 +277,15 @@ export default function TenantDashboard() {
     };
   }, [empresaId, hasUser]);
 
-  const aiConnection = useMemo(() => {
-    // Regra: a ausência de chave configurada tem prioridade sobre o status reativo,
-    // que só pode ser confiável quando há chave para verificar.
-    if (!aiConfigurada) {
-      return {
-        label: "Não Configurada",
-        helper: "Solicite ativação ou revisão para a equipe AgenteOS.",
-        className:
-          "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.22)]",
-        icon: KeyRound,
-      };
+  const aiConfiguration = useMemo(() => {
+    if (aiConfigurationState === "configurado") {
+      return { label: "Configurada", helper: "A disponibilidade das respostas também depende do canal e do estado de cada conversa.", tone: "active" };
     }
-    if (aiStatus === "sem_credito") {
-      return {
-        label: "Sem saldo",
-        helper: "Creditos OpenAI esgotados",
-        className:
-          "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
-        icon: AlertTriangle,
-      };
+    if (aiConfigurationState === "revisao_necessaria") {
+      return { label: "Precisa de atenção", helper: "A equipe Ferrioli pode ajudar a revisar o atendimento automático.", tone: "warning" };
     }
-    if (aiStatus === "chave_invalida") {
-      return {
-        label: "Erro de autenticação",
-        helper: "Chave rejeitada. Solicite revisão para a equipe AgenteOS.",
-        className:
-          "border-red-500/40 bg-red-500/10 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.22)]",
-        icon: WalletCards,
-      };
-    }
-    return {
-      label: "Operacional",
-      helper: "Chave configurada e ativa",
-      className:
-        "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_24px_rgba(16,185,129,0.22)]",
-      icon: CheckCircle2,
-    };
-  }, [aiStatus, aiConfigurada]);
-  const AiConnectionIcon = aiConnection.icon;
+    return { label: "Não verificada", helper: "O estado da configuração ainda não foi confirmado.", tone: "neutral" };
+  }, [aiConfigurationState]);
 
   if (!user) {
     return (
@@ -371,29 +333,14 @@ export default function TenantDashboard() {
           <MetricCard label="Leads capturados (24h)" value={metrics.leads24h} icon={UserPlus} tone="active" />
           <MetricCard label="Mensagens trocadas (mês)" value={metrics.mensagensMes} icon={MessageSquare} tone="info" />
           <MetricCard
-            label="Conexão com IA"
-            value={<StatusBadge tone={!aiConfigurada || aiStatus !== "ok" ? "warning" : "active"}>{aiConnection.label}</StatusBadge>}
-            helper={aiConnection.helper}
-            icon={AiConnectionIcon}
-            tone={!aiConfigurada || aiStatus !== "ok" ? "warning" : "active"}
+            label="Configuração do atendimento automático"
+            value={<StatusBadge tone={aiConfiguration.tone}>{aiConfiguration.label}</StatusBadge>}
+            helper={aiConfiguration.helper}
+            icon={Bot}
+            tone={aiConfiguration.tone}
           />
         </div>
       )}
-
-      <SectionCard title="Alertas operacionais" description="Notificações de saldo e disponibilidade da IA." icon={KeyRound} className="ux05-dashboard-alerts">
-        <div className="mb-3">
-          <h2 className="text-sm font-semibold text-slate-900">Telefone para alertas de crédito</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Canal cadastrado pela equipe AgenteOS para avisos operacionais do agente.
-          </p>
-        </div>
-        <div className="fm-dashboard-alert-contact">
-          {telefoneNotificacao ? telefoneNotificacao : "Nenhum telefone de alerta cadastrado."}
-        </div>
-        <div className="fm-dashboard-alert-note">
-          Configurações de IA, chaves, modelos e alertas técnicos são gerenciados pelo Super Admin.
-        </div>
-      </SectionCard>
 
       <div className="ux05-dashboard-activity grid grid-cols-1 gap-4 xl:grid-cols-3">
         <SectionCard title="Atividade de mensagens (7 dias)" icon={Activity} className="ux05-dashboard-chart xl:col-span-2">

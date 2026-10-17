@@ -163,8 +163,12 @@ export default function TenantLayout() {
           <div className="fm-topbar-context">
             <nav className="fm-tenant-breadcrumb" aria-label="Breadcrumb">
               <ol>
-                <li>{navigationContext?.item.id === "dashboard" ? <span aria-current="page">Painel</span> : <Link to={isReviewer ? "/painel/conexoes" : "/painel"}>Painel</Link>}</li>
-                {navigationContext && navigationContext.item.id !== "dashboard" && (
+                {isReviewer ? (
+                  <li><span>Demonstração Meta</span></li>
+                ) : (
+                  <li>{navigationContext?.item.id === "inbox" ? <span aria-current="page">Conversas</span> : <Link to="/painel/inbox">Conversas</Link>}</li>
+                )}
+                {navigationContext && navigationContext.item.id !== "inbox" && (
                   <>
                     <li><span>{navigationContext.group.label}</span></li>
                     <li>{navigationContext.detail ? <Link to={navigationContext.item.to}>{navigationContext.item.label}</Link> : <span aria-current="page">{navigationContext.item.label}</span>}</li>

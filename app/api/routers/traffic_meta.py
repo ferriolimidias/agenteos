@@ -334,6 +334,125 @@ def _ensure_ad_account_binding_admin(user: Usuario, empresa_id: uuid.UUID) -> No
     raise HTTPException(status_code=403, detail="Acesso administrativo necessário para vincular conta de anúncios.")
 
 
+def _ensure_meta_platform_admin(user: Usuario, empresa_id: uuid.UUID) -> None:
+    if is_root_admin_email(user.email) or is_super_admin_role(user.role):
+        return
+    raise HTTPException(status_code=403, detail="A integração Meta é administrada somente pelo Super Admin.")
+
+
+def _is_platform_admin(user: Usuario) -> bool:
+    return is_root_admin_email(user.email) or is_super_admin_role(user.role)
+
+
+def _customer_campaign_readiness(readiness: dict[str, Any]) -> dict[str, Any]:
+    ready = bool(readiness.get("ready"))
+    return {
+        "ready": ready,
+        "message": (
+            "A campanha pode ser preparada com a configuração atual."
+            if ready
+            else "A equipe Ferrioli está concluindo a configuração necessária para esta campanha."
+        ),
+    }
+
+
+def _customer_meta_assets(response: dict[str, Any], compatible: list[dict[str, Any]]) -> dict[str, Any]:
+    """Project Meta assets to the minimum campaign-building contract."""
+    pages = [
+        {
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "selected": bool(item.get("selected")),
+            "instagram_linked": bool(item.get("instagram_account_id")),
+            "instagram_username": item.get("instagram_username"),
+        }
+        for item in response.get("pages", [])
+    ]
+    selected = response.get("selected_page") or None
+    selected_page = next((page for page in pages if selected and page.get("id") == selected.get("id")), None)
+    return {
+        "ad_account": {"name": (response.get("ad_account") or {}).get("name")},
+        "pages": pages,
+        "selected_page": selected_page,
+        "instagram": {
+            "username": (response.get("instagram") or {}).get("username"),
+            "linked_to_page": bool((response.get("instagram") or {}).get("linked_to_page")),
+        },
+        "whatsapps": [
+            {
+                "connection_id": item.get("connection_id"),
+                "label": item.get("label"),
+                "name": item.get("name"),
+                "status": item.get("status"),
+                "page_compatible": bool(item.get("page_compatible")),
+            }
+            for item in compatible
+        ],
+        "campaign_creation_available": bool(response.get("asset_graph_valid")),
+    }
+
+
+def _customer_meta_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep campaign choices while omitting provider and credential metadata."""
+    result = []
+    for page in pages:
+        instagram = page.get("instagram_business_account") or page.get("connected_instagram_account") or {}
+        instagram = instagram if isinstance(instagram, dict) else {}
+        page_id = _clean(page.get("id"))
+        if not page_id:
+            continue
+        result.append({
+            "id": page_id,
+            "name": _clean(page.get("name")),
+            "instagram_linked": bool(instagram.get("id")),
+            "instagram_username": _clean(instagram.get("username")),
+        })
+    return result
+
+
+def _customer_existing_posts_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Project a post listing to fields used by the customer campaign flow."""
+    items = []
+    for raw in response.get("items", []):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        mapping = item.get("id_mapping") if isinstance(item.get("id_mapping"), dict) else {}
+        item["id_mapping"] = {key: value for key, value in mapping.items() if key != "instagram_account_id"}
+        items.append(item)
+    account = response.get("account") if isinstance(response.get("account"), dict) else {}
+    return {
+        "source_platform": response.get("source_platform"),
+        "account": {
+            "page_id": account.get("page_id"),
+            "page_name": account.get("page_name"),
+            "instagram_username": account.get("instagram_username"),
+            "instagram_linked": bool(account.get("instagram_account_id")),
+        },
+        "items": items,
+        "next_cursor": response.get("next_cursor"),
+        "has_more": bool(response.get("has_more")),
+        "query_scope": response.get("query_scope"),
+        "write_performed": False,
+    }
+
+
+def _customer_existing_post_preview(response: dict[str, Any]) -> dict[str, Any]:
+    """Return only operator-relevant status from a local, non-writing preview."""
+    return {
+        "state": response.get("state", "simulated"),
+        "creation_mode": "local_mock",
+        "meta_write_performed": False,
+        "database_write_performed": False,
+        "external_side_effects": False,
+        "summary": {
+            "destination": "WhatsApp",
+            "message": "Prévia validada localmente. Nenhuma campanha foi salva ou enviada à Meta.",
+            "requires_operator_confirmation": True,
+        },
+    }
+
+
 def _permission_flags(body: dict[str, Any]) -> dict[str, bool]:
     data = body.get("data") if isinstance(body.get("data"), list) else []
     granted = {
@@ -752,21 +871,39 @@ def _raise_marketing_read_error(exc: Exception) -> None:
 async def get_traffic_meta_config(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     config = await _get_config(db, empresa_uuid)
+    is_platform_admin = is_root_admin_email(current_user.email) or is_super_admin_role(current_user.role)
     whatsapp = await _official_whatsapp(db, empresa_uuid, config.whatsapp_connection_id if config else None)
     whatsapp_connections = await _official_whatsapp_connections(db, empresa_uuid)
-    return {
-        "marketing_graph_version": meta_settings().marketing_graph_api_version,
-        "config": _serialize_config(config),
+    serialized_config = _serialize_config(config)
+    if not is_platform_admin:
+        # Clients need only the selected Page/official WhatsApp to prepare a
+        # campaign. Account, Business and Dataset identifiers stay internal.
+        for field in ("id", "empresa_id", "business_id", "ad_account_id", "instagram_account_id", "dataset_id", "dataset_name"):
+            serialized_config[field] = None
+    response = {
+        "config": serialized_config,
         "official_whatsapp": _serialize_whatsapp(whatsapp),
         "official_whatsapps": [_serialize_whatsapp(item) for item in whatsapp_connections],
         "active_official_whatsapps": [_serialize_whatsapp(item) for item in whatsapp_connections if _is_active_meta_whatsapp_connection(item)],
-        "admin_fallback": marketing_admin_status(empresa_uuid),
-        **_settings_flags(),
     }
+    flags = _settings_flags()
+    if is_platform_admin:
+        response.update({
+            "marketing_graph_version": meta_settings().marketing_graph_api_version,
+            "admin_fallback": marketing_admin_status(empresa_uuid),
+            **flags,
+        })
+    else:
+        response["campaign_creation_available"] = all(flags[name] for name in (
+            "meta_write_enabled", "campaign_create_enabled", "adset_create_enabled",
+            "creative_create_enabled", "ad_create_enabled",
+        ))
+        response["existing_post_ads_enabled"] = flags["existing_post_ads_enabled"]
+    return response
 
 
 @router.put("/config")
@@ -777,7 +914,7 @@ async def upsert_traffic_meta_config(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     fields = _payload_fields(payload)
     config = await _get_config(db, empresa_uuid)
     if not config:
@@ -889,7 +1026,7 @@ async def upsert_traffic_meta_config(
 async def get_meta_asset_graph(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     config = await _get_config(db, empresa_uuid)
@@ -918,8 +1055,7 @@ async def get_meta_asset_graph(
         serialized["page_compatible"] = bool(proof)
         serialized["compatibility_source"] = (proof or {}).get("source") if proof else None
         compatible.append(serialized)
-    return {
-        "credential": meta,
+    response = {
         "ad_account": {
             "id": normalize_ad_account_id(ad_account.get("account_id") or ad_account.get("id")),
             "id_masked": mask_meta_id(ad_account.get("account_id") or ad_account.get("id")),
@@ -953,15 +1089,32 @@ async def get_meta_asset_graph(
         },
         "asset_graph_valid": bool(selected_page and any(item.get("page_compatible") for item in compatible)),
     }
+    if _is_platform_admin(current_user):
+        response["credential"] = meta
+        response["dataset"] = {
+            "id": config.dataset_id,
+            "id_masked": mask_meta_id(config.dataset_id),
+            "source": "traffic_meta_config",
+            "website_tracking_supported_for_current_ad_format": False,
+            "website_tracking_reason": "OUTCOME_LEADS/CONVERSATIONS/WHATSAPP não usa Dataset no AdSet; tracking_specs não foi inferido sem contrato Graph comprovado.",
+        }
+        return response
+
+    # Customer campaigns need the selected Page, linked Instagram account, and
+    # an eligible Official WhatsApp connection. Provider credential metadata,
+    # Business/Ad Account identifiers, Dataset data, and diagnostics stay in
+    # the Super Admin surface.
+    return _customer_meta_assets(response, compatible)
 
 
 @router.get("/conversions")
 async def get_meta_conversions_status(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         return await conversions_status(db, empresa_uuid)
     except Exception as exc:
@@ -972,10 +1125,11 @@ async def get_meta_conversions_status(
 async def get_meta_tenant_provisioning(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """Read-only consolidated tenant asset/readiness audit."""
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         return (await audit_meta_tenant(db, empresa_uuid)).sanitized()
     except Exception as exc:
@@ -987,10 +1141,11 @@ async def provision_meta_tenant(
     empresa_id: str,
     create_dataset: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """Idempotent setup operation; never creates mappings or live delivery."""
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         return (await provision_meta_conversion_infrastructure(db, empresa_uuid, create_dataset=create_dataset)).sanitized()
     except Exception as exc:
@@ -1002,10 +1157,11 @@ async def get_meta_business_surfaces(
     empresa_id: str,
     business_ids: str | None = Query(default=None, max_length=240),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """Read-only Business-level AdsDataset/offsite/event-source audit."""
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     ids = [item.strip() for item in str(business_ids or "").split(",") if item.strip()]
     try:
         return await audit_business_meta_surfaces(db, empresa_uuid, business_ids=ids)
@@ -1017,9 +1173,10 @@ async def get_meta_business_surfaces(
 async def get_meta_conversions_dataset(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         status = await conversions_status(db, empresa_uuid)
         return {
@@ -1043,17 +1200,18 @@ async def get_meta_campaign_conversion_readiness(
     page_id: str | None = Query(default=None, max_length=80),
     whatsapp_connection_id: str | None = Query(default=None, max_length=80),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     try:
         selected_whatsapp_id = _uuid_or_400(whatsapp_connection_id, "whatsapp_connection_id") if whatsapp_connection_id else None
-        return await _campaign_conversion_readiness(
+        readiness = await _campaign_conversion_readiness(
             db,
             empresa_uuid,
             page_id=page_id,
             whatsapp_connection_id=selected_whatsapp_id,
         )
+        return readiness if _is_platform_admin(current_user) else _customer_campaign_readiness(readiness)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=sanitize_graph_error(exc)) from exc
 
@@ -1062,10 +1220,11 @@ async def get_meta_campaign_conversion_readiness(
 async def get_meta_optimization_eligibility_status(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """Return signal accumulation separately from Campaign readiness/probes."""
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         base_status = await conversions_status(db, empresa_uuid)
         return await get_meta_optimization_eligibility(
@@ -1082,9 +1241,10 @@ async def get_meta_conversions_history(
     empresa_id: str,
     limit: int = Query(default=50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     rows = (
         await db.execute(
             select(MetaConversionEvent, CRMLead, BusinessMessagingConversionMapping)
@@ -1121,7 +1281,7 @@ async def save_meta_conversions_token(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     result = await save_conversion_token(db, empresa_uuid, payload.access_token)
     if not result.valid:
         raise HTTPException(status_code=400, detail={"message": "Token válido não confirmado para esta WABA.", "validation": result.sanitized()})
@@ -1135,7 +1295,7 @@ async def setup_meta_conversions(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         result = await setup_business_messaging_conversions(db, empresa_uuid)
         return {"setup": result, "status": await conversions_status(db, empresa_uuid)}
@@ -1155,7 +1315,7 @@ async def update_meta_conversion_mapping_sources(
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     mapping_uuid = _uuid_or_400(mapping_id, "mapping_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     valid_sources = {item["value"] for item in BUSINESS_MESSAGING_TRIGGER_SOURCE_OPTIONS}
     sources = sorted({str(item or "").strip().lower() for item in payload.allowed_sources}.intersection(valid_sources))
     if not sources:
@@ -2810,9 +2970,10 @@ async def create_paused_campaign_and_adset(
 async def credential_status(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         readiness = await marketing_ads_readiness(db, empresa_id=empresa_uuid)
         return {
@@ -2843,9 +3004,10 @@ async def credential_status(
 async def get_me(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ)
         return {"credential": meta, "me": await client.get_me()}
@@ -2857,9 +3019,10 @@ async def get_me(
 async def get_permissions(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ)
         return {"credential": meta, "permissions": await client.get_permissions()}
@@ -2874,7 +3037,7 @@ async def list_ad_accounts(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     try:
         config = await _get_config(db, empresa_uuid)
         if config and config.ad_account_id:
@@ -2897,7 +3060,7 @@ async def validate_ad_account(
     current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
-    _ensure_ad_account_binding_admin(current_user, empresa_uuid)
+    _ensure_meta_platform_admin(current_user, empresa_uuid)
     config = await _get_config(db, empresa_uuid)
     if config and config.ad_account_id and normalize_ad_account_id(config.ad_account_id) != normalize_ad_account_id(ad_account_id):
         raise HTTPException(status_code=403, detail="Ad Account fora do escopo configurado para esta empresa.")
@@ -2916,7 +3079,7 @@ async def validate_ad_account(
 async def list_pages(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     try:
@@ -2927,7 +3090,10 @@ async def list_pages(
             db, empresa_uuid, MetaMarketingCapability.ADS_READ,
             ad_account_id=config.ad_account_id, allow_admin_fallback=True,
         )
-        return {"credential": meta, "pages": await _tenant_pages(client, config, meta)}
+        pages = await _tenant_pages(client, config, meta)
+        if _is_platform_admin(current_user):
+            return {"credential": meta, "pages": pages}
+        return {"pages": _customer_meta_pages(pages)}
     except Exception as exc:
         _raise_marketing_read_error(exc)
 
@@ -2941,7 +3107,7 @@ async def list_existing_ad_posts(
     limit: int = Query(default=25, ge=1, le=50),
     after: str | None = Query(default=None, max_length=500),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """List tenant-owned posts using bounded Graph GETs only."""
     _require_existing_post_ads_feature()
@@ -2997,7 +3163,7 @@ async def list_existing_ad_posts(
     paging = body.get("paging") if isinstance(body.get("paging"), dict) else {}
     cursors = paging.get("cursors") if isinstance(paging.get("cursors"), dict) else {}
     next_cursor = str(cursors.get("after") or "").strip() or None
-    return {
+    response = {
         "source_platform": platform,
         "account": {
             "ad_account_id": ad_account_id,
@@ -3014,6 +3180,7 @@ async def list_existing_ad_posts(
         "query_scope": "current_graph_page",
         "write_performed": False,
     }
+    return response if _is_platform_admin(current_user) else _customer_existing_posts_response(response)
 
 
 @router.post("/existing-posts/creative-preview")
@@ -3081,7 +3248,8 @@ async def preview_existing_post_ad_creative(
         )
     except TrafficCampaignValidationError as exc:
         raise HTTPException(status_code=422, detail={"code": str(exc), "message": "Formato ou objetivo não compatível com a prévia atual."}) from exc
-    return {"preview": preview, "credential": credential_meta, "graph_api_version": credential_meta.get("graph_version")}
+    response = {"preview": preview, "credential": credential_meta, "graph_api_version": credential_meta.get("graph_version")}
+    return response if _is_platform_admin(current_user) else {"preview": preview}
 
 
 @router.post("/existing-posts/campaign-preview")
@@ -3169,7 +3337,7 @@ async def preview_existing_post_campaign(
     # creation flow supplies only a goal confirmed by server-side readiness.
     adset.pop("optimization_goal", None)
     ad = build_ad_payload(name="Prévia A12 · anúncio", adset_id="PREVIEW_ADSET_ID", creative_id="PREVIEW_CREATIVE_ID")
-    return {
+    response = {
         "state": "simulated",
         "creation_mode": "local_mock",
         "meta_write_performed": False,
@@ -3201,6 +3369,7 @@ async def preview_existing_post_campaign(
         },
         "note": "Prévia local que reutiliza os validadores e builders atuais. A otimização fica desconhecida até a validação de readiness no fluxo real; nenhuma estrutura foi salva ou enviada à Meta.",
     }
+    return response if _is_platform_admin(current_user) else _customer_existing_post_preview(response)
 
 
 @router.get("/campaigns")

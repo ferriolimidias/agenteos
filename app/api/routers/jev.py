@@ -4,14 +4,18 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.routers.auth import require_tenant_access
+from app.api.routers.auth import require_super_admin, require_tenant_access
 from app.services import jev_shadow
 from app.services.jev_examples import examples
 from app.services.jev_classification import INTENTS
 from app.services.jev_ledger import JevLedger, LedgerUnavailable, new_client
 from db.database import get_db
 
-router = APIRouter(prefix='/api/empresas/{empresa_id}/jev', tags=['JEV SHADOW'], dependencies=[Depends(require_tenant_access)])
+router = APIRouter(
+    prefix='/api/empresas/{empresa_id}/jev',
+    tags=['JEV SHADOW'],
+    dependencies=[Depends(require_tenant_access), Depends(require_super_admin)],
+)
 
 class AnalyzePayload(BaseModel):
     model_config = ConfigDict(extra='forbid')

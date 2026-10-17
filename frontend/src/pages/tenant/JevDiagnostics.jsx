@@ -1,6 +1,6 @@
 import "../../styles/ux05-tools.css";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Brain, RefreshCw } from "lucide-react";
 import api from "../../services/api";
 import { PageHeader, StatusBadge } from "../../components/ui";
@@ -37,7 +37,7 @@ function RunDetail({ run, onClose }) {
   </section>;
 }
 
-function TenantDiagnostics({ tenant, initialLead }) {
+function TenantDiagnostics({ tenant, initialLead, isAdminView = false }) {
   const base = `/empresas/${tenant}/jev`;
   const [status, setStatus] = useState(null);
   const [examples, setExamples] = useState([]);
@@ -55,7 +55,10 @@ function TenantDiagnostics({ tenant, initialLead }) {
   const [listError, setListError] = useState("");
   const [actionError, setActionError] = useState("");
   const actionController = useRef(null);
-  const current = useCallback(controller => jevScopeIsCurrent(tenant, getActiveEmpresaId(), controller.signal) && getStoredUser()?.role !== "meta_app_reviewer", [tenant]);
+  const current = useCallback(controller => {
+    const activeTenant = isAdminView ? tenant : getActiveEmpresaId();
+    return jevScopeIsCurrent(tenant, activeTenant, controller.signal) && (isAdminView || getStoredUser()?.role !== "meta_app_reviewer");
+  }, [tenant, isAdminView]);
   useEffect(() => () => actionController.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
@@ -129,14 +132,17 @@ function TenantDiagnostics({ tenant, initialLead }) {
 }
 export default function JevDiagnostics() {
   const location = useLocation();
-  const [session, setSession] = useState(() => ({ tenant: getActiveEmpresaId(), reviewer: getStoredUser()?.role === "meta_app_reviewer" }));
-  const [queryScope] = useState(() => ({ tenant: session.tenant, search: location.search }));
+  const { empresaId: routeTenant } = useParams();
+  const [session, setSession] = useState(() => ({ tenant: routeTenant || getActiveEmpresaId(), reviewer: !routeTenant && getStoredUser()?.role === "meta_app_reviewer" }));
   useEffect(() => {
+    if (routeTenant) return undefined;
     const update = () => setSession({ tenant: getActiveEmpresaId(), reviewer: getStoredUser()?.role === "meta_app_reviewer" });
     window.addEventListener("storage", update);
     return () => window.removeEventListener("storage", update);
-  }, []);
-  if (session.reviewer) return <p role="alert">Diagnóstico não disponível para este perfil.</p>;
-  if (!session.tenant) return <p role="alert">Selecione um tenant autenticado para consultar o diagnóstico.</p>;
-  return <TenantDiagnostics key={session.tenant} tenant={session.tenant} initialLead={queryScope.tenant === session.tenant ? jevLeadId(new URLSearchParams(queryScope.search).get("lead_id")) : null} />;
+  }, [routeTenant]);
+  const tenant = routeTenant || session.tenant;
+  const reviewer = !routeTenant && session.reviewer;
+  if (reviewer) return <p role="alert">Diagnóstico não disponível para este perfil.</p>;
+  if (!tenant) return <p role="alert">Selecione um tenant autenticado para consultar o diagnóstico.</p>;
+  return <TenantDiagnostics key={tenant} tenant={tenant} isAdminView={Boolean(routeTenant)} initialLead={jevLeadId(new URLSearchParams(location.search).get("lead_id"))} />;
 }

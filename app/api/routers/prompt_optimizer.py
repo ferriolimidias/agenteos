@@ -8,15 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routers.auth import Usuario, require_tenant_access
+from app.api.routers.auth import Usuario, require_super_admin, require_tenant_access
 from app.services import a11_prompt_optimizer as service
 from db.database import get_db
-from db.models import is_admin_empresa_role, is_root_admin_email, is_super_admin_role
+from db.models import is_root_admin_email, is_super_admin_role
 
 router = APIRouter(
     prefix="/api/empresas/{empresa_id}/prompt-optimizer",
     tags=["A11 Prompt Optimizer"],
-    dependencies=[Depends(require_tenant_access)],
+    dependencies=[Depends(require_tenant_access), Depends(require_super_admin)],
 )
 
 
@@ -72,16 +72,16 @@ def _actor_id(user: Usuario) -> str:
 
 
 def _require_optimizer_admin(user: Usuario):
-    if is_super_admin_role(user.role) or is_root_admin_email(user.email) or is_admin_empresa_role(user.role):
+    if is_root_admin_email(user.email) or is_super_admin_role(user.role):
         return user
-    raise HTTPException(status_code=403, detail="Apenas administradores podem alterar versões e experimentos.")
+    raise HTTPException(status_code=403, detail="Apenas Super Admin pode acessar a governança do atendimento.")
 
 
 @router.get("")
 async def get_optimizer_dashboard(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     return await service.dashboard(db, _tenant_uuid(empresa_id))
@@ -91,7 +91,7 @@ async def get_optimizer_dashboard(
 async def get_prompt_suggestions(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     return await service.evidence_suggestions(db, _tenant_uuid(empresa_id))
@@ -101,7 +101,7 @@ async def get_prompt_suggestions(
 async def bootstrap_reference_versions(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     result = await service.bootstrap_reference_versions(db, _tenant_uuid(empresa_id), actor_id=_actor_id(user))
@@ -114,7 +114,7 @@ async def get_evaluator_models(
     empresa_id: str,
     refresh: bool = False,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -131,7 +131,7 @@ async def validate_evaluator_model(
     empresa_id: str,
     payload: EvaluatorModelValidationPayload,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     from app.services.openai_model_catalog import CatalogUnavailable, validate_chat_model
@@ -150,7 +150,7 @@ async def set_evaluator_model(
     empresa_id: str,
     payload: EvaluatorModelPayload,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -167,7 +167,7 @@ async def create_version(
     empresa_id: str,
     payload: CandidatePayload,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -185,7 +185,7 @@ async def evaluate_version(
     version_id: str,
     payload: EvaluationPayload = Body(default=EvaluationPayload()),
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -202,7 +202,7 @@ async def approve_version(
     empresa_id: str,
     version_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -219,7 +219,7 @@ async def create_experiment(
     empresa_id: str,
     payload: ExperimentPayload,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -238,7 +238,7 @@ async def start_experiment(
     empresa_id: str,
     experiment_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     try:
@@ -256,7 +256,7 @@ async def evaluate_decision(
     empresa_id: str,
     experiment_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     tenant_id = _tenant_uuid(empresa_id)
@@ -284,12 +284,12 @@ async def _finish_experiment(empresa_id: str, experiment_id: str, state: str, db
 
 
 @router.post("/experiments/{experiment_id}/pause")
-async def pause_experiment(empresa_id: str, experiment_id: str, db: AsyncSession = Depends(get_db), user: Usuario = Depends(require_tenant_access)):
+async def pause_experiment(empresa_id: str, experiment_id: str, db: AsyncSession = Depends(get_db), user: Usuario = Depends(require_super_admin)):
     return await _finish_experiment(empresa_id, experiment_id, "PAUSED", db, user)
 
 
 @router.post("/experiments/{experiment_id}/complete")
-async def complete_experiment(empresa_id: str, experiment_id: str, db: AsyncSession = Depends(get_db), user: Usuario = Depends(require_tenant_access)):
+async def complete_experiment(empresa_id: str, experiment_id: str, db: AsyncSession = Depends(get_db), user: Usuario = Depends(require_super_admin)):
     return await _finish_experiment(empresa_id, experiment_id, "COMPLETED", db, user)
 
 
@@ -299,7 +299,7 @@ async def rollback_experiment(
     experiment_id: str,
     payload: RollbackPayload,
     db: AsyncSession = Depends(get_db),
-    user: Usuario = Depends(require_tenant_access),
+    user: Usuario = Depends(require_super_admin),
 ):
     _require_optimizer_admin(user)
     tenant_id = _tenant_uuid(empresa_id)

@@ -6,13 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.api.routers.auth import require_tenant_access
+from app.api.routers.auth import require_super_admin, require_tenant_access
 from app.services import a07_preview
 from app.services.a07_ledger import A07Ledger, LedgerUnavailable, new_client
 from db.database import get_db
 from db.models import Empresa
 
-router = APIRouter(prefix='/api/empresas/{empresa_id}/atendimento-modular', tags=['Atendimento modular'], dependencies=[Depends(require_tenant_access)])
+router = APIRouter(
+    prefix='/api/empresas/{empresa_id}/atendimento-modular',
+    tags=['Atendimento modular'],
+    dependencies=[Depends(require_tenant_access), Depends(require_super_admin)],
+)
 
 
 class PreviewPayload(BaseModel):

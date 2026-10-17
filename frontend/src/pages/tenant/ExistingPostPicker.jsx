@@ -11,8 +11,8 @@ function formatDate(value) {
 }
 
 export default function ExistingPostPicker({
-  empresaId, pages = [], adAccountId = "", initialPageId = "", campaignDraft = {}, onPageChange,
-  enabled = false, pagesLoading = false, pagesError = null, onRetryPages,
+  empresaId, pages = [], adAccountConfigured = false, initialPageId = "", campaignDraft = {}, onPageChange,
+  enabled = false, pagesLoading = false, pagesError = null, onRetryPages, showTechnicalDetails = false,
 }) {
   const [platform, setPlatform] = useState("instagram");
   const [pageId, setPageId] = useState("");
@@ -38,7 +38,7 @@ export default function ExistingPostPicker({
     && campaignDraft.whatsapp_connection_id,
   );
 
-  const availablePages = useMemo(() => pages.filter((page) => platform !== "instagram" || page.instagram_account_id), [pages, platform]);
+  const availablePages = useMemo(() => pages.filter((page) => platform !== "instagram" || page.instagram_account_id || page.instagram_linked), [pages, platform]);
   const visiblePosts = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("pt-BR");
     if (!query) return posts;
@@ -161,7 +161,7 @@ export default function ExistingPostPicker({
       <div className="grid gap-3 md:grid-cols-3">
         <label className="space-y-1 text-sm font-medium text-slate-700">
           Conta de anúncios configurada
-          <div className="fm-field w-full truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-normal" data-testid="existing-post-ad-account">{adAccountId || "Não configurada"}</div>
+          <div className="fm-field w-full truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-normal" data-testid="existing-post-ad-account">{adAccountConfigured ? "Conta conectada" : "Não configurada"}</div>
         </label>
         <label className="space-y-1 text-sm font-medium text-slate-700">
           Origem
@@ -202,10 +202,10 @@ export default function ExistingPostPicker({
           return <article key={`${post.source_platform}:${post.source_id}`} className={`min-w-0 overflow-hidden rounded-xl border transition ${active ? "border-indigo-500 ring-2 ring-indigo-100" : "border-slate-200"}`}>
             {post.media_type === "VIDEO" && post.media_url ? <video className="h-44 w-full bg-slate-100 object-cover" src={post.media_url} poster={post.thumbnail_url || undefined} controls preload="none" referrerPolicy="no-referrer" aria-label="Prévia de vídeo" /> : post.thumbnail_url ? <img className="h-44 w-full bg-slate-100 object-cover" src={post.thumbnail_url} alt="Prévia da publicação" loading="lazy" referrerPolicy="no-referrer" /> : <div className="flex h-44 items-center justify-center bg-slate-100 text-slate-400"><ImageIcon size={32} /></div>}
             <button key={`${post.source_platform}:${post.source_id}:select`} type="button" onClick={() => { setSelected(supported ? post : null); setPreview(null); }} disabled={!supported} aria-pressed={active} aria-label={`Selecionar ${post.caption || post.source_id}`} className={`w-full space-y-2 p-3 text-left transition ${!supported ? "cursor-not-allowed opacity-60" : "hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"}`}>
-              <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="inline-flex items-center gap-1">{post.media_type === "VIDEO" ? <Video size={14} /> : <ImageIcon size={14} />}{post.media_type}{post.media_product_type ? ` · ${post.media_product_type}` : ""}</span>{active ? <CheckCircle2 size={16} className="text-indigo-600" /> : null}</div>
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="inline-flex items-center gap-1">{post.media_type === "VIDEO" ? <Video size={14} /> : <ImageIcon size={14} />}{post.media_type === "VIDEO" ? (post.media_product_type === "REELS" ? "Vídeo do Reels" : "Vídeo") : "Foto"}</span>{active ? <CheckCircle2 size={16} className="text-indigo-600" /> : null}</div>
               <p className="line-clamp-3 min-h-14 break-words text-sm text-slate-700">{post.caption || "Publicação sem legenda"}</p>
               <p className="text-xs text-slate-500">{formatDate(post.created_at)}</p>
-              <p className={`text-xs font-medium ${supported ? "text-emerald-700" : "text-amber-800"}`}>{post.media_type === "VIDEO" && !post.media_url ? "Vídeo compatível · exibindo miniatura; reprodução indisponível" : supported ? "Formato elegível para prévia" : "Formato sem compatibilidade confirmada"}</p>
+              <p className={`text-xs font-medium ${supported ? "text-emerald-700" : "text-amber-800"}`}>{post.media_type === "VIDEO" && !post.media_url ? "Prévia em miniatura; reprodução indisponível" : supported ? "Pode ser usada nesta prévia" : "Ainda não pode ser usada nesta prévia"}</p>
             </button>
           </article>;
         })}
@@ -216,16 +216,19 @@ export default function ExistingPostPicker({
 
       {selected ? <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-4">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-          <div><p className="text-sm font-semibold text-slate-900">Publicação selecionada</p><p className="break-all text-xs text-slate-600">{selected.source_platform === "facebook" ? "Post ID" : "Media ID"}: {selected.source_id}</p></div>
+          <div><p className="text-sm font-semibold text-slate-900">Publicação selecionada</p><p className="text-xs text-slate-600">{selected.source_platform === "facebook" ? "Do Facebook" : "Do Instagram"} · {selected.media_type === "VIDEO" ? "vídeo" : "foto"}</p></div>
           <ActionButton type="button" onClick={simulateCampaign} disabled={previewLoading || !campaignReadyForPreview}>{previewLoading ? "Validando e simulando..." : "Simular campanha e anúncio"}</ActionButton>
         </div>
         {!campaignReadyForPreview ? <p className="text-xs text-amber-800">Preencha orçamento e WhatsApp da campanha e mantenha a Página do anúncio igual à publicação selecionada para simular no builder.</p> : null}
-        <p className="text-xs text-slate-600">A compatibilidade exibida é preliminar. A confirmação final de formato, objetivo e permissões depende de validação da Marketing API em uma etapa real autorizada.</p>
+        <p className="text-xs text-slate-600">A prévia confirma somente a seleção e o formato. A criação ainda depende da configuração e da confirmação de um responsável.</p>
         {previewError ? <div role="alert" className="space-y-2"><InfoBanner tone="warning">{previewError.message}{preview ? " A última simulação válida continua visível." : " Nenhuma criação foi confirmada."}</InfoBanner>{previewError.retryable ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={simulateCampaign} disabled={previewLoading || !campaignReadyForPreview}>{previewLoading ? "Validando novamente…" : "Tentar validar novamente"}</ActionButton> : null}</div> : null}
         {preview ? <div className="space-y-2 rounded-lg border border-emerald-200 bg-white p-3" role="status" data-testid="existing-post-preview-result">
           <p className="text-sm font-semibold text-emerald-900">Prévia local do fluxo · nada foi salvo ou criado na Meta</p>
-          <p className="text-xs text-slate-600">Post ID, Media ID, Comment ID e Creative ID são identificadores diferentes. A simulação deixa os que não existem como null.</p>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs text-slate-700">{JSON.stringify({ state: preview.state, meta_write_performed: preview.meta_write_performed, database_write_performed: preview.database_write_performed, id_mapping: preview.id_mapping, compatibility: preview.compatibility, builder_preview: preview.builder_preview }, null, 2)}</pre>
+          {showTechnicalDetails ? (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs text-slate-700">{JSON.stringify({ state: preview.state, meta_write_performed: preview.meta_write_performed, database_write_performed: preview.database_write_performed, id_mapping: preview.id_mapping, compatibility: preview.compatibility, builder_preview: preview.builder_preview }, null, 2)}</pre>
+          ) : (
+            <p className="text-sm text-slate-700">{preview.summary?.message || "Nenhuma campanha foi salva ou enviada à Meta."}</p>
+          )}
         </div> : null}
       </div> : null}
       </> : null}

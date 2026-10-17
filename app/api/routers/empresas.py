@@ -318,6 +318,17 @@ def _serializar_empresa_segura(empresa: Empresa) -> dict[str, Any]:
     }
 
 
+def _serializar_empresa_cliente(empresa: Empresa) -> dict[str, Any]:
+    """Expose only account identity and the tenant-owned delivery connection."""
+    return {
+        "id": empresa.id,
+        "nome_empresa": empresa.nome_empresa,
+        "area_atuacao": empresa.area_atuacao,
+        "logo_url": empresa.logo_url,
+        "conexao_disparo_id": empresa.conexao_disparo_id,
+    }
+
+
 def _detect_lead_columns(fieldnames: list[str]) -> tuple[str | None, str | None]:
     normalized = {str(name).strip().lower(): name for name in fieldnames if str(name).strip()}
 
@@ -484,7 +495,7 @@ async def listar_empresas(db: AsyncSession = Depends(get_db), _: Usuario = Depen
         )
 
 
-@router.get("/{empresa_id}", response_model=EmpresaResponse, status_code=status.HTTP_200_OK)
+@router.get("/{empresa_id}", response_model=None, status_code=status.HTTP_200_OK)
 async def obter_empresa(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
@@ -499,7 +510,9 @@ async def obter_empresa(
     empresa = result.scalars().first()
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada")
-    return _serializar_empresa_segura(empresa)
+    if _is_super_admin_user(usuario):
+        return _serializar_empresa_segura(empresa)
+    return _serializar_empresa_cliente(empresa)
 
 
 def _gerar_senha_temporaria() -> str:
@@ -928,6 +941,33 @@ async def require_ia_config_access(
     return current_user
 
 
+_TENANT_IA_CONFIG_WRITABLE_FIELDS = frozenset({"tags_ia_habilitadas"})
+
+
+def _is_super_admin_user(user: Usuario) -> bool:
+    return is_root_admin_email(user.email) or is_super_admin_role(user.role)
+
+
+def _require_ia_config_update_permission(data: IAConfigUpdateRequest, user: Usuario) -> None:
+    if _is_super_admin_user(user):
+        return
+    restricted_fields = set(data.model_fields_set) - _TENANT_IA_CONFIG_WRITABLE_FIELDS
+    if restricted_fields:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Configurações de atendimento são administradas pela equipe Ferrioli.",
+        )
+
+
+def _tenant_ia_config_summary(empresa: Empresa, tag_ids: list[str]) -> dict[str, Any]:
+    openai_configurada, _ = _empresa_tem_openai_configurada(empresa)
+    status_openai = str(getattr(empresa, "status_openai", "ok") or "ok").strip().lower()
+    return {
+        "atendimento_automatico_estado": "configurado" if openai_configurada and status_openai == "ok" else "revisao_necessaria",
+        "tags_ia_habilitadas": tag_ids,
+    }
+
+
 def _empresa_tem_chave_openai(empresa: Empresa) -> bool:
     """
     Verdadeiro quando a empresa tem chave OpenAI BYOK configurada — seja na
@@ -949,11 +989,11 @@ def _empresa_tem_chave_openai(empresa: Empresa) -> bool:
     return False
 
 
-@router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
+@router.get("/{empresa_id}/ia-config", response_model=IAConfigResponse, response_model_exclude_unset=True, status_code=status.HTTP_200_OK)
 async def get_ia_config(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_ia_config_access),
+    current_user: Usuario = Depends(require_ia_config_access),
 ):
     result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = result.scalars().first()
@@ -965,6 +1005,8 @@ async def get_ia_config(
             await db.execute(select(TagCRM.id).where(TagCRM.empresa_id == empresa.id, TagCRM.ai_can_apply.is_(True)))
         ).scalars().all()
     ]
+    if not _is_super_admin_user(current_user):
+        return _tenant_ia_config_summary(empresa, ai_tag_ids)
     return {
         "ia_personalidade": getattr(empresa, "ia_personalidade", None),
         "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
@@ -987,7 +1029,7 @@ async def get_ia_config(
     }
 
 
-@router.get("/{empresa_id}/monitor/funnel")
+@router.get("/{empresa_id}/monitor/funnel", dependencies=[Depends(require_super_admin)])
 async def get_monitor_funnel(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1001,7 +1043,7 @@ async def get_monitor_funnel(
     return {"spec": spec or current, "current_prompt_hash": current["prompt_hash"], "stale": not spec or spec.get("prompt_hash") != current["prompt_hash"]}
 
 
-@router.post("/{empresa_id}/monitor/funnel/preview")
+@router.post("/{empresa_id}/monitor/funnel/preview", dependencies=[Depends(require_super_admin)])
 async def preview_monitor_funnel_endpoint(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1013,7 +1055,7 @@ async def preview_monitor_funnel_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{empresa_id}/monitor/funnel/sync")
+@router.post("/{empresa_id}/monitor/funnel/sync", dependencies=[Depends(require_super_admin)])
 async def sync_monitor_funnel_endpoint(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1024,14 +1066,15 @@ async def sync_monitor_funnel_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-@router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
-@router.post("/{empresa_id}/ia-config", response_model=IAConfigResponse, status_code=status.HTTP_200_OK)
+@router.put("/{empresa_id}/ia-config", response_model=IAConfigResponse, response_model_exclude_unset=True, status_code=status.HTTP_200_OK)
+@router.post("/{empresa_id}/ia-config", response_model=IAConfigResponse, response_model_exclude_unset=True, status_code=status.HTTP_200_OK)
 async def put_ia_config(
     empresa_id: str,
     data: IAConfigUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_ia_config_access),
+    current_user: Usuario = Depends(require_ia_config_access),
 ):
+    _require_ia_config_update_permission(data, current_user)
     # Deprecated para agenda: horários de funcionamento devem ser atualizados em PUT /empresas/{empresa_id}/agenda.
     # Serialize partial updates to this tenant's shared model/effort pair.
     # Without a row lock concurrent model-only and effort-only writes could
@@ -1146,6 +1189,8 @@ async def put_ia_config(
                 await db.execute(select(TagCRM.id).where(TagCRM.empresa_id == empresa.id, TagCRM.ai_can_apply.is_(True)))
             ).scalars().all()
         ]
+        if not _is_super_admin_user(current_user):
+            return _tenant_ia_config_summary(empresa, ai_tag_ids)
         return {
             "ia_personalidade": getattr(empresa, "ia_personalidade", None),
             "ia_regras_negocio": getattr(empresa, "ia_regras_negocio", None),
@@ -1170,16 +1215,36 @@ async def put_ia_config(
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar: {str(e)}")
 
 
-@router.put("/{empresa_id}", response_model=EmpresaResponse, status_code=status.HTTP_200_OK)
+@router.put("/{empresa_id}", response_model=None, status_code=status.HTTP_200_OK)
 async def atualizar_empresa(
     empresa_id: str,
     data: EmpresaUpdate,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    current_user: Usuario = Depends(require_tenant_access),
 ):
     """
     Atualiza dados básicos da Empresa (nome e área de atuação).
     """
+    if not _is_super_admin_user(current_user):
+        restricted_fields = set(data.model_fields_set) & {
+            "ia_personalidade",
+            "ia_regras_negocio",
+            "disparo_delay_min",
+            "disparo_delay_max",
+            "limite_certeza",
+            "limite_duvida",
+            "max_agentes_desempate",
+            "meta_capi_ativo",
+            "meta_pixel_id",
+            "meta_access_token",
+            "remover_meta_access_token",
+        }
+        if restricted_fields:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Configurações de atendimento e Meta são administradas pela equipe Ferrioli.",
+            )
+
     result = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = result.scalars().first()
     if not empresa:
@@ -1266,7 +1331,9 @@ async def atualizar_empresa(
     try:
         await db.commit()
         await db.refresh(empresa)
-        return _serializar_empresa_segura(empresa)
+        if _is_super_admin_user(current_user):
+            return _serializar_empresa_segura(empresa)
+        return _serializar_empresa_cliente(empresa)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro ao atualizar empresa: {str(e)}")

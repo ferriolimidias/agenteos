@@ -1,5 +1,6 @@
 import "../../styles/ux05-analytics.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import {
   AlertCircle,
   Check,
@@ -137,7 +138,7 @@ function Notice({ notice, onClose }) {
   );
 }
 
-function ConnectionCard({ connection, selected, busy, onSelect, onReconfigure, onRevalidate, onRemove }) {
+function ConnectionCard({ connection, selected, busy, onSelect, onReconfigure, onRevalidate, onRemove, adminCredentials }) {
   const username = text(connection?.instagram_username);
   const permissions = Array.isArray(connection?.permissions) ? connection.permissions : [];
   const pending = text(connection?.configuration_state).toLowerCase() === "pending_reconfiguration";
@@ -152,26 +153,26 @@ function ConnectionCard({ connection, selected, busy, onSelect, onReconfigure, o
             {pending ? <StatusBadge tone="warning">Pendente de reconfiguração</StatusBadge> : null}
           </div>
           <dl className="mt-3 grid min-w-0 gap-2 text-sm text-slate-600 sm:grid-cols-2">
-            <div><dt className="font-semibold text-slate-700">Instagram ID</dt><dd className="break-all">{instagramId(connection) || "—"}</dd></div>
+            {adminCredentials ? <div><dt className="font-semibold text-slate-700">Instagram ID</dt><dd className="break-all">{instagramId(connection) || "—"}</dd></div> : null}
             <div><dt className="font-semibold text-slate-700">Usuário</dt><dd className="break-words">{username ? `@${username}` : "—"}</dd></div>
-            <div><dt className="font-semibold text-slate-700">Validade do token</dt><dd>{formatDateTime(connection?.token_expires_at)}</dd></div>
+            {adminCredentials ? <div><dt className="font-semibold text-slate-700">Validade do token</dt><dd>{formatDateTime(connection?.token_expires_at)}</dd></div> : null}
           </dl>
-          <div className="mt-3">
+          {adminCredentials ? <div className="mt-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Permissões</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {permissions.length ? permissions.map((permission) => <StatusBadge key={permission} tone="default">{permission}</StatusBadge>) : <span className="text-sm text-slate-500">Não informadas</span>}
             </div>
-          </div>
-          {pending ? <p className="mt-3 text-sm font-medium text-amber-700">Indisponível até concluir a validação.</p> : null}
-          <p className="mt-3 text-xs text-slate-500">Última validação: {formatDateTime(connection?.last_validated_at)}</p>
-          {connection?.last_error ? <p className="mt-2 break-words text-sm text-red-700">{text(connection.last_error)}</p> : null}
+          </div> : null}
+          {adminCredentials && pending ? <p className="mt-3 text-sm font-medium text-amber-700">Indisponível até concluir a validação.</p> : null}
+          {adminCredentials ? <p className="mt-3 text-xs text-slate-500">Última validação: {formatDateTime(connection?.last_validated_at)}</p> : null}
+          {adminCredentials && connection?.last_error ? <p className="mt-2 break-words text-sm text-red-700">{text(connection.last_error)}</p> : null}
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <ActionButton type="button" variant={selected ? "primary" : "secondary"} icon={selected ? Check : InstagramIcon} aria-pressed={selected} onClick={() => onSelect(connection)} disabled={busy}>
             {selected ? "Selecionada" : "Usar conexão"}
           </ActionButton>
-          {pending ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => onReconfigure(connection)} disabled={busy}>Reconfigurar</ActionButton> : <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => onRevalidate(connection)} disabled={busy}>Revalidar</ActionButton>}
-          <ActionButton type="button" variant="danger" icon={Trash2} onClick={() => onRemove(connection)} disabled={busy}>Remover</ActionButton>
+          {adminCredentials ? <>{pending ? <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => onReconfigure(connection)} disabled={busy}>Reconfigurar</ActionButton> : <ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={() => onRevalidate(connection)} disabled={busy}>Revalidar</ActionButton>}
+          <ActionButton type="button" variant="danger" icon={Trash2} onClick={() => onRemove(connection)} disabled={busy}>Remover</ActionButton></> : null}
         </div>
       </div>
     </article>
@@ -196,8 +197,9 @@ function MediaCard({ item, selected, onSelect }) {
   );
 }
 
-export default function Instagram() {
-  const empresaId = getActiveEmpresaId();
+export default function Instagram({ adminCredentials = false } = {}) {
+  const { empresaId: routedEmpresaId } = useParams();
+  const empresaId = adminCredentials ? routedEmpresaId : getActiveEmpresaId();
   const abortRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const resourcesRequestRef = useRef(0);
@@ -554,7 +556,7 @@ export default function Instagram() {
   return (
     <div className="ux05-analytics ux05-instagram">
     <div className="min-w-0 space-y-6" translate="no">
-      <PageHeader title="Instagram" eyebrow="Canais" description="Conecte ou reconfigure uma conta informando manualmente o Instagram ID e o Instagram User Access Token." icon={InstagramIcon} />
+      <PageHeader title={adminCredentials ? "Conexão do Instagram" : "Automação do Instagram"} eyebrow={adminCredentials ? "Administração da empresa" : "Campanhas"} description={adminCredentials ? "Gerencie a conexão técnica desta empresa. O token não volta a ser exibido depois de salvo." : "Consulte publicações e acompanhe automações da conta conectada. A equipe Ferrioli administra as credenciais do canal."} icon={InstagramIcon} />
       <Notice notice={notice} onClose={() => setNotice(null)} />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -563,7 +565,7 @@ export default function Instagram() {
         <MetricCard label="Execuções" value={selectedConnection ? history.length : "—"} helper="Últimas 50 da conexão" icon={Clock3} tone="info" />
       </div>
 
-      <SectionCard title={connectionMode === "reconfigure" ? "Reconfigurar conexão" : "Nova conexão"} description="Informe o Instagram ID e o Instagram User Access Token. O token anterior nunca volta a ser exibido." icon={connectionMode === "reconfigure" ? RefreshCw : Plus} className="min-w-0 overflow-hidden">
+      {adminCredentials ? <SectionCard title={connectionMode === "reconfigure" ? "Reconfigurar conexão" : "Nova conexão"} description="Informe o Instagram ID e o Instagram User Access Token. O token anterior nunca volta a ser exibido." icon={connectionMode === "reconfigure" ? RefreshCw : Plus} className="min-w-0 overflow-hidden">
         <form onSubmit={(event) => { event.preventDefault(); void saveConnection(); }} className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <label className="space-y-2"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Nome da conexão <span className="font-normal normal-case">(opcional)</span></span><input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} maxLength={160} autoComplete="off" placeholder="Ex.: Loja principal" className="fm-field w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-indigo-500" /></label>
@@ -575,10 +577,10 @@ export default function Instagram() {
             {connectionMode === "reconfigure" ? <ActionButton type="button" variant="secondary" icon={X} onClick={cancelReconfigure} disabled={connectionBusy}>Cancelar</ActionButton> : null}
           </div>
         </form>
-      </SectionCard>
+      </SectionCard> : null}
 
       <SectionCard title="Conexões da empresa" description="Selecione qual conexão será usada nas publicações, automações e no histórico abaixo." icon={InstagramIcon} actions={<ActionButton type="button" variant="secondary" icon={RefreshCw} onClick={loadConnections} disabled={loadingConnections || connectionBusy}>Atualizar</ActionButton>} className="min-w-0 overflow-hidden">
-        {loadingConnections ? <LoadingState label="Carregando conexões…" /> : connections.length ? <div className="space-y-3">{connections.map((item) => <ConnectionCard key={connectionId(item)} connection={item} selected={connectionId(item) === selectedConnectionId} busy={connectionBusy} onSelect={(connection) => setSelectedConnectionId(connectionId(connection))} onReconfigure={reconfigureConnection} onRevalidate={revalidateConnection} onRemove={removeConnection} />)}</div> : <EmptyState title="Nenhuma conexão salva" description="Use o formulário acima para salvar a primeira conexão." icon={InstagramIcon} />}
+        {loadingConnections ? <LoadingState label="Carregando conexões…" /> : connections.length ? <div className="space-y-3">{connections.map((item) => <ConnectionCard key={connectionId(item)} connection={item} selected={connectionId(item) === selectedConnectionId} busy={connectionBusy} onSelect={(connection) => setSelectedConnectionId(connectionId(connection))} onReconfigure={reconfigureConnection} onRevalidate={revalidateConnection} onRemove={removeConnection} adminCredentials={adminCredentials} />)}</div> : <EmptyState title="Nenhuma conexão salva" description={adminCredentials ? "A equipe pode cadastrar uma conexão para esta empresa." : "A equipe Ferrioli configurará a conexão para liberar as automações."} icon={InstagramIcon} />}
       </SectionCard>
 
       {!selectedConnection ? <InfoBanner tone="info" icon={ShieldCheck}>Selecione uma conexão para carregar publicações, automações e histórico.</InfoBanner> : !usableConnection ? <InfoBanner tone="warning" icon={AlertCircle}>Esta conexão não está ativa. Revalide-a antes de criar automações.</InfoBanner> : null}

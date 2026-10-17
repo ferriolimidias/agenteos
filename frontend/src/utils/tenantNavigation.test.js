@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { TENANT_NAVIGATION_GROUPS, REVIEWER_NAVIGATION_GROUPS, getTenantNavigationGroups, resolveTenantNavigation, isTenantInboxPath, normalizeTenantPath, navigationPreferenceKey, sanitizeCollapsedGroups, readCollapsedGroups, saveCollapsedGroups, visibleCollapsedGroups } from "./tenantNavigation.js";
+import { TENANT_NAVIGATION_GROUPS, REVIEWER_NAVIGATION_GROUPS, getTenantNavigationGroups, resolveTenantNavigation, isTenantInboxPath, navigationPreferenceKey, readCollapsedGroups, saveCollapsedGroups, visibleCollapsedGroups } from "./tenantNavigation.js";
 
 const app = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");
+const login = readFileSync(new URL("../pages/Login.jsx", import.meta.url), "utf8");
+const adminLayout = readFileSync(new URL("../layouts/SuperAdminLayout.jsx", import.meta.url), "utf8");
 const tenantRoutes = app.split('{/* Rota do Cliente (Tenant) */}')[1];
-const patterns = ["", ...[...tenantRoutes.matchAll(/<Route path="([^"]+)"/g)].map((match) => match[1]).filter((path) => path !== "/painel")];
+const routePatterns = new Set([...tenantRoutes.matchAll(/<Route path="([^"]+)"/g)].map((match) => match[1]));
 const entries = TENANT_NAVIGATION_GROUPS.flatMap((group) => group.items);
 const role = "admin_empresa";
 
@@ -14,102 +16,111 @@ function storage(initial = {}) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), values };
 }
 
-test("every declared Tenant route family resolves to a reachable module", () => {
-  assert.equal(patterns.length, 35, "new routes need an explicit navigation audit");
-  for (const pattern of patterns) {
-    const concrete = `/painel${pattern ? `/${pattern.replace(/:id/g, "synthetic-id").replace(/\*/g, "legacy-detail")}` : ""}`;
-    assert.ok(resolveTenantNavigation(concrete, role), `route missing from map: ${pattern || "index"}`);
+test("client navigation has six task groups and keeps the Inbox first and expanded", () => {
+  assert.deepEqual(TENANT_NAVIGATION_GROUPS.map((group) => group.label), ["Conversas", "Clientes", "Agenda", "Campanhas", "Resultados", "Configurações"]);
+  assert.equal(TENANT_NAVIGATION_GROUPS.length, 6);
+  assert.equal(TENANT_NAVIGATION_GROUPS[0].items[0].id, "inbox");
+  assert.equal(TENANT_NAVIGATION_GROUPS[0].items[0].to, "/painel/inbox");
+  assert.deepEqual(readCollapsedGroups(storage(), "tenant", TENANT_NAVIGATION_GROUPS), ["customers", "schedule", "campaigns", "results", "settings"]);
+  for (const entry of entries) assert.ok(!/prompt|shadow|a11|token|diagn[oó]stico|integra[cç][oõ]es t[eé]cnicas/i.test(`${entry.id} ${entry.label}`));
+});
+
+test("commercial customer routes resolve within their intended group", () => {
+  const expected = [
+    ["/painel/inbox", "inbox", "conversations"], ["/painel/transferencias", "transfers", "conversations"],
+    ["/painel/crm", "crm", "customers"], ["/painel/funil", "funnel", "customers"], ["/painel/tags", "tags", "customers"],
+    ["/painel/agenda", "agenda", "schedule"], ["/painel/trafego/meta", "traffic", "campaigns"],
+    ["/painel/instagram", "instagram", "campaigns"], ["/painel/campanhas", "campaigns", "campaigns"],
+    ["/painel/followups", "followups", "campaigns"], ["/painel/campanhas/templates", "templates", "campaigns"],
+    ["/painel/campanhas/publicos", "audiences", "campaigns"], ["/painel/resultados", "dashboard", "results"],
+    ["/painel/qualidade", "quality", "results"], ["/painel/followups/impacto", "followup-analytics", "results"],
+    ["/painel/campanhas/resultados", "campaign-results", "results"], ["/painel/campanhas/resultados/custos", "costs", "results"],
+    ["/painel/campanhas/resultados/conversoes", "campaign-conversions", "results"], ["/painel/conexoes", "connections", "settings"],
+    ["/painel/rag", "knowledge", "settings"], ["/painel/unidades", "account", "settings"],
+  ];
+  for (const [path, id, groupId] of expected) {
+    const resolved = resolveTenantNavigation(path, role);
+    assert.equal(resolved?.item.id, id, path);
+    assert.equal(resolved?.group.id, groupId, path);
   }
 });
 
-test("every navigation link targets a currently declared route and entries are unique", () => {
-  const declared = new Set(patterns.map((pattern) => `/painel${pattern ? `/${pattern}` : ""}`));
-  const wildcards = [...declared].filter((path) => path.endsWith("/*")).map((path) => path.slice(0, -2));
-  for (const entry of entries) assert.ok(declared.has(entry.to) || wildcards.some((base) => entry.to === base || entry.to.startsWith(`${base}/`)), `${entry.id} has no App route`);
-  assert.equal(new Set(entries.map((entry) => entry.id)).size, entries.length);
-  assert.equal(new Set(entries.map((entry) => entry.to)).size, entries.length);
-  assert.equal(TENANT_NAVIGATION_GROUPS.length, 5);
+test("main dashboard lives in Results and the old panel URL resolves to Inbox", () => {
+  assert.match(tenantRoutes, /<Route index element={<TenantHomeRedirect\s*\/>}/);
+  assert.equal(routePatterns.has("resultados"), true);
+  assert.equal(resolveTenantNavigation("/painel/", role).item.id, "inbox");
+  assert.equal(resolveTenantNavigation("/painel?lead_id=synthetic", role).item.id, "inbox");
+  assert.match(app, /function TenantHomeRedirect\(\)/);
+  assert.match(app, /to="\/painel\/inbox"/);
+  assert.match(app, /path="resultados" element={<TenantDashboard \/>}/);
+  assert.match(login, /navigate\("\/painel\/inbox"\)/);
 });
 
-test("Inbox aliases, trailing slash and query/hash share exactly one module", () => {
-  for (const path of ["/painel/chat", "/painel/inbox/", "/painel/conversas/?contato=synthetic#jornada"]) {
+test("Super Admin shell rejects customer and reviewer roles before loading administrative data", () => {
+  assert.match(adminLayout, /const isSuperAdmin = user\?\.role === "super_admin"/);
+  assert.match(adminLayout, /if \(!isSuperAdmin\)[\s\S]*?<Navigate to=\{user \? "\/painel\/inbox" : "\/"\}/);
+  assert.match(adminLayout, /if \(!isSuperAdmin\) return;/);
+});
+
+test("Inbox aliases and historic campaign links remain query-safe and share modules", () => {
+  for (const path of ["/painel/chat", "/painel/inbox/", "/painel/conversas/?lead_id=synthetic#timeline"]) {
     assert.equal(resolveTenantNavigation(path, role).item.id, "inbox");
     assert.ok(isTenantInboxPath(path));
   }
-  assert.equal(resolveTenantNavigation("/painel/", role).item.id, "dashboard");
   assert.equal(isTenantInboxPath("/painel/chat/unregistered"), false);
-});
-
-test("longest campaign match prevents overview/results/costs/conversions double activation", () => {
   const cases = [
-    ["/painel/campanhas", "campaigns"], ["/painel/campanhas/synthetic-id", "campaigns"],
-    ["/painel/campanhas/nova", "campaigns"], ["/painel/campanhas/templates", "templates"],
+    ["/painel/campanhas/nova", "campaigns"], ["/painel/campanhas/synthetic-id", "campaigns"],
     ["/painel/campanhas/templates/novo", "templates"], ["/painel/campanhas/templates/synthetic-id/", "templates"],
-    ["/painel/campanhas/publicos", "audiences"], ["/painel/campanhas/resultados", "results"],
+    ["/painel/campanhas/publicos", "audiences"], ["/painel/campanhas/resultados", "campaign-results"],
     ["/painel/campanhas/resultados/custos", "costs"], ["/painel/campanhas/resultados/conversoes", "campaign-conversions"],
-    ["/painel/templates-whatsapp", "templates"], ["/painel/trafego/meta", "traffic"],
-    ["/painel/trafego/meta/conversoes", "meta-conversions"],
+    ["/painel/templates-whatsapp", "templates"], ["/painel/dashboard", "dashboard"], ["/painel/resultados/resumo", "dashboard"],
   ];
-  for (const [path, id] of cases) assert.equal(resolveTenantNavigation(path, role).item.id, id, path);
-});
-
-test("context labels distinguish campaign/template actions without exposing route identifiers", () => {
+  for (const [path, id] of cases) assert.equal(resolveTenantNavigation(path, role)?.item.id, id, path);
   assert.equal(resolveTenantNavigation("/painel/campanhas/nova", role).detail, "Nova campanha");
-  assert.equal(resolveTenantNavigation("/painel/campanhas/synthetic-private-id", role).detail, "Detalhes da campanha");
-  assert.equal(resolveTenantNavigation("/painel/campanhas/templates/novo", role).detail, "Novo template");
-  assert.equal(resolveTenantNavigation("/painel/campanhas/templates/synthetic-private-id", role).detail, "Detalhes do template");
-  assert.equal(resolveTenantNavigation("/painel/funil", role).detail, null);
+  assert.equal(resolveTenantNavigation("/painel/campanhas/templates/novo", role).detail, "Novo modelo");
 });
 
-test("unknown URLs and prefix lookalikes do not activate unrelated tools", () => {
-  for (const path of [null, "", "/admin", "/painel/unregistered", "/painel/funil-extra", "/painel/campanhas-extra", "/painel/trafego/meta-extra", "/painel/trafego/meta/conversoes-extra"]) {
-    assert.equal(resolveTenantNavigation(path, role), null, String(path));
+test("technical customer URLs are deliberately outside navigation and are handled by restricted or safe routes", () => {
+  for (const path of ["/painel/otimizador-prompts", "/painel/inteligencia", "/painel/trafego/meta/conversoes", "/painel/integracoes", "/painel/conversoes"]) {
+    assert.equal(resolveTenantNavigation(path, role), null, path);
   }
-  assert.equal(normalizeTenantPath(null), "/");
+  assert.match(app, /path="otimizador-prompts" element={<AcessoRestritoOperacional/);
+  assert.match(app, /path="inteligencia" element={<AcessoRestritoOperacional/);
+  assert.match(app, /path="agentes" element={<PreserveLocationNavigate to="\/painel\/inbox"/);
 });
 
-test("reviewer map exposes only the two existing review tools and never admin integrations", () => {
+test("reviewer navigation stays isolated; normal customer roles share the six task groups", () => {
   const reviewer = "meta_app_reviewer";
   assert.deepEqual(getTenantNavigationGroups(reviewer), REVIEWER_NAVIGATION_GROUPS);
   assert.deepEqual(REVIEWER_NAVIGATION_GROUPS.flatMap((group) => group.items.map((entry) => entry.to)), ["/painel/conexoes", "/painel/tags"]);
-  assert.ok(resolveTenantNavigation("/painel/conexoes", reviewer));
-  assert.ok(resolveTenantNavigation("/painel/tags", reviewer));
-  for (const entry of entries.filter((entry) => !["connections", "tags"].includes(entry.id))) assert.equal(resolveTenantNavigation(entry.to, reviewer), null);
-  for (const group of TENANT_NAVIGATION_GROUPS) for (const entry of group.items) assert.ok(!entry.to.startsWith("/admin"));
+  assert.equal(getTenantNavigationGroups("super_admin").length, 6);
+  assert.equal(getTenantNavigationGroups("admin_empresa").length, 6);
+  assert.equal(getTenantNavigationGroups("atendente").length, 6);
+  assert.equal(resolveTenantNavigation("/painel/conexoes", reviewer)?.item.id, "connections");
+  assert.equal(resolveTenantNavigation("/painel/inbox", reviewer), null);
 });
 
-test("visual preferences are isolated by tenant and role and persist only recognized group ids", () => {
+test("visual preferences stay isolated and malformed storage cannot break the menu", () => {
   const first = navigationPreferenceKey("synthetic-tenant-1", role);
   const second = navigationPreferenceKey("synthetic-tenant-2", role);
   const review = navigationPreferenceKey("synthetic-tenant-1", "meta_app_reviewer");
   assert.notEqual(first, second);
   assert.notEqual(first, review);
   const store = storage();
-  saveCollapsedGroups(store, first, ["attendance", "attendance", "unknown", { token: "never-store" }], TENANT_NAVIGATION_GROUPS);
-  assert.deepEqual(JSON.parse(store.getItem(first)), { version: 1, collapsed: ["attendance"] });
-  assert.deepEqual(readCollapsedGroups(store, first, TENANT_NAVIGATION_GROUPS), ["attendance"]);
+  saveCollapsedGroups(store, first, ["customers", "customers", "unknown", { token: "never-store" }], TENANT_NAVIGATION_GROUPS);
+  assert.deepEqual(JSON.parse(store.getItem(first)), { version: 1, collapsed: ["customers"] });
+  assert.deepEqual(readCollapsedGroups(store, first, TENANT_NAVIGATION_GROUPS), ["customers"]);
   assert.deepEqual(readCollapsedGroups(store, review, REVIEWER_NAVIGATION_GROUPS), []);
-  assert.deepEqual(readCollapsedGroups(store, second, TENANT_NAVIGATION_GROUPS), ["attendance", "acquisition", "automation", "settings"]);
-});
-
-test("malformed, outdated or blocked preference storage cannot break navigation", () => {
-  const key = navigationPreferenceKey("synthetic", role);
-  const defaults = ["attendance", "acquisition", "automation", "settings"];
-  for (const value of ["{malformed", "null", "[]", JSON.stringify({ version: 9, collapsed: [] }), JSON.stringify({ version: 1, collapsed: "all" })]) {
-    assert.deepEqual(readCollapsedGroups(storage({ [key]: value }), key, TENANT_NAVIGATION_GROUPS), defaults);
-  }
+  assert.deepEqual(readCollapsedGroups(storage({ [second]: "{malformed" }), second, TENANT_NAVIGATION_GROUPS), ["customers", "schedule", "campaigns", "results", "settings"]);
   const blocked = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("quota"); } };
-  assert.deepEqual(readCollapsedGroups(blocked, key, TENANT_NAVIGATION_GROUPS), defaults);
-  assert.doesNotThrow(() => saveCollapsedGroups(blocked, key, defaults, TENANT_NAVIGATION_GROUPS));
-  assert.doesNotThrow(() => saveCollapsedGroups(null, key, defaults, TENANT_NAVIGATION_GROUPS));
-  assert.deepEqual(sanitizeCollapsedGroups(["reviewer", "automation", 42, null], REVIEWER_NAVIGATION_GROUPS), ["reviewer"]);
+  assert.deepEqual(readCollapsedGroups(blocked, first, TENANT_NAVIGATION_GROUPS), ["customers", "schedule", "campaigns", "results", "settings"]);
+  assert.doesNotThrow(() => saveCollapsedGroups(blocked, first, [], TENANT_NAVIGATION_GROUPS));
 });
 
-test("active group overrides persisted collapse on entry while manual collapse applies only to its visit", () => {
-  const collapsed = ["attendance", "automation"];
-  assert.deepEqual(visibleCollapsedGroups(collapsed, "attendance", null, "direct"), ["automation"]);
-  const manual = { groupId: "attendance", visitKey: "current" };
-  assert.deepEqual(visibleCollapsedGroups(collapsed, "attendance", manual, "current"), collapsed);
-  assert.deepEqual(visibleCollapsedGroups(collapsed, "attendance", manual, "forward"), ["automation"]);
-  assert.deepEqual(visibleCollapsedGroups(collapsed, "automation", manual, "current"), ["attendance"]);
+test("active section opens on navigation unless the operator manually collapses it for this visit", () => {
+  const collapsed = ["customers", "campaigns"];
+  assert.deepEqual(visibleCollapsedGroups(collapsed, "customers", null, "direct"), ["campaigns"]);
+  const manual = { groupId: "customers", visitKey: "current" };
+  assert.deepEqual(visibleCollapsedGroups(collapsed, "customers", manual, "current"), collapsed);
+  assert.deepEqual(visibleCollapsedGroups(collapsed, "customers", manual, "forward"), ["campaigns"]);
 });

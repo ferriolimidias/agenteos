@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import { AlertTriangle, ClipboardList, FlaskConical, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import api from "../../services/api";
 import { getActiveEmpresaId } from "../../utils/auth";
@@ -12,7 +13,9 @@ const percent = (value) => value == null ? "—" : `${(value * 100).toLocaleStri
 const textError = (error) => error?.response?.data?.detail?.code || error?.response?.data?.detail || "Não foi possível concluir a operação.";
 
 export default function PromptOptimizer() {
-  const [tenant, setTenant] = useState(getActiveEmpresaId);
+  const { empresaId: routeTenant } = useParams();
+  const activeTenant = routeTenant || getActiveEmpresaId();
+  const [tenant, setTenant] = useState(activeTenant);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -34,21 +37,25 @@ export default function PromptOptimizer() {
         api.get(`/empresas/${tenant}/prompt-optimizer`),
         api.get(`/empresas/${tenant}/prompt-optimizer/evaluator/models`).catch(() => ({ data: { items: [] } })),
       ]);
-      if (getActiveEmpresaId() === tenant) {
+      if (activeTenant === tenant) {
         setData(dashboardResponse.data);
         setEvaluatorModels(Array.isArray(modelResponse.data?.items) ? modelResponse.data.items : []);
         setEvaluatorModelId((current) => current || dashboardResponse.data?.evaluator?.model_id || "");
       }
     } catch (caught) {
-      if (getActiveEmpresaId() === tenant) setError(textError(caught));
-    } finally { if (getActiveEmpresaId() === tenant) setLoading(false); }
-  }, [tenant]);
+      if (activeTenant === tenant) setError(textError(caught));
+    } finally { if (activeTenant === tenant) setLoading(false); }
+  }, [activeTenant, tenant]);
 
   useEffect(() => {
+    if (routeTenant) {
+      setTenant(routeTenant);
+      return undefined;
+    }
     const update = () => setTenant(getActiveEmpresaId());
     window.addEventListener("storage", update);
     return () => window.removeEventListener("storage", update);
-  }, []);
+  }, [routeTenant]);
   useEffect(() => { load(); }, [load]);
 
   const modules = data?.modules || EMPTY_MODULES;

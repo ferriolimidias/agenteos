@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routers.auth import require_tenant_access
+from app.api.routers.auth import require_super_admin, require_tenant_access
 from app.services.instagram_simple import (
     InstagramGraphClient,
     InstagramGraphError,
@@ -23,7 +23,7 @@ from app.services.instagram_simple import (
     serialize_connection,
 )
 from db.database import get_db
-from db.models import Conexao, InstagramCommentAutomation, InstagramCommentExecution, TipoConexao, Usuario
+from db.models import Conexao, InstagramCommentAutomation, InstagramCommentExecution, TipoConexao, Usuario, is_root_admin_email, is_super_admin_role
 
 router = APIRouter(prefix="/api/empresas/{empresa_id}/instagram", tags=["Instagram"])
 logger = logging.getLogger(__name__)
@@ -202,20 +202,24 @@ def _automation_payload(row: InstagramCommentAutomation) -> dict[str, Any]:
 
 @router.get("/connections")
 async def list_connections(
-    empresa_id: str, db: AsyncSession = Depends(get_db), _: Usuario = Depends(require_tenant_access),
+    empresa_id: str, db: AsyncSession = Depends(get_db), current_user: Usuario = Depends(require_tenant_access),
 ):
     empresa = _empresa_id(empresa_id)
     rows = (await db.execute(select(Conexao).where(
         Conexao.empresa_id == empresa, Conexao.tipo == TipoConexao.INSTAGRAM,
         Conexao.channel == "instagram", Conexao.provider == "meta_instagram",
     ).order_by(Conexao.criado_em.asc()))).scalars().all()
-    return {"success": True, "connections": [serialize_connection(row) for row in rows]}
+    serialized = [serialize_connection(row) for row in rows]
+    if not (is_root_admin_email(current_user.email) or is_super_admin_role(current_user.role)):
+        allowed_fields = {"id", "connection_id", "name", "status", "instagram_username"}
+        serialized = [{key: value for key, value in item.items() if key in allowed_fields} for item in serialized]
+    return {"success": True, "connections": serialized}
 
 
 @router.post("/connection", status_code=201)
 async def save_connection(
     empresa_id: str, payload: SaveConnectionInput, db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    _: Usuario = Depends(require_tenant_access), __: Usuario = Depends(require_super_admin),
 ):
     tenant_id = _empresa_id(empresa_id)
     try:
@@ -239,7 +243,7 @@ async def save_connection(
 @router.post("/connection/{connection_id}/revalidate")
 async def revalidate(
     empresa_id: str, connection_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    _: Usuario = Depends(require_tenant_access), __: Usuario = Depends(require_super_admin),
 ):
     connection = await get_connection(db, _empresa_id(empresa_id), connection_id)
     if not connection:
@@ -257,6 +261,7 @@ async def revalidate(
 async def reconfigure(
     empresa_id: str, connection_id: uuid.UUID, payload: SaveConnectionInput,
     db: AsyncSession = Depends(get_db), _: Usuario = Depends(require_tenant_access),
+    __: Usuario = Depends(require_super_admin),
 ):
     tenant_id = _empresa_id(empresa_id)
     try:
@@ -279,7 +284,7 @@ async def reconfigure(
 @router.delete("/connection/{connection_id}")
 async def delete_connection(
     empresa_id: str, connection_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(require_tenant_access),
+    _: Usuario = Depends(require_tenant_access), __: Usuario = Depends(require_super_admin),
 ):
     connection = await get_connection(db, _empresa_id(empresa_id), connection_id)
     if not connection:
