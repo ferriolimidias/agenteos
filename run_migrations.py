@@ -107,6 +107,7 @@ async def run_migrations():
             Path(__file__).resolve().parent / "db/migrations/2026_10_12_001_jev_tenant_config.sql",
             Path(__file__).resolve().parent / "db/migrations/2026_10_15_001_a11_prompt_optimizer_openai_catalog.sql",
             Path(__file__).resolve().parent / "db/migrations/2026_10_15_002_model_reasoning_effort.sql",
+            Path(__file__).resolve().parent / "db/migrations/2026_10_17_001_meta_system_user_central_assets.sql",
         )
         for migration in migrations:
             await _apply_registered_migration(conn, migration)

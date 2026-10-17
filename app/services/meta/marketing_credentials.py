@@ -16,11 +16,15 @@ from app.services.meta.settings import meta_settings
 from db.models import (
     Conexao,
     MetaMarketingTenantAccountGrant,
+    MetaPlatformAsset,
+    MetaSystemUserCredential,
+    MetaTenantAssetLink,
     TipoConexao,
     TrafficMetaConfig,
 )
 
 ADMIN_MARKETING_SOURCE = "admin_managed_marketing_token"
+SYSTEM_USER_MARKETING_SOURCE = "admin_managed_system_user_token"
 TENANT_MARKETING_SOURCE = "tenant_marketing_oauth"
 EMBEDDED_SIGNUP_TENANT = "embedded_signup_tenant"  # legacy display/source compatibility only
 META_MARKETING_CHANNEL = "marketing_ads"
@@ -89,10 +93,11 @@ def _admin_token() -> str:
 
 
 def marketing_admin_status(empresa_id: Any) -> dict[str, Any]:
-    """Report availability without treating the process token as authorization."""
+    """Legacy environment credential status; never means a tenant is authorized."""
     del empresa_id
     return {
         "credential_source": ADMIN_MARKETING_SOURCE,
+        "legacy_env_token_configured": bool(_admin_token()),
         "admin_token_configured": bool(_admin_token()),
         "tenant_allowlist_required": True,
         "tenant_account_binding_required": True,
@@ -148,6 +153,44 @@ class MarketingCredentialResolver:
         if not business_id:
             raise MetaCredentialResolutionError("BUSINESS_BINDING_REQUIRED")
 
+        central: MetaSystemUserCredential | None = None
+        central_asset_linked = False
+        # Keep a malformed/legacy caller from surfacing an AttributeError. The
+        # operational routes pass an AsyncSession; without it we simply skip
+        # central credential discovery and fail closed at the grant boundary.
+        if (
+            allow_admin_fallback
+            and callable(getattr(session, "scalar", None))
+            and callable(getattr(session, "execute", None))
+        ):
+            central = await session.scalar(
+                select(MetaSystemUserCredential).where(MetaSystemUserCredential.id == 1)
+            )
+            if central is not None:
+                central_link_result = await session.execute(
+                    select(MetaTenantAssetLink.id)
+                    .join(MetaPlatformAsset, MetaPlatformAsset.id == MetaTenantAssetLink.asset_id)
+                    .where(
+                        MetaTenantAssetLink.empresa_id == empresa_id,
+                        MetaPlatformAsset.asset_type == "ad_account",
+                        MetaPlatformAsset.external_id == configured_account,
+                    )
+                )
+                central_asset_linked = central_link_result.scalar_one_or_none() is not None
+                if central_asset_linked:
+                    # Once this exact account is linked to the central System
+                    # User credential, that mapping is authoritative. A stale
+                    # or disabled link must fail closed, never fall through to
+                    # a different token for the same configured account.
+                    return await self._authorized_admin_credential(
+                        session,
+                        capability=required,
+                        tenant_id=tenant_id,
+                        empresa_id=empresa_id,
+                        business_id=business_id,
+                        ad_account_id=configured_account,
+                    )
+
         connection = await self._embedded_connection(session, empresa_id)
         tenant_credential = self._tenant_marketing_credential(
             tenant_id, connection, required, business_id, configured_account
@@ -163,10 +206,18 @@ class MarketingCredentialResolver:
             if tenant_credential is not None:
                 return tenant_credential
 
-        if required != MetaMarketingCapability.ADS_READ or not allow_admin_fallback:
+        if not allow_admin_fallback:
             raise MetaCredentialResolutionError("TENANT_MARKETING_CREDENTIAL_UNAVAILABLE")
+        if central is not None and not central_asset_linked:
+            # A configured platform credential does not authorize every
+            # tenant. Preserve an existing tenant credential until a Super
+            # Admin explicitly links this account; do not fall back to a
+            # process-wide environment token while the central DB credential
+            # is present but unbound.
+            raise MetaCredentialResolutionError("ADMIN_MARKETING_ASSET_NOT_LINKED")
         return await self._authorized_admin_credential(
             session,
+            capability=required,
             tenant_id=tenant_id,
             empresa_id=empresa_id,
             business_id=business_id,
@@ -294,13 +345,13 @@ class MarketingCredentialResolver:
         self,
         session: AsyncSession,
         *,
+        capability: MetaMarketingCapability,
         tenant_id: str,
         empresa_id: Any,
         business_id: str,
         ad_account_id: str,
     ) -> ResolvedMetaMarketingCredential:
-        token = _admin_token()
-        if not token:
+        if not callable(getattr(session, "scalar", None)) or not callable(getattr(session, "execute", None)):
             raise MetaCredentialResolutionError("MARKETING_CREDENTIAL_UNAVAILABLE")
         grant = await session.scalar(
             select(MetaMarketingTenantAccountGrant).where(
@@ -308,11 +359,90 @@ class MarketingCredentialResolver:
                 MetaMarketingTenantAccountGrant.business_id == business_id,
                 MetaMarketingTenantAccountGrant.ad_account_id == ad_account_id,
                 MetaMarketingTenantAccountGrant.credential_source == "ADMIN_MANAGED_MARKETING_TOKEN",
-                MetaMarketingTenantAccountGrant.read_enabled.is_(True),
             )
         )
         if grant is None or not grant.verified_at:
             raise MetaCredentialResolutionError("ADMIN_MARKETING_BUSINESS_BINDING_REQUIRED")
+        if capability == MetaMarketingCapability.ADS_READ and not grant.read_enabled:
+            raise MetaCredentialResolutionError("ADMIN_MARKETING_READ_NOT_ENABLED")
+        if capability == MetaMarketingCapability.ADS_MANAGEMENT and not grant.write_enabled:
+            raise MetaCredentialResolutionError("ADMIN_MARKETING_WRITE_NOT_ENABLED")
+
+        central = await session.scalar(
+            select(MetaSystemUserCredential).where(MetaSystemUserCredential.id == 1)
+        )
+        if central is not None:
+            link_result = await session.execute(
+                select(MetaTenantAssetLink, MetaPlatformAsset)
+                .join(MetaPlatformAsset, MetaPlatformAsset.id == MetaTenantAssetLink.asset_id)
+                .where(
+                    MetaTenantAssetLink.empresa_id == empresa_id,
+                    MetaPlatformAsset.asset_type == "ad_account",
+                    MetaPlatformAsset.external_id == ad_account_id,
+                )
+            )
+            linked = link_result.first()
+            if linked is None:
+                raise MetaCredentialResolutionError("ADMIN_MARKETING_ASSET_NOT_LINKED")
+            link, asset = linked
+            if not link.read_enabled or asset.access_state != "verified":
+                raise MetaCredentialResolutionError("ADMIN_MARKETING_ASSET_ACCESS_UNVERIFIED")
+            authorized_businesses = {
+                str(item.get("business_id") or "").strip()
+                for item in (asset.business_access_json or [])
+                if isinstance(item, dict)
+            }
+            if business_id not in authorized_businesses:
+                raise MetaCredentialResolutionError("ADMIN_MARKETING_ASSET_BUSINESS_MISMATCH")
+            if link.write_enabled != bool(grant.write_enabled) and capability == MetaMarketingCapability.ADS_MANAGEMENT:
+                raise MetaCredentialResolutionError("ADMIN_MARKETING_WRITE_GRANT_MISMATCH")
+            if central.permissions_status != "verified":
+                raise MetaCredentialResolutionError("META_PERMISSIONS_NOT_VERIFIED")
+            permissions = {str(item).strip() for item in (central.granted_permissions or [])}
+            if capability == MetaMarketingCapability.ADS_READ and not supports_ads_read(permissions):
+                raise MetaCredentialResolutionError("META_ADS_READ_PERMISSION_MISSING")
+            if capability == MetaMarketingCapability.ADS_MANAGEMENT and "ads_management" not in permissions:
+                raise MetaCredentialResolutionError("META_ADS_MANAGEMENT_PERMISSION_MISSING")
+            if capability == MetaMarketingCapability.BUSINESS_MANAGEMENT:
+                business_link_result = await session.execute(
+                    select(MetaTenantAssetLink, MetaPlatformAsset)
+                    .join(MetaPlatformAsset, MetaPlatformAsset.id == MetaTenantAssetLink.asset_id)
+                    .where(
+                        MetaTenantAssetLink.empresa_id == empresa_id,
+                        MetaTenantAssetLink.read_enabled.is_(True),
+                        MetaPlatformAsset.asset_type == "business",
+                        MetaPlatformAsset.external_id == business_id,
+                        MetaPlatformAsset.access_state == "verified",
+                    )
+                )
+                if business_link_result.first() is None:
+                    raise MetaCredentialResolutionError("ADMIN_MARKETING_BUSINESS_ASSET_NOT_LINKED")
+                if "business_management" not in permissions:
+                    raise MetaCredentialResolutionError("META_BUSINESS_MANAGEMENT_PERMISSION_MISSING")
+            try:
+                token = decrypt_meta_secret(central.encrypted_access_token)
+            except MetaCredentialCryptoError as exc:
+                raise MetaCredentialResolutionError("MARKETING_CREDENTIAL_INVALID") from exc
+            return ResolvedMetaMarketingCredential(
+                SYSTEM_USER_MARKETING_SOURCE,
+                token,
+                tenant_id,
+                capability,
+                meta_settings().marketing_graph_api_version,
+                business_id=business_id,
+                ad_account_id=ad_account_id,
+                # The central credential is write-capable only for an explicit
+                # ADS_MANAGEMENT request whose tenant grant and deployment
+                # gates are also satisfied. Business-level auditing stays GET-only.
+                read_only=capability != MetaMarketingCapability.ADS_MANAGEMENT,
+            )
+
+        # Transition compatibility for an existing centrally managed token
+        # supplied only through the old process environment. It remains
+        # read-only and requires the same previously verified tenant grant.
+        token = _admin_token()
+        if not token or capability != MetaMarketingCapability.ADS_READ:
+            raise MetaCredentialResolutionError("MARKETING_CREDENTIAL_UNAVAILABLE")
         return ResolvedMetaMarketingCredential(
             ADMIN_MARKETING_SOURCE,
             token,

@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    ForeignKeyConstraint,
     event,
 )
 from sqlalchemy import (
@@ -504,8 +505,114 @@ class MetaMarketingTenantAccountGrant(Base):
     ad_account_id = Column(String(100), nullable=False)
     credential_source = Column(String(48), nullable=False, server_default=sa_text("'ADMIN_MANAGED_MARKETING_TOKEN'"))
     read_enabled = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    # Central System User credentials may write only after a Super Admin has
+    # explicitly enabled this grant and Meta confirms ads_management.
+    write_enabled = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
     verification_method = Column(String(40), nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
+
+
+class MetaSystemUserCredential(Base):
+    """Single Ferrioli-managed Meta System User credential; never tenant-scoped."""
+
+    __tablename__ = "meta_system_user_credentials"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_meta_system_user_credential_singleton"),)
+
+    id = Column(Integer, primary_key=True, default=1)
+    encrypted_access_token = Column(Text, nullable=False)
+    token_hint = Column(String(16), nullable=False)
+    system_user_id = Column(String(100), nullable=True)
+    system_user_name = Column(String(200), nullable=True)
+    app_id = Column(String(100), nullable=True)
+    app_name = Column(String(200), nullable=True)
+    granted_permissions = Column(JSONB, nullable=False, default=list, server_default=sa_text("'[]'::jsonb"))
+    permissions_status = Column(String(24), nullable=False, default="unknown", server_default=sa_text("'unknown'"))
+    permissions_error_code = Column(String(48), nullable=True)
+    expiry_status = Column(String(40), nullable=False, default="unknown", server_default=sa_text("'unknown'"))
+    validated_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
+    updated_by_user_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True)
+
+
+class MetaPlatformAsset(Base):
+    """Sanitized metadata for an asset returned by the central System User."""
+
+    __tablename__ = "meta_platform_assets"
+    __table_args__ = (
+        UniqueConstraint("asset_type", "external_id", name="uq_meta_platform_asset_type_external_id"),
+        UniqueConstraint("id", "asset_type", name="uq_meta_platform_asset_id_type"),
+        CheckConstraint(
+            "asset_type IN ('business','ad_account','page','instagram_account','dataset','pixel')",
+            name="ck_meta_platform_asset_type",
+        ),
+        Index("ix_meta_platform_assets_type_access", "asset_type", "access_state"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asset_type = Column(String(32), nullable=False)
+    external_id = Column(String(120), nullable=False)
+    name = Column(String(240), nullable=True)
+    business_id = Column(String(120), nullable=True)
+    business_name = Column(String(240), nullable=True)
+    business_access_json = Column(JSONB, nullable=False, default=list, server_default=sa_text("'[]'::jsonb"))
+    access_state = Column(String(40), nullable=False, default="verified", server_default=sa_text("'verified'"))
+    access_path = Column(String(48), nullable=True)
+    permissions_json = Column(JSONB, nullable=False, default=list, server_default=sa_text("'[]'::jsonb"))
+    metadata_json = Column(JSONB, nullable=False, default=dict, server_default=sa_text("'{}'::jsonb"))
+    discovered_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
+    last_verified_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
+
+
+class MetaTenantAssetLink(Base):
+    """Explicit, exclusive mapping from a verified Meta asset to one tenant."""
+
+    __tablename__ = "meta_tenant_asset_links"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "asset_id", name="uq_meta_tenant_asset_link_company_asset"),
+        Index(
+            "uq_meta_tenant_asset_link_exclusive_asset",
+            "asset_id",
+            unique=True,
+            postgresql_where=sa_text("asset_type <> 'business'"),
+        ),
+        Index("ix_meta_tenant_asset_links_empresa", "empresa_id"),
+        ForeignKeyConstraint(
+            ["asset_id", "asset_type"],
+            ["meta_platform_assets.id", "meta_platform_assets.asset_type"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="CASCADE"), nullable=False)
+    asset_id = Column(UUID(as_uuid=True), nullable=False)
+    asset_type = Column(String(32), nullable=False)
+    read_enabled = Column(Boolean, nullable=False, default=True, server_default=sa_text("true"))
+    write_enabled = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    verified_at = Column(DateTime(timezone=True), nullable=False)
+    linked_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
+    linked_by_user_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True)
+
+
+class MetaSystemUserAudit(Base):
+    """Secret-free audit trail for System User credential and tenant asset changes."""
+
+    __tablename__ = "meta_system_user_audit"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('credential_saved','credential_revoked','assets_discovered','asset_id_validated','tenant_assets_linked')",
+            name="ck_meta_system_user_audit_action",
+        ),
+        Index("ix_meta_system_user_audit_created_at", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True)
+    empresa_id = Column(UUID(as_uuid=True), ForeignKey("empresas.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(40), nullable=False)
+    details_json = Column(JSONB, nullable=False, default=dict, server_default=sa_text("'{}'::jsonb"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=sa_text("now()"))
 
 

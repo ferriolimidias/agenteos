@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Instagram, MessageCircle, RefreshCw, Search, Settings2, ShoppingBag } from "lucide-react";
 import api from "../../services/api";
 import { ActionButton, EmptyState, ErrorState, Input, LoadingState, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
+import MetaSystemUserAdmin from "./MetaSystemUserAdmin";
 
 const readinessLabel = (value) => {
   const status = String(value || "").toUpperCase();
@@ -39,7 +40,7 @@ export default function IntegracoesGlobais() {
       const response = await api.get("/empresas/");
       const rows = Array.isArray(response.data) ? response.data.map(({ id, nome_empresa }) => ({ id, nome_empresa })) : [];
       setCompanies(rows);
-      setSelectedCompanyId((current) => rows.some((item) => item.id === current) ? current : "");
+      setSelectedCompanyId((current) => rows.some((item) => item.id === current) ? current : (rows[0]?.id || ""));
     } catch {
       setError(true);
     } finally {
@@ -103,13 +104,14 @@ export default function IntegracoesGlobais() {
   const savedConfig = metaConfig?.config || {};
 
   return <div className="fm-admin-page">
-    <PageHeader eyebrow="Plataforma Ferrioli" title="Integrações" icon={Settings2} description="Consulte credenciais, permissões e vínculos salvos sem expor tokens. Consultas à Meta são limitadas a uma empresa e começam somente quando você as solicita." actions={<ActionButton type="button" variant="secondary" onClick={loadCompanies} disabled={loading} icon={RefreshCw}>Atualizar empresas</ActionButton>} />
-    <SectionCard title="Integrações globais da plataforma" description="Este resumo mostra somente presença de configuração e controles de operação. Nenhum segredo é retornado; credenciais Marketing, Instagram e JEV continuam no escopo de cada empresa.">
+    <PageHeader eyebrow="Plataforma Ferrioli" title="Integrações" icon={Settings2} description="Administre a credencial central Meta e os vínculos de ativos por empresa sem expor segredos. Consultas à Meta são iniciadas somente por ação explícita." actions={<ActionButton type="button" variant="secondary" onClick={loadCompanies} disabled={loading} icon={RefreshCw}>Atualizar empresas</ActionButton>} />
+    <MetaSystemUserAdmin companies={companies} selectedCompanyId={selectedCompanyId} />
+    <SectionCard title="Integrações globais da plataforma" description="Este resumo mostra somente presença de configuração e controles de operação. Nenhum segredo é retornado; Marketing usa a credencial central com vínculos explícitos, enquanto Instagram e JEV mantêm seus contratos próprios.">
       {globalStatusLoading ? <LoadingState label="Consultando configurações compartilhadas..." /> : globalStatusError ? <ErrorState title="Estado global indisponível" description="Não foi possível consultar as configurações compartilhadas." action={<ActionButton type="button" onClick={loadGlobalStatus}>Tentar novamente</ActionButton>} /> : globalStatus ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <article className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">Aplicativo Meta</p><StatusBadge tone={globalStatus.meta?.public_configuration_ready ? "success" : "warning"}>{globalStatus.meta?.public_configuration_ready ? "Configuração pública presente" : "Configuração pública incompleta"}</StatusBadge><p className="mt-2 text-xs text-slate-600">Configuração de servidor: {globalStatus.meta?.server_configuration_ready ? "presente" : "incompleta"}</p><p className="mt-1 text-xs text-slate-600">Graph API {globalStatus.meta?.graph_api_version || "não informada"} · Marketing {globalStatus.meta?.marketing_graph_api_version || "não informada"}</p></article>
         <article className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">Controles de escrita Meta</p><StatusBadge tone={globalStatus.meta?.marketing_write_enabled ? "warning" : "success"}>{globalStatus.meta?.marketing_write_enabled ? "Escrita Marketing habilitada" : "Escrita Marketing bloqueada"}</StatusBadge><p className="mt-2 text-xs text-slate-600">Ações gerais LIVE: {globalStatus.meta?.live_actions_enabled ? "habilitadas" : "bloqueadas"}</p><p className="mt-1 text-xs text-slate-600">Campanha: {globalStatus.meta?.campaign_create_enabled ? "habilitada" : "bloqueada"} · Anúncio: {globalStatus.meta?.ad_create_enabled ? "habilitado" : "bloqueado"}</p></article>
         <article className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">OpenAI global</p><StatusBadge tone={globalStatus.openai?.global_credential_configured ? "info" : "warning"}>{globalStatus.openai?.global_credential_configured ? "Credencial configurada" : "Sem credencial global"}</StatusBadge><p className="mt-2 text-xs text-slate-600">O seletor mostra apenas o estado; o valor não é exposto.</p></article>
-        <article className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">Escopo das integrações</p><p className="mt-1 text-sm text-slate-800">Marketing, Instagram e JEV são configurados por empresa.</p><p className="mt-1 text-xs text-slate-600">A credencial WhatsApp permanece no fluxo do canal correspondente.</p></article>
+        <article className="rounded-lg border border-slate-200 bg-white p-3"><p className="text-xs text-slate-500">Escopo das integrações</p><p className="mt-1 text-sm text-slate-800">Marketing usa a credencial central e vínculos por empresa.</p><p className="mt-1 text-xs text-slate-600">Instagram automações e WhatsApp mantêm suas credenciais próprias.</p></article>
       </div> : null}
       <div className="mt-4 flex flex-wrap gap-2">
       <Link to="/admin/configuracoes" className="fm-button fm-button-secondary">Abrir configurações da plataforma</Link>
@@ -120,7 +122,7 @@ export default function IntegracoesGlobais() {
       <label className="fm-admin-field"><span>Buscar empresa</span><div className="relative"><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><Input type="search" className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou identificador" /></div></label>
       {loading ? <LoadingState label="Carregando empresas..." /> : error ? <ErrorState title="Lista indisponível" description="Não foi possível carregar a lista de empresas." action={<ActionButton type="button" onClick={loadCompanies}>Tentar novamente</ActionButton>} /> : visible.length === 0 ? <EmptyState title={companies.length ? "Nenhuma empresa encontrada" : "Nenhuma empresa cadastrada"} description={companies.length ? "Ajuste a busca para encontrar uma empresa." : "A lista não contém empresas cadastradas."} action={companies.length ? <ActionButton type="button" variant="secondary" onClick={() => setSearch("")}>Limpar busca</ActionButton> : null} /> : <ul className="fm-admin-company-picker">
         {visible.map((company) => <li key={company.id}>
-          <div><h2>{company.nome_empresa || "Empresa sem nome"}</h2><p className="fm-helper">A conexão será administrada no escopo desta empresa.</p></div>
+          <div><h2>{company.nome_empresa || "Empresa sem nome"}</h2><p className="fm-helper">Consulte o estado da empresa ou selecione seus ativos Meta na seção de Usuário do Sistema.</p></div>
           <div className="flex flex-wrap gap-2">
             <ActionButton type="button" variant={selectedCompanyId === company.id ? "primary" : "secondary"} aria-pressed={selectedCompanyId === company.id} onClick={() => { setSelectedCompanyId(company.id); setIntegrationStatus(null); setStatusError(""); }}>Ver integrações</ActionButton>
           </div>

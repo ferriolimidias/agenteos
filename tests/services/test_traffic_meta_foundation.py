@@ -162,7 +162,15 @@ class TrafficMetaFoundationTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_fallback_is_global_for_new_tenants_and_assets(self):
         resolver = MetaMarketingCredentialResolver()
         config = type("Config", (), {"ad_account_id": "999", "business_id": "business-a"})()
-        session = type("Session", (), {"scalar": AsyncMock(return_value=None)})()
+        empty_result = type("Result", (), {
+            "scalar_one_or_none": lambda self: None,
+            "scalars": lambda self: type("Scalars", (), {"all": lambda self: []})(),
+            "first": lambda self: None,
+        })()
+        session = type("Session", (), {
+            "scalar": AsyncMock(side_effect=[None, None]),
+            "execute": AsyncMock(return_value=empty_result),
+        })()
         with self._admin_env("tenant-a", META_MARKETING_ADMIN_TEST_TENANT_IDS="different", META_MARKETING_ADMIN_AD_ACCOUNT_IDS="111"):
             with patch.object(resolver, "_embedded_connection", AsyncMock(return_value=None)):
                 with patch.object(resolver, "_tenant_config", AsyncMock(return_value=config)):
@@ -276,11 +284,20 @@ class TrafficMetaFoundationTests(unittest.IsolatedAsyncioTestCase):
         from app.services.meta.marketing_credentials import MetaMarketingCapability, MetaMarketingCredentialResolver
         resolver = MetaMarketingCredentialResolver()
         config = type("Config", (), {"ad_account_id": "123", "business_id": "business-1"})()
+        empty_result = type("Result", (), {
+            "scalar_one_or_none": lambda self: None,
+            "scalars": lambda self: type("Scalars", (), {"all": lambda self: []})(),
+            "first": lambda self: None,
+        })()
+        session = type("Session", (), {
+            "scalar": AsyncMock(side_effect=[None, None]),
+            "execute": AsyncMock(return_value=empty_result),
+        })()
         with patch.dict(os.environ, {"META_MARKETING_ADMIN_ACCESS_TOKEN": "admin-token"}, clear=False):
             with patch.object(resolver, "_embedded_connection", AsyncMock(return_value=None)):
                 with patch.object(resolver, "_tenant_config", AsyncMock(return_value=config)):
-                    with self.assertRaisesRegex(Exception, "TENANT_MARKETING_CREDENTIAL_UNAVAILABLE"):
-                        await resolver.resolve(object(), "tenant-a", MetaMarketingCapability.ADS_MANAGEMENT, allow_admin_fallback=True)
+                    with self.assertRaisesRegex(Exception, "ADMIN_MARKETING_BUSINESS_BINDING_REQUIRED"):
+                        await resolver.resolve(session, "tenant-a", MetaMarketingCapability.ADS_MANAGEMENT, allow_admin_fallback=True)
 
     def test_generated_names_are_normalized_and_distinct_for_multiple_ads(self):
         company_id = "a7384cb4-98b2-4750-94bc-3b329d35156d"

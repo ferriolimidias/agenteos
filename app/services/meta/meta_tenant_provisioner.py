@@ -77,12 +77,22 @@ async def audit_business_meta_surfaces(
         session,
         empresa_id,
         MetaMarketingCapability.BUSINESS_MANAGEMENT,
+        # Central access is still gated by an exact tenant ad-account grant,
+        # verified Business link, read_enabled, and business_management.
+        allow_admin_fallback=True,
     )
     client = MetaMarketingApiClient(
         credential.access_token,
         graph_version=credential.graph_version,
     )
-    ids = [str(item).strip() for item in (business_ids or []) if str(item).strip()]
+    # Never let a caller use this resolved tenant credential to enumerate a
+    # different Business ID, even if the central System User can see it.
+    authorized_business_id = str(credential.business_id or "").strip()
+    ids = sorted({
+        str(item).strip()
+        for item in (business_ids or [])
+        if str(item).strip() == authorized_business_id
+    })
     result: dict[str, Any] = {"credential": credential.sanitized_metadata(), "businesses": {}}
     for business_id in ids:
         surfaces: dict[str, Any] = {}

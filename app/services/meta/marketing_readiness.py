@@ -14,6 +14,7 @@ from app.services.meta.marketing_credentials import (
     ADMIN_MARKETING_SOURCE,
     META_MARKETING_OAUTH_PERMISSIONS,
     MetaMarketingCredentialResolver,
+    SYSTEM_USER_MARKETING_SOURCE,
     supports_ads_read,
 )
 from app.services.meta.settings import meta_settings
@@ -145,6 +146,8 @@ async def marketing_ads_readiness(
             status = "BUSINESS_BINDING_REQUIRED"
         elif code in {"AD_ACCOUNT_NOT_CONFIGURED", "MARKETING_ACCOUNT_OUT_OF_SCOPE"}:
             status = "CONFIG_INVALID" if code == "AD_ACCOUNT_NOT_CONFIGURED" else "ASSET_ACCESS_REQUIRED"
+        elif code in {"ADMIN_MARKETING_ASSET_NOT_LINKED", "ADMIN_MARKETING_ASSET_ACCESS_UNVERIFIED", "ADMIN_MARKETING_ASSET_BUSINESS_MISMATCH"}:
+            status = "ASSET_ACCESS_REQUIRED"
         elif code in {"MARKETING_CREDENTIAL_INVALID", "CREDENTIAL_INVALID"}:
             status = "REAUTH_MARKETING_REQUIRED"
         elif code in {"MARKETING_CREDENTIAL_UNAVAILABLE", "TENANT_MARKETING_CREDENTIAL_UNAVAILABLE", "CREDENTIAL_NOT_CONFIGURED"}:
@@ -171,7 +174,12 @@ async def marketing_ads_readiness(
         "token_present": True,
         "token_source": credential.credential_source,
         "credential_source": credential.credential_source,
-        "token_type": "SYSTEM_USER" if credential.credential_source == ADMIN_MARKETING_SOURCE else "TENANT_MARKETING_OAUTH",
+        # The credential source is centrally managed, but Graph's /me and
+        # permissions edges do not prove that the underlying Meta principal is
+        # a System User or belongs to the Ferrioli Business.
+        "token_type": "CENTRAL_META_CREDENTIAL" if credential.credential_source == SYSTEM_USER_MARKETING_SOURCE else (
+            "ADMIN_MANAGED_MARKETING" if credential.credential_source == ADMIN_MARKETING_SOURCE else "TENANT_MARKETING_OAUTH"
+        ),
     })
     try:
         permissions = granted_permissions(await client.get_permissions())
@@ -195,12 +203,20 @@ async def marketing_ads_readiness(
             base["marketing_readiness_status"] = "ASSET_ACCESS_REQUIRED"
             base["action_required"] = "A conta de anúncios está desativada, restrita ou sem acesso ativo."
             return base
-        bound, method = await _business_account_binding(
-            client,
-            expected_business_id=str(config.business_id).strip(),
-            configured_account_id=str(config.ad_account_id),
-            actual_account=account,
-        )
+        if credential.credential_source == SYSTEM_USER_MARKETING_SOURCE:
+            # The System User resolver has already required an exact, verified
+            # tenant-to-account link and checked that the selected Business is
+            # one of the Graph access contexts for this account. Do not issue a
+            # second Business edge request that may require an extra scope and
+            # contradict that verified grant.
+            bound, method = True, "explicit_tenant_asset_link"
+        else:
+            bound, method = await _business_account_binding(
+                client,
+                expected_business_id=str(config.business_id).strip(),
+                configured_account_id=str(config.ad_account_id),
+                actual_account=account,
+            )
         if not bound:
             base["business_binding"] = "unverified"
             base["marketing_readiness_status"] = "BUSINESS_BINDING_REQUIRED"
@@ -256,7 +272,9 @@ async def marketing_ads_readiness(
         base["graph_pages_read"] = pages[0]
         return base
 
-    state = "READY_ADMIN_MANAGED_READ" if credential.credential_source == ADMIN_MARKETING_SOURCE else "READY_TENANT_OAUTH"
+    state = "READY_ADMIN_MANAGED_READ" if credential.credential_source in {
+        ADMIN_MARKETING_SOURCE, SYSTEM_USER_MARKETING_SOURCE,
+    } else "READY_TENANT_OAUTH"
     base["marketing_readiness_status"] = state
     base["status"] = "READY"
     base["credential_error"] = None

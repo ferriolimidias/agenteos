@@ -41,6 +41,7 @@ from app.services.meta.marketing_credentials import (
     EMBEDDED_SIGNUP_TENANT,
     MetaMarketingCapability,
     MetaMarketingCredentialResolver,
+    SYSTEM_USER_MARKETING_SOURCE,
     marketing_admin_status,
 )
 from app.services.meta.marketing_readiness import marketing_ads_readiness
@@ -77,6 +78,8 @@ from db.models import (
     CRMLead,
     Empresa,
     MetaConversionEvent,
+    MetaPlatformAsset,
+    MetaTenantAssetLink,
     TipoConexao,
     TrafficMetaConfig,
     TrafficMetaCampaignCreation,
@@ -231,6 +234,37 @@ def _settings_flags() -> dict[str, bool]:
         "ad_create_enabled": settings.marketing_ad_create_enabled,
         "existing_post_ads_enabled": settings.existing_post_ads_enabled,
     }
+
+
+async def _campaign_creation_available(
+    session: AsyncSession,
+    empresa_id: uuid.UUID,
+    config: TrafficMetaConfig | None,
+) -> bool:
+    """Expose only the campaign write path the tenant can currently reach.
+
+    This uses local persisted grants and deployment switches only. It does not
+    call Graph or enable a write capability; the create endpoint repeats the
+    checks immediately before its explicit paused-object operation.
+    """
+    flags = _settings_flags()
+    required_flags = (
+        "meta_write_enabled", "campaign_create_enabled", "adset_create_enabled",
+        "creative_create_enabled", "ad_create_enabled",
+    )
+    if not config or not config.ad_account_id or not all(flags[name] for name in required_flags):
+        return False
+    try:
+        credential = await MetaMarketingCredentialResolver().resolve(
+            session,
+            empresa_id,
+            MetaMarketingCapability.ADS_MANAGEMENT,
+            ad_account_id=str(config.ad_account_id),
+            allow_admin_fallback=True,
+        )
+    except MetaCredentialResolutionError:
+        return False
+    return not credential.read_only
 
 
 def _uuid_or_400(value: Any, field: str) -> uuid.UUID:
@@ -785,7 +819,7 @@ async def _resolve_campaign_assets_for_write(
     credential_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ad_account_id = _current_configured_ad_account_id(config)
-    pages = await _tenant_pages(client, config, credential_meta or {})
+    pages = await _tenant_pages(client, config, credential_meta or {}, session)
     selected_page_id = _clean(page_id or config.page_id)
     if not selected_page_id:
         raise HTTPException(status_code=409, detail="Selecione uma Página Facebook antes de criar campanha.")
@@ -796,6 +830,9 @@ async def _resolve_campaign_assets_for_write(
     requested_instagram_id = _clean(config.instagram_account_id)
     if requested_instagram_id and requested_instagram_id != page_instagram_id:
         raise HTTPException(status_code=409, detail="Instagram configurado não pertence à Página Facebook selecionada.")
+    if credential_meta.get("credential_source") == SYSTEM_USER_MARKETING_SOURCE and page_instagram_id:
+        if not await _tenant_instagram_asset_linked(session, empresa_id, page_instagram_id):
+            raise HTTPException(status_code=403, detail="A conta Instagram profissional não está vinculada e verificada para esta empresa.")
 
     whatsapp = await _resolve_campaign_whatsapp_for_write(session, empresa_id, whatsapp_connection_id)
     await _validate_page_whatsapp_compatibility(client, ad_account_id, whatsapp, selected_page_id)
@@ -846,12 +883,48 @@ async def _tenant_pages(
     client: MetaMarketingApiClient,
     config: TrafficMetaConfig,
     credential_meta: dict[str, Any],
+    session: AsyncSession | None = None,
 ) -> list[dict[str, Any]]:
     """Return pages attached to the configured Business, never a global user directory."""
     business_id = _clean(config.business_id)
     if not business_id:
         raise HTTPException(status_code=409, detail="Vínculo Business da empresa não está configurado.")
-    return await client.list_business_pages(business_id)
+    pages = await client.list_business_pages(business_id)
+    if credential_meta.get("credential_source") == SYSTEM_USER_MARKETING_SOURCE:
+        if session is None:
+            return []
+        link_result = await session.execute(
+            select(MetaPlatformAsset.external_id)
+            .join(MetaTenantAssetLink, MetaTenantAssetLink.asset_id == MetaPlatformAsset.id)
+            .where(
+                MetaTenantAssetLink.empresa_id == config.empresa_id,
+                MetaTenantAssetLink.read_enabled.is_(True),
+                MetaPlatformAsset.asset_type == "page",
+                MetaPlatformAsset.access_state == "verified",
+            )
+        )
+        linked_page_ids = set(link_result.scalars().all())
+        return [page for page in pages if str(page.get("id") or "").strip() in linked_page_ids]
+    return pages
+
+
+async def _tenant_instagram_asset_linked(
+    session: AsyncSession,
+    empresa_id: uuid.UUID,
+    instagram_account_id: str,
+) -> bool:
+    result = await session.execute(
+        select(MetaPlatformAsset.id)
+        .join(MetaTenantAssetLink, MetaTenantAssetLink.asset_id == MetaPlatformAsset.id)
+        .where(
+            MetaTenantAssetLink.empresa_id == empresa_id,
+            MetaTenantAssetLink.read_enabled.is_(True),
+            MetaPlatformAsset.asset_type == "instagram_account",
+            MetaPlatformAsset.external_id == str(instagram_account_id).strip(),
+            MetaPlatformAsset.access_state == "verified",
+        )
+    )
+    return result.scalar_one_or_none() is not None
 
 
 def _raise_marketing_read_error(exc: Exception) -> None:
@@ -898,10 +971,7 @@ async def get_traffic_meta_config(
             **flags,
         })
     else:
-        response["campaign_creation_available"] = all(flags[name] for name in (
-            "meta_write_enabled", "campaign_create_enabled", "adset_create_enabled",
-            "creative_create_enabled", "ad_create_enabled",
-        ))
+        response["campaign_creation_available"] = await _campaign_creation_available(db, empresa_uuid, config)
         response["existing_post_ads_enabled"] = flags["existing_post_ads_enabled"]
     return response
 
@@ -973,7 +1043,7 @@ async def upsert_traffic_meta_config(
                     ad_account_id=config.ad_account_id, allow_admin_fallback=True,
                 )
                 page = await _validate_page_access(
-                    client, selected_page_id, config=config, credential_meta=meta,
+                    client, selected_page_id, config=config, credential_meta=meta, session=db,
                 )
                 config.instagram_account_id = _page_instagram_id(page)
             except Exception as exc:
@@ -986,7 +1056,7 @@ async def upsert_traffic_meta_config(
                 ad_account_id=config.ad_account_id, allow_admin_fallback=True,
             )
             page = await _validate_page_access(
-                client, config.page_id, config=config, credential_meta=meta,
+                client, config.page_id, config=config, credential_meta=meta, session=db,
             )
             if _page_instagram_id(page) != requested_instagram_id:
                 raise HTTPException(status_code=409, detail="Instagram selecionado não pertence à Página Facebook configurada.")
@@ -1039,7 +1109,7 @@ async def get_meta_asset_graph(
     )
     ad_account = await client.validate_ad_account(ad_account_id)
     business = ad_account.get("business") if isinstance(ad_account.get("business"), dict) else {}
-    pages = await _tenant_pages(client, config, meta)
+    pages = await _tenant_pages(client, config, meta, db)
     selected_page = next((page for page in pages if str(page.get("id") or "").strip() == str(config.page_id or "").strip()), None)
     active_whatsapps = await _active_campaign_whatsapp_connections(db, empresa_uuid)
     compatible: list[dict[str, Any]] = []
@@ -1626,9 +1696,10 @@ async def _validate_page_access(
     *,
     config: TrafficMetaConfig | None = None,
     credential_meta: dict[str, Any] | None = None,
+    session: AsyncSession | None = None,
 ) -> dict[str, Any]:
     pages = (
-        await _tenant_pages(client, config, credential_meta or {})
+        await _tenant_pages(client, config, credential_meta or {}, session)
         if config is not None
         else await client.list_pages()
     )
@@ -1873,7 +1944,7 @@ async def _campaign_conversion_readiness(
         })
     ad_account_id = _current_configured_ad_account_id(config)
     try:
-        client, meta = await _client(session, empresa_id, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id, allow_admin_fallback=False)
+        client, meta = await _client(session, empresa_id, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id, allow_admin_fallback=True)
     except MetaCredentialResolutionError as exc:
         return _with_campaign_conversion_contract({
             "ready": False,
@@ -2269,7 +2340,7 @@ async def create_full_paused_campaign(
         targeting = build_targeting(location_mode=payload.location_type, latitude=payload.latitude, longitude=payload.longitude, radius_km=payload.radius_km, gender_mode=payload.gender_mode)
     except TrafficCampaignValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id_for_write, allow_admin_fallback=False)
+    client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id_for_write, allow_admin_fallback=True)
     ad_account = await client.validate_ad_account(ad_account_id_for_write)
     asset_snapshot = await _resolve_campaign_assets_for_write(
         db,
@@ -2677,7 +2748,7 @@ async def create_batch_ads_on_existing_structure(
         if any(str(item.get("media_type") or "").strip().lower() != "image" for item in payload.ads):
             raise HTTPException(status_code=400, detail="O batch inicial aceita somente imagens.")
         prepared_ads = [_ensure_full_ad_input(item, index) for index, item in enumerate(payload.ads, start=1)]
-        client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=normalize_ad_account_id(row.ad_account_id), allow_admin_fallback=False)
+        client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=normalize_ad_account_id(row.ad_account_id), allow_admin_fallback=True)
         ad_account_id = normalize_ad_account_id(row.ad_account_id)
         pipeline = dict(row.response_json or {})
         pipeline_ads = list(pipeline.get("ads") or [])
@@ -2785,7 +2856,7 @@ async def create_paused_campaign_and_adset(
     except TrafficCampaignValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id_for_write, allow_admin_fallback=False)
+    client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_MANAGEMENT, ad_account_id=ad_account_id_for_write, allow_admin_fallback=True)
     ad_account = await client.validate_ad_account(ad_account_id_for_write)
     asset_snapshot = await _resolve_campaign_assets_for_write(
         db,
@@ -3090,7 +3161,7 @@ async def list_pages(
             db, empresa_uuid, MetaMarketingCapability.ADS_READ,
             ad_account_id=config.ad_account_id, allow_admin_fallback=True,
         )
-        pages = await _tenant_pages(client, config, meta)
+        pages = await _tenant_pages(client, config, meta, db)
         if _is_platform_admin(current_user):
             return {"credential": meta, "pages": pages}
         return {"pages": _customer_meta_pages(pages)}
@@ -3122,13 +3193,16 @@ async def list_existing_ad_posts(
             db, empresa_uuid, MetaMarketingCapability.ADS_READ,
             ad_account_id=ad_account_id, allow_admin_fallback=True,
         )
-        pages = await _tenant_pages(client, config, credential_meta)
+        pages = await _tenant_pages(client, config, credential_meta, db)
         page = next((item for item in pages if str(item.get("id") or "").strip() == page_id), None)
         if not page:
             raise HTTPException(status_code=403, detail="A Página não está vinculada à credencial desta empresa.")
         instagram_account_id = _page_instagram_id(page)
         if platform == "instagram" and not instagram_account_id:
             raise HTTPException(status_code=409, detail="A Página selecionada não possui conta Instagram profissional vinculada.")
+        if platform == "instagram" and credential_meta.get("credential_source") == SYSTEM_USER_MARKETING_SOURCE:
+            if not await _tenant_instagram_asset_linked(db, empresa_uuid, instagram_account_id):
+                raise HTTPException(status_code=403, detail="A conta Instagram profissional não está vinculada e verificada para esta empresa.")
         body = (
             await client.list_page_published_posts(page_id, limit=limit, after=after)
             if platform == "facebook"
@@ -3209,7 +3283,7 @@ async def preview_existing_post_ad_creative(
             db, empresa_uuid, MetaMarketingCapability.ADS_READ,
             ad_account_id=ad_account_id, allow_admin_fallback=True,
         )
-        pages = await _tenant_pages(client, config, credential_meta)
+        pages = await _tenant_pages(client, config, credential_meta, db)
         page = next((item for item in pages if str(item.get("id") or "").strip() == claims["page_id"]), None)
         if not page:
             raise HTTPException(status_code=403, detail="A Página não está mais vinculada à credencial desta empresa.")
@@ -3217,6 +3291,9 @@ async def preview_existing_post_ad_creative(
         if claims["platform"] == "instagram":
             if not linked_instagram_id or linked_instagram_id != claims.get("instagram_account_id"):
                 raise HTTPException(status_code=403, detail="A conta Instagram não pertence à Página selecionada.")
+            if credential_meta.get("credential_source") == SYSTEM_USER_MARKETING_SOURCE:
+                if not await _tenant_instagram_asset_linked(db, empresa_uuid, linked_instagram_id):
+                    raise HTTPException(status_code=403, detail="A conta Instagram profissional não está vinculada e verificada para esta empresa.")
             selected_post = await client.get_instagram_media(claims["source_id"])
             if str(selected_post.get("id") or "") != claims["source_id"]:
                 raise HTTPException(status_code=404, detail="A mídia selecionada não está mais disponível.")

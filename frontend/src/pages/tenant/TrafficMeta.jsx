@@ -230,6 +230,7 @@ function credentialSourceLabel(credentials) {
   const source = credentials?.credential_source;
   if (source === "tenant_marketing_oauth") return "Token tenant de leitura de anúncios";
   if (source === "embedded_signup_tenant") return "Token da empresa";
+  if (source === "admin_managed_system_user_token") return "Credencial central Meta (somente leitura)";
   if (source === "admin_managed_marketing_token" || source === "admin_global_fallback" || source === "admin_marketing_fallback" || source === "admin_test_fallback") return "Credencial administrativa de Marketing (somente leitura)";
   if (credentials?.credential_error) return "Não configurada";
   return "Indisponível";
@@ -1078,7 +1079,7 @@ export default function TrafficMeta({ adminTools = false, adminToolsView = "full
 
   if (loading) return <LoadingState label="Carregando Tráfego Meta..." />;
 
-  const marketingReady = ["READY", "READY_TENANT_OAUTH", "READY_ADMIN_MANAGED_READ"].includes(credentials?.marketing_readiness_status);
+  const marketingReadValidated = ["READY", "READY_TENANT_OAUTH", "READY_ADMIN_MANAGED_READ"].includes(credentials?.marketing_readiness_status);
 
   return (
     <div className="ux05-analytics ux05-meta space-y-6">
@@ -1097,9 +1098,9 @@ export default function TrafficMeta({ adminTools = false, adminToolsView = "full
         <div className="ux05-meta-status grid gap-4 lg:grid-cols-4">
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between gap-3">
-              <span className="font-medium text-slate-700">Marketing API</span>
-              <StatusBadge tone={marketingReady ? "active" : "warning"}>
-                {marketingReady ? "Pronta" : "Ação necessária"}
+              <span className="font-medium text-slate-700">Leitura da Marketing API</span>
+              <StatusBadge tone={marketingReadValidated ? "active" : "warning"}>
+                {marketingReadValidated ? "Leitura validada" : "Ação necessária"}
               </StatusBadge>
             </div>
             <p className="text-slate-600">Versão: <strong>{status?.marketing_graph_version || "v26.0"}</strong></p>
@@ -1129,6 +1130,9 @@ export default function TrafficMeta({ adminTools = false, adminToolsView = "full
               {credentials?.action_required ? <p className="mt-2 text-amber-800">{credentials.action_required}</p> : null}
               <p className="mt-1 text-xs text-slate-500">
                 A Meta pode solicitar acesso a anúncios, Business, Páginas e Instagram. Isso não cria nem ativa anúncios; a criação exige ação explícita e começa pausada.
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Esta validação consulta dados somente para leitura. Criar campanhas depende de permissão de escrita, vínculo autorizado e política operacional aprovados separadamente.
               </p>
               {credentials?.marketing_authorization?.action_required ? (
                 <p className="mt-1 text-xs text-amber-700">{credentials.marketing_authorization.action_required}</p>

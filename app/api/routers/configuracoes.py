@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from db.database import get_db
-from db.models import ConfiguracoesGlobais
+from db.models import ConfiguracoesGlobais, MetaSystemUserCredential
 from app.schemas import ConfiguracaoGlobalResponse, ConfiguracaoGlobalUpdate
 from app.api.routers.auth import Usuario, require_super_admin
 from app.services.meta.settings import meta_settings
@@ -50,7 +50,10 @@ def _global_integrations_response(config: ConfiguracoesGlobais | None, settings=
         "openai": {
             "global_credential_configured": bool(str(getattr(config, "openai_key_global", None) or "").strip()),
         },
-        "marketing_credentials": {"scope": "per_company"},
+        "marketing_credentials": {
+            "scope": "central_system_user_with_tenant_asset_links",
+            "legacy_tenant_credentials_supported": True,
+        },
         "jev": {"scope": "per_company"},
     }
 
@@ -100,7 +103,24 @@ async def get_global_integrations_status(
     _: Usuario = Depends(require_super_admin),
 ):
     result = await db.execute(select(ConfiguracoesGlobais).where(ConfiguracoesGlobais.id == 1))
-    return _global_integrations_response(result.scalars().first())
+    body = _global_integrations_response(result.scalars().first())
+    credential = await db.scalar(select(MetaSystemUserCredential).where(MetaSystemUserCredential.id == 1))
+    body["meta"]["system_user_token"] = {
+        "configured": credential is not None,
+        "validated": bool(credential and credential.validated_at),
+        "masked": credential.token_hint if credential else None,
+        "system_user_id": credential.system_user_id if credential else None,
+        "system_user_name": credential.system_user_name if credential else None,
+        "app_id": credential.app_id if credential else None,
+        "app_name": credential.app_name if credential else None,
+        "permissions": sorted(set(credential.granted_permissions or [])) if credential else [],
+        "permissions_status": credential.permissions_status if credential else "unknown",
+        "validated_at": credential.validated_at.isoformat() if credential and credential.validated_at else None,
+        "expires_at": credential.expires_at.isoformat() if credential and credential.expires_at else None,
+        "expiry_status": credential.expiry_status if credential else "unknown",
+        "expiry": "verified" if credential and credential.expires_at else ("unknown" if credential else None),
+    }
+    return body
 
 @router.put("/configuracoes", response_model=ConfiguracaoGlobalResponse)
 async def update_configuracoes_globais(

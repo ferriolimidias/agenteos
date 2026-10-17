@@ -5,6 +5,7 @@ import uuid
 from app.services.meta.marketing_credentials import (
     MetaMarketingCapability,
     MetaMarketingCredentialResolver,
+    SYSTEM_USER_MARKETING_SOURCE,
     supports_ads_read,
 )
 from app.services.meta.graph_client import MetaGraphClient
@@ -141,6 +142,23 @@ class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(result["asset_access"].values()))
         self.assertEqual(result["insights"]["preflight"], "pass")
         client.get_insights.assert_awaited_once()
+
+    async def test_system_user_readiness_uses_verified_tenant_asset_link_and_reports_read_only(self):
+        empresa_id, connection, session, client, credential = self._readiness_fakes({"ads_read"})
+        credential.credential_source = SYSTEM_USER_MARKETING_SOURCE
+        credential.read_only = True
+        client.list_business_client_ad_accounts = AsyncMock(side_effect=AssertionError(
+            "A verified System User tenant-asset link must supply the Business binding."
+        ))
+        patches = self._readiness_patches(connection, client, credential)
+        with patches[0], patches[1], patches[2], patches[3]:
+            result = await marketing_ads_readiness(session, empresa_id=empresa_id)
+        self.assertEqual(result["marketing_readiness_status"], "READY_ADMIN_MANAGED_READ")
+        self.assertEqual(result["token_source"], SYSTEM_USER_MARKETING_SOURCE)
+        self.assertEqual(result["token_type"], "CENTRAL_META_CREDENTIAL")
+        self.assertEqual(result["business_binding"], "explicit_tenant_asset_link")
+        self.assertTrue(all(result["asset_access"].values()))
+        client.list_business_client_ad_accounts.assert_not_awaited()
 
     async def test_permission_without_configured_account_access_is_not_ready(self):
         empresa_id, connection, session, client, credential = self._readiness_fakes({"ads_read"})

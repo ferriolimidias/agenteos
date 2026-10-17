@@ -10,6 +10,7 @@ from app.services.meta.marketing_credentials import (
     MetaMarketingCapability,
     MarketingCredentialResolver,
 )
+from app.api.routers.traffic_meta import _campaign_creation_available
 
 
 class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
@@ -26,13 +27,65 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
             "ad_account_id": "12345",
             "credential_source": "ADMIN_MANAGED_MARKETING_TOKEN",
             "read_enabled": True,
+            "write_enabled": False,
             "verified_at": object(),
             "verification_method": "business_owner",
         })()
         self.resolver = MarketingCredentialResolver()
 
     def session(self, grant=None):
-        return type("Session", (), {"scalar": AsyncMock(return_value=grant)})()
+        empty_result = type("Result", (), {
+            "scalar_one_or_none": lambda self: None,
+            "scalars": lambda self: type("Scalars", (), {"all": lambda self: []})(),
+            "first": lambda self: None,
+        })()
+        # The resolver checks the central credential, the legacy tenant grant,
+        # then the central credential again at the operation boundary.
+        session = type("Session", (), {})()
+        session.scalar = AsyncMock(side_effect=[None, grant, None])
+        session.execute = AsyncMock(return_value=empty_result)
+        return session
+
+    async def test_customer_campaign_availability_requires_local_tenant_grant_and_global_gates(self):
+        config = self.config
+        writable = type("Credential", (), {"read_only": False})()
+        resolver = type("Resolver", (), {"resolve": AsyncMock(return_value=writable)})()
+        enabled = type("Settings", (), {
+            "marketing_write_enabled": True, "marketing_campaign_create_enabled": True,
+            "marketing_adset_create_enabled": True, "marketing_creative_create_enabled": True,
+            "marketing_ad_create_enabled": True, "existing_post_ads_enabled": True,
+        })()
+        with patch("app.api.routers.traffic_meta.meta_settings", return_value=enabled), \
+             patch("app.api.routers.traffic_meta.MetaMarketingCredentialResolver", return_value=resolver):
+            available = await _campaign_creation_available(object(), self.tenant_id, config)
+        self.assertTrue(available)
+        resolver.resolve.assert_awaited_once()
+        self.assertTrue(resolver.resolve.await_args.kwargs["allow_admin_fallback"])
+
+        disabled = type("Settings", (), {
+            "marketing_write_enabled": True, "marketing_campaign_create_enabled": True,
+            "marketing_adset_create_enabled": True, "marketing_creative_create_enabled": False,
+            "marketing_ad_create_enabled": True, "existing_post_ads_enabled": True,
+        })()
+        resolver.resolve.reset_mock()
+        with patch("app.api.routers.traffic_meta.meta_settings", return_value=disabled), \
+             patch("app.api.routers.traffic_meta.MetaMarketingCredentialResolver", return_value=resolver):
+            available = await _campaign_creation_available(object(), self.tenant_id, config)
+        self.assertFalse(available)
+        resolver.resolve.assert_not_awaited()
+
+    async def test_customer_campaign_availability_fails_closed_for_read_only_credential(self):
+        config = self.config
+        read_only = type("Credential", (), {"read_only": True})()
+        resolver = type("Resolver", (), {"resolve": AsyncMock(return_value=read_only)})()
+        enabled = type("Settings", (), {
+            "marketing_write_enabled": True, "marketing_campaign_create_enabled": True,
+            "marketing_adset_create_enabled": True, "marketing_creative_create_enabled": True,
+            "marketing_ad_create_enabled": True, "existing_post_ads_enabled": True,
+        })()
+        with patch("app.api.routers.traffic_meta.meta_settings", return_value=enabled), \
+             patch("app.api.routers.traffic_meta.MetaMarketingCredentialResolver", return_value=resolver):
+            self.assertFalse(await _campaign_creation_available(object(), self.tenant_id, config))
 
     async def test_tenant_marketing_oauth_takes_priority_over_admin_token(self):
         connection = type("Connection", (), {
@@ -65,7 +118,7 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(credential.read_only)
         self.assertEqual(credential.ad_account_id, "12345")
         self.assertEqual(credential.business_id, "business-tenant-a")
-        self.assertEqual(session.scalar.await_count, 1)
+        self.assertEqual(session.scalar.await_count, 3)
 
     async def test_admin_token_without_effective_allowlist_is_denied(self):
         with patch.dict(os.environ, {"META_MARKETING_ADMIN_ACCESS_TOKEN": "admin-token"}, clear=False):
@@ -98,7 +151,7 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"META_MARKETING_ADMIN_ACCESS_TOKEN": "admin-token"}, clear=False):
             with patch.object(self.resolver, "_tenant_config", AsyncMock(return_value=self.config)):
                 with patch.object(self.resolver, "_embedded_connection", AsyncMock(return_value=None)):
-                    with self.assertRaisesRegex(MetaCredentialResolutionError, "TENANT_MARKETING_CREDENTIAL_UNAVAILABLE"):
+                    with self.assertRaisesRegex(MetaCredentialResolutionError, "ADMIN_MARKETING_WRITE_NOT_ENABLED"):
                         await self.resolver.resolve(self.session(self.grant), self.tenant_id, "ads_management", allow_admin_fallback=True)
 
     async def test_separate_marketing_oauth_credential_is_bound_to_its_business_and_account(self):
