@@ -17,6 +17,16 @@ Project constraints (`.agents/skills/safe-production-change/references/agentos-p
 - Before deploy, run `./scripts/validate_protected_baselines.sh` (and `--candidate-image <img> --require-candidate` for a candidate image); a `PROTECTED_BASELINE_FAILED` blocks deploy. Protected contracts live in `protected_baselines/baselines.json`.
 - Final reports go in `reports/`.
 
+## Product architecture decisions (mandatory for UX, Admin, Meta, and legacy cleanup)
+
+The owner-approved target **before deleting legacy code** is documented in:
+- `docs/architecture/README.md` (decision index)
+- `docs/architecture/ARQUITETURA-UX-ADMIN-TENANT-20261017.md` (client/Admin navigation and permissions)
+- `docs/architecture/PLANO-SANEAMENTO-E-LEGADOS-20261017.md` (classification, sequence and removal gates)
+- Issues #34 (UX first, legacy cleanup after) and #33 (Meta credentials/conversions).
+
+Mandatory: client home is **Inbox**; keep dashboard under Results and keep deep-link aliases; client menu has no prompts, A11, JEV SHADOW or technical tokens. Prompt/model/experiment mutation and Meta token management belong to Super Admin **with API-side RBAC**. Meta Official WhatsApp provider, Instagram API credentials, Meta Marketing/System User token, and CRM Dataset/CAPI are separate contracts. Evolution remains active. Never delete migrations, historical delivery evidence, or LeoFT exercise media just for a cleanup. Docs are plans, NOT evidence of deployed code.
+
 ## Stack & layout
 
 - Backend: FastAPI + SQLAlchemy (async) + Pydantic v2, Python 3.11. Entrypoint `app.api.main:app`.
