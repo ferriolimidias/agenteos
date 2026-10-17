@@ -1,6 +1,6 @@
 # Arquitetura geral e UX/UI AgentOS — Cliente centrado no Inbox + Super Admin operacional
 
-**Status:** proposta arquitetural para implementação/revisão, não código implantado.
+**Status:** DIRETRIZ ARQUITETURAL DO PROPRIETÁRIO para implementação; não é código implantado. Complemento vinculante: [PLANO-SANEAMENTO-E-LEGADOS-20261017.md](PLANO-SANEAMENTO-E-LEGADOS-20261017.md).
 **Data:** 2026-10-17.
 **Baseline examinado:** `master@de2dd5961865864065db4f056387b443541d6a4a`. Issue de execução: #34; a Issue #33 continua responsável por credenciais Meta e conversões reais.
 **Princípio central:** uma aplicação de atendimento primeiro, com recursos técnicos suficientes para operar mas fora do caminho de quem só precisa atender seus clientes.
@@ -8,7 +8,7 @@
 ## 1. Problema comprovado pelo código atual
 
 1. `frontend/src/App.jsx` usa `<Route path="/painel" index element={<TenantDashboard/>} />`, enquanto `/painel/inbox`, `/painel/chat` e `/painel/conversas` renderizam o Inbox. Após login de cliente, `frontend/src/pages/Login.jsx` navega para `/painel`: a tela inicial é Dashboard, não Inbox.
-2. `frontend/src/utils/tenantNavigation.js` possui **cinco grupos e 31 itens**, entre eles `Prompt Optimizer A11`, `Inteligência SHADOW`, `Conversões Meta`, `Integrações técnicas` e `Configurações de conversão`. O menu é gerado para `admin_empresa` e `super_admin`; o filtro de outros roles retira somente o Prompt Optimizer. Há rótulos orientados a implementação, não tarefas.
+2. `frontend/src/utils/tenantNavigation.js` possui **cinco grupos e 28 itens**, entre eles `Prompt Optimizer A11`, `Inteligência SHADOW`, `Conversões Meta`, `Integrações técnicas` e `Configurações de conversão`. O menu é gerado para `admin_empresa` e `super_admin`; o filtro de outros roles retira somente o Prompt Optimizer. Há rótulos orientados a implementação, não tarefas.
 3. `tenantNavigation.js:readCollapsedGroups` mantém o primeiro grupo (Visão geral) expandido e os demais recolhidos. Inbox está no segundo grupo, ou seja, a função principal fica escondida por padrão.
 4. `frontend/src/pages/tenant/PromptOptimizer.jsx` contém **ações mutáveis** (bootstrap, avaliações, aprovação de versões, experimentos), apesar de ser governança operacional de IA. Esconder menu sem ajustar auth no backend **não bloqueia acesso**.
 5. `frontend/src/pages/tenant/JevDiagnostics.jsx` e `QualityDashboard.jsx` mostram detalhes SHADOW, IDs, métricas técnicas, prompt traces e experimentos: úteis para o operador técnico, não necessários ao usuário leigo.
@@ -25,7 +25,7 @@
 - [NN/g: Supporting Power Users Isn't Enough](https://www.nngroup.com/articles/complex-apps-users/): projetar para aprendizes e operadores de domínio, não apenas usuários técnicos.
 - [W3C WCAG 2.2 3.2.3](https://www.w3.org/WAI/WCAG22/Understanding/consistent-navigation): ordem consistente de navegação; [2.4.7](https://www.w3.org/WAI/WCAG22/Understanding/focus-visible): foco visível.
 
-**Consequência prática:** Complexidade é mantida como capacidade operacional, mas aparece progressivamente conforme a tarefa e permissão, não em 31 links.
+**Consequência prática:** Complexidade é mantida como capacidade operacional, mas aparece progressivamente conforme a tarefa e permissão, não em 28 links.
 
 ## 3. Áreas e responsabilidades, sem duplicação de produto
 
