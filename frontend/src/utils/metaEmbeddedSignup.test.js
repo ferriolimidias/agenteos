@@ -217,13 +217,13 @@ test("fluxo padrao preserva v4 e sessionInfoVersion sem featureType de coexisten
   assert.notEqual(standard.extras, businessApp.extras);
 });
 
-test("Marketing Login solicita somente ads_read e não altera o Embedded Signup de WhatsApp", () => {
+test("Marketing Login solicita escopos explícitos de leitura e gestão sem alterar o Embedded Signup", () => {
   const calls = [];
   let receivedCode = "";
   const FB = { login: (callback, options) => calls.push({ callback, options }) };
   startMetaMarketingAuthorization(FB, (response) => { receivedCode = response.authResponse.code; });
   assert.deepEqual(calls[0].options, {
-    scope: "ads_read",
+    scope: "ads_read,ads_management,business_management,pages_show_list,pages_read_engagement,instagram_basic",
     auth_type: "rerequest",
     response_type: "code",
     override_default_response_type: true,

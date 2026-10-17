@@ -49,7 +49,7 @@ async function main() {
     ]) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       const scenarios = {
-        featureEnabled: viewport.name !== 'desktop',
+        featureEnabled: true,
         assetFailures: 0,
         listRateLimits: 0,
         listMode: 'success',
@@ -167,9 +167,8 @@ async function main() {
       if (viewport.name === 'desktop') {
         const existingOption = page.getByRole('radio', { name: /Publicação existente/ });
         await existingOption.waitFor();
-        assert.equal(await existingOption.isDisabled(), true, 'the unverified integration defaults off');
-        assert.equal(results.existing_post_list_calls, 0, 'no Graph listing occurs while feature flag is off');
-        await page.evaluate(() => window.__setA12Scenario('featureEnabled', true));
+        assert.equal(await existingOption.isDisabled(), false, 'A12 is enabled for tenant-scoped authorized reads');
+        assert.equal(results.existing_post_list_calls, 0, 'post listing waits for an explicit source selection');
         await page.evaluate(() => window.__setA12Scenario('assetFailures', 1));
         await page.reload({ waitUntil: 'networkidle' });
         await page.getByRole('heading', { name: 'Tráfego / Meta Ads' }).waitFor();

@@ -12,27 +12,38 @@ from app.services.meta.marketing_readiness import _error_readiness, granted_perm
 
 
 class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_marketing_resolver_uses_latest_official_connection_for_reauthorization(self):
+    async def test_marketing_resolver_prefers_marketing_credential_then_legacy_official_connection(self):
         captured = {}
-        connection = object()
+        connection = type("Connection", (), {
+            "credenciais": {"encrypted_marketing_access_token": "fixture-encrypted"},
+        })()
 
         class Result:
+            def __init__(self, value):
+                self.value = value
+
             def scalars(self):
                 return self
 
             def first(self):
-                return connection
+                return self.value
+
+            def all(self):
+                return [self.value] if self.value is not None else []
 
         class Session:
             async def execute(self, statement):
-                captured["statement"] = statement
-                return Result()
+                captured.setdefault("statements", []).append(statement)
+                return Result(None if len(captured["statements"]) == 1 else connection)
 
         selected = await MetaMarketingCredentialResolver()._embedded_connection(Session(), uuid.uuid4())
-        statement = str(captured["statement"])
         self.assertIs(selected, connection)
-        self.assertIn("conexoes.channel =", statement)
-        self.assertIn("ORDER BY conexoes.criado_em DESC, conexoes.id DESC", statement)
+        self.assertEqual(len(captured["statements"]), 2)
+        first_params = captured["statements"][0].compile().params
+        self.assertIn("marketing_ads", first_params.values())
+        legacy_statement = str(captured["statements"][1])
+        self.assertIn("conexoes.channel =", legacy_statement)
+        self.assertIn("ORDER BY conexoes.criado_em DESC, conexoes.id DESC", legacy_statement)
 
     def _readiness_fakes(self, permissions, *, listed_accounts=None):
         empresa_id = uuid.uuid4()
@@ -88,7 +99,8 @@ class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
     def _readiness_patches(self, connection, client, credential):
         settings = type("Settings", (), {
             "app_id": "app-id", "app_secret": "app-secret",
-            "credential_encryption_key": "configured", "live_actions_enabled": True,
+            "credential_encryption_key": "configured", "live_actions_enabled": False,
+            "redirect_uri": "https://example.test/meta/callback",
             "marketing_graph_api_version": "v26.0",
         })()
         return (
@@ -118,6 +130,11 @@ class MarketingReadinessTests(unittest.IsolatedAsyncioTestCase):
         with patches[0], patches[1], patches[2], patches[3]:
             result = await marketing_ads_readiness(session, empresa_id=empresa_id)
         self.assertEqual(result["marketing_readiness_status"], "READY_ADMIN_MANAGED_READ")
+        self.assertTrue(result["marketing_authorization"]["enabled"])
+        self.assertEqual(result["marketing_authorization"]["requested_permissions"], [
+            "ads_read", "ads_management", "business_management", "pages_show_list",
+            "pages_read_engagement", "instagram_basic",
+        ])
         self.assertEqual(result["status"], "READY")
         self.assertFalse(result["permissions"]["ads_read"])
         self.assertTrue(result["permissions"]["ads_management"])

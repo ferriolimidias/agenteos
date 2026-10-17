@@ -308,7 +308,7 @@ export function buildMetaMarketingLoginOptions() {
   // This is a standard Facebook Login permission request, separate from the
   // WhatsApp Business Login configuration (`config_id`).
   return {
-    scope: "ads_read",
+    scope: "ads_read,ads_management,business_management,pages_show_list,pages_read_engagement,instagram_basic",
     auth_type: "rerequest",
     response_type: "code",
     override_default_response_type: true,

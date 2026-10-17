@@ -39,6 +39,13 @@ from app.services.meta.embedded_signup import (
 from app.services.meta.graph_client import MetaGraphClient
 from app.services.meta.credential_crypto import encrypt_meta_secret
 from app.services.meta.marketing_api import MetaMarketingApiClient
+from app.services.meta.marketing_api import normalize_ad_account_id
+from app.services.meta.marketing_credentials import (
+    META_MARKETING_CHANNEL,
+    META_MARKETING_OAUTH_PERMISSIONS,
+    META_MARKETING_PROVIDER,
+)
+from app.services.meta.marketing_readiness import _business_account_binding, granted_permissions
 from app.services.meta.settings import meta_settings
 from app.services.meta.signup_state import (
     BUSINESS_APP_ONBOARDING,
@@ -50,7 +57,7 @@ from app.services.meta.signup_state import (
 )
 from app.services.whatsapp_operational_status import resolve_whatsapp_operational_status
 from db.database import get_db
-from db.models import Conexao, Empresa, TipoConexao, Usuario, is_admin_empresa_role, is_meta_app_reviewer_role, is_root_admin_email, is_super_admin_role
+from db.models import Conexao, Empresa, TipoConexao, TrafficMetaConfig, Usuario, is_admin_empresa_role, is_meta_app_reviewer_role, is_root_admin_email, is_super_admin_role
 
 
 router = APIRouter(
@@ -971,12 +978,11 @@ async def meta_marketing_oauth_session(
     empresa = await _buscar_empresa(db, empresa_id)
     _ensure_meta_marketing_admin(current_user, empresa.id)
     settings = meta_settings()
-    if not (settings.app_id and settings.app_secret and settings.credential_encryption_key):
+    if not (settings.app_id and settings.app_secret and settings.credential_encryption_key and settings.redirect_uri):
         raise HTTPException(status_code=503, detail="Configuração OAuth Meta incompleta para Marketing API.")
-    if not settings.live_actions_enabled:
-        raise HTTPException(status_code=409, detail="Autorização Meta bloqueada por META_LIVE_ACTIONS_ENABLED=false.")
-    if not await _buscar_meta_official_conexao(db, empresa.id):
-        raise HTTPException(status_code=409, detail="Conecte primeiro o WhatsApp Oficial Meta desta empresa.")
+    config = await db.scalar(select(TrafficMetaConfig).where(TrafficMetaConfig.empresa_id == empresa.id))
+    if not config or not config.ad_account_id or not config.business_id:
+        raise HTTPException(status_code=409, detail="Vincule primeiro a conta de anúncios e o Business desta empresa.")
     try:
         state = create_signup_state(
             empresa_id=empresa_id,
@@ -993,7 +999,7 @@ async def meta_marketing_oauth_session(
         "app_id": settings.app_id,
         "graph_api_version": settings.marketing_graph_api_version,
         "sdk_url": "https://connect.facebook.net/pt_BR/sdk.js",
-        "requested_permission": "ads_read",
+        "requested_permissions": list(META_MARKETING_OAUTH_PERMISSIONS),
     }
 
 
@@ -1007,11 +1013,11 @@ async def meta_marketing_oauth_complete(
     empresa = await _buscar_empresa(db, empresa_id)
     _ensure_meta_marketing_admin(current_user, empresa.id)
     settings = meta_settings()
-    if not settings.live_actions_enabled:
-        raise HTTPException(status_code=409, detail="Autorização Meta bloqueada por META_LIVE_ACTIONS_ENABLED=false.")
-    connection = await _buscar_meta_official_conexao(db, empresa.id)
-    if not connection:
-        raise HTTPException(status_code=409, detail="Conecte primeiro o WhatsApp Oficial Meta desta empresa.")
+    if not (settings.app_id and settings.app_secret and settings.credential_encryption_key and settings.redirect_uri):
+        raise HTTPException(status_code=503, detail="Configuração OAuth Meta incompleta para Marketing API.")
+    config = await db.scalar(select(TrafficMetaConfig).where(TrafficMetaConfig.empresa_id == empresa.id))
+    if not config or not config.ad_account_id or not config.business_id:
+        raise HTTPException(status_code=409, detail="Vincule primeiro a conta de anúncios e o Business desta empresa.")
     try:
         try:
             from app.api.main import redis_client
@@ -1046,26 +1052,70 @@ async def meta_marketing_oauth_complete(
             graph_version=settings.marketing_graph_api_version,
             timeout_seconds=12.0,
             max_attempts=2,
+            read_only=True,
         )
         permission_body = await marketing_client.get_permissions()
     except Exception as exc:
         error = sanitize_meta_error(exc)
         _audit_meta("marketing_ads_oauth_failed", empresa_id=empresa_id, usuario_id=str(current_user.id), detail={"code": error.get("code")})
-        raise HTTPException(status_code=502, detail={"message": "A Meta não concluiu a autorização de leitura de anúncios.", "error": error}) from exc
+        raise HTTPException(status_code=502, detail={"message": "A Meta não concluiu a autorização da Marketing API.", "error": error}) from exc
 
-    permission_rows = permission_body.get("data") if isinstance(permission_body.get("data"), list) else []
-    granted = sorted({
-        str(item.get("permission") or "").strip()
-        for item in permission_rows
-        if isinstance(item, dict) and str(item.get("status") or "").lower() == "granted" and item.get("permission")
-    })
+    granted = sorted(granted_permissions(permission_body))
     if not ({"ads_read", "ads_management"} & set(granted)):
         _audit_meta("marketing_ads_oauth_permission_missing", empresa_id=empresa_id, usuario_id=str(current_user.id))
         raise HTTPException(status_code=409, detail={
             "code": "MARKETING_PERMISSION_NOT_GRANTED",
-            "message": "A Meta não concedeu ads_read. Revise a configuração e as permissões do app e tente novamente.",
+            "message": "A Meta não concedeu ads_read ou ads_management. Revise as permissões do app e tente novamente.",
         })
 
+    try:
+        account = await marketing_client.validate_ad_account(str(config.ad_account_id))
+        actual_account_id = normalize_ad_account_id(account.get("account_id") or account.get("id"))
+        expected_account_id = normalize_ad_account_id(config.ad_account_id)
+        if actual_account_id != expected_account_id:
+            raise HTTPException(status_code=403, detail="A credencial autorizada não corresponde à conta de anúncios desta empresa.")
+        bound, _method = await _business_account_binding(
+            marketing_client,
+            expected_business_id=str(config.business_id).strip(),
+            configured_account_id=str(config.ad_account_id),
+            actual_account=account,
+        )
+        if not bound:
+            raise HTTPException(status_code=403, detail="A Meta não confirmou o vínculo Business/conta desta empresa.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        error = sanitize_meta_error(exc)
+        _audit_meta("marketing_ads_oauth_account_binding_failed", empresa_id=empresa_id, usuario_id=str(current_user.id), detail={"code": error.get("code")})
+        raise HTTPException(status_code=502, detail={"message": "Não foi possível validar o vínculo da conta autorizada.", "error": error}) from exc
+
+    connection = await db.scalar(
+        select(Conexao)
+        .where(
+            Conexao.empresa_id == empresa.id,
+            Conexao.tipo == TipoConexao.META,
+            Conexao.channel == META_MARKETING_CHANNEL,
+            Conexao.provider == META_MARKETING_PROVIDER,
+        )
+        .order_by(Conexao.atualizado_em.desc(), Conexao.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if connection is None:
+        connection = Conexao(
+            empresa_id=empresa.id,
+            tipo=TipoConexao.META,
+            channel=META_MARKETING_CHANNEL,
+            provider=META_MARKETING_PROVIDER,
+            nome_instancia="Meta Marketing API",
+            status="ativo",
+            credential_source="tenant_marketing_oauth",
+            credenciais={},
+            metadata_json={},
+            external_account_id=expected_account_id,
+        )
+        db.add(connection)
+        await db.flush()
     credentials = dict(connection.credenciais or {})
     credentials.update({
         "encrypted_marketing_access_token": encrypt_meta_secret(access_token),
@@ -1078,6 +1128,8 @@ async def meta_marketing_oauth_complete(
     metadata = dict(connection.metadata_json or {})
     metadata.update({
         "marketing_granted_permissions": granted,
+        "marketing_business_id": str(config.business_id).strip(),
+        "marketing_ad_account_id": expected_account_id,
         "marketing_authorized_at": utc_now_iso(),
         "marketing_permission_check_at": utc_now_iso(),
     })

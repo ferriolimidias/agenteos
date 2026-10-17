@@ -40,6 +40,14 @@ const emptyStatus = {
 
 const MARKETING_RECONNECT_STATUSES = new Set(["REAUTH_MARKETING_REQUIRED", "REAUTH_REQUIRED", "TOKEN_INVALID"]);
 
+function shouldAuthorizeMarketing(readiness) {
+  const source = String(readiness?.credential_source || readiness?.token_source || "");
+  const permissions = readiness?.permissions || {};
+  return MARKETING_RECONNECT_STATUSES.has(readiness?.marketing_readiness_status)
+    || source === "admin_managed_marketing_token"
+    || (Boolean(readiness?.token_present) && !Boolean(permissions.ads_management));
+}
+
 const makeEmptyAd = () => ({
   media_type: "image",
   media_data_url: "",
@@ -384,6 +392,7 @@ export default function TrafficMeta() {
   const datasetAsset = datasetDisplay(config, officialWhatsapp);
   const conversionSourceOptions = conversions?.conversion_engine?.source_options || fallbackSourceOptions;
   const existingPostAdsEnabled = Boolean(status?.existing_post_ads_enabled);
+  const marketingAuthorizationNeeded = shouldAuthorizeMarketing(credentials);
 
   const capabilityBadges = useMemo(() => {
     const data = credentials || {};
@@ -392,6 +401,9 @@ export default function TrafficMeta() {
       ["ads_read", "Leitura de anúncios"],
       ["ads_management", "Gerenciamento de anúncios"],
       ["business_management", "Gerenciamento do negócio"],
+      ["pages_show_list", "Lista de Páginas"],
+      ["pages_read_engagement", "Leitura de publicações"],
+      ["instagram_basic", "Acesso básico ao Instagram"],
     ].map(([name, label]) => ({
       name,
       label,
@@ -401,7 +413,7 @@ export default function TrafficMeta() {
 
   const prepareMarketingAuthorization = async (readiness) => {
     const oauth = readiness?.marketing_authorization;
-    if (!empresaId || !MARKETING_RECONNECT_STATUSES.has(readiness?.marketing_readiness_status) || !oauth?.enabled) {
+    if (!empresaId || !shouldAuthorizeMarketing(readiness) || !oauth?.enabled) {
       setMarketingAuthorization(null);
       return null;
     }
@@ -516,7 +528,6 @@ export default function TrafficMeta() {
     try {
       const credentialResponse = await api.get(`/empresas/${empresaId}/traffic/meta/credentials/status`, { timeout: 15000 });
       setCredentials(credentialResponse.data);
-      await prepareMarketingAuthorization(credentialResponse.data);
     } catch (err) {
       setCredentials(null);
       setError((current) => current || safeError(err, "Não foi possível carregar o status das credenciais Meta."));
@@ -1098,19 +1109,25 @@ export default function TrafficMeta() {
                 {" · "}Insights: <strong>{credentials?.insights?.preflight === "pass" ? "validados" : "pendentes"}</strong>
               </p>
               {credentials?.action_required ? <p className="mt-2 text-amber-800">{credentials.action_required}</p> : null}
+              <p className="mt-1 text-xs text-slate-500">
+                A Meta pode solicitar acesso a anúncios, Business, Páginas e Instagram. Isso não cria nem ativa anúncios; a criação exige ação explícita e começa pausada.
+              </p>
+              {credentials?.marketing_authorization?.action_required ? (
+                <p className="mt-1 text-xs text-amber-700">{credentials.marketing_authorization.action_required}</p>
+              ) : null}
               {credentials?.app_advanced_access_status === "UNKNOWN_REQUIRES_META_DASHBOARD" ? (
                 <p className="mt-1 text-xs text-slate-500">O nível Advanced Access do aplicativo depende da configuração no Meta App Dashboard.</p>
               ) : null}
             </div>
-            {MARKETING_RECONNECT_STATUSES.has(credentials?.marketing_readiness_status) ? (
+            {marketingAuthorizationNeeded ? (
               <ActionButton
                 type="button"
                 variant="secondary"
                 icon={marketingAuthorizationBusy || marketingAuthorizationLoading ? Loader2 : ShieldCheck}
                 onClick={authorizeMarketingRead}
-                disabled={marketingAuthorizationBusy || marketingAuthorizationLoading || !marketingAuthorization || !credentials?.marketing_authorization?.enabled}
+                disabled={marketingAuthorizationBusy || marketingAuthorizationLoading || !credentials?.marketing_authorization?.enabled}
               >
-                {marketingAuthorizationLoading ? "Preparando..." : marketingAuthorizationBusy ? "Aguardando Meta..." : "Autorizar leitura de anúncios"}
+                {marketingAuthorizationLoading ? "Preparando..." : marketingAuthorizationBusy ? "Aguardando Meta..." : "Autorizar acesso à Marketing API"}
               </ActionButton>
             ) : null}
           </div>

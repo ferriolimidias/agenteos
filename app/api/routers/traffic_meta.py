@@ -663,9 +663,10 @@ async def _resolve_campaign_assets_for_write(
     whatsapp_connection_id: uuid.UUID | None,
     client: MetaMarketingApiClient,
     ad_account: dict[str, Any],
+    credential_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ad_account_id = _current_configured_ad_account_id(config)
-    pages = await client.list_pages()
+    pages = await _tenant_pages(client, config, credential_meta or {})
     selected_page_id = _clean(page_id or config.page_id)
     if not selected_page_id:
         raise HTTPException(status_code=409, detail="Selecione uma Página Facebook antes de criar campanha.")
@@ -720,6 +721,18 @@ async def _client(
         ),
         credential.sanitized_metadata(),
     )
+
+
+async def _tenant_pages(
+    client: MetaMarketingApiClient,
+    config: TrafficMetaConfig,
+    credential_meta: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return pages attached to the configured Business, never a global user directory."""
+    business_id = _clean(config.business_id)
+    if not business_id:
+        raise HTTPException(status_code=409, detail="Vínculo Business da empresa não está configurado.")
+    return await client.list_business_pages(business_id)
 
 
 def _raise_marketing_read_error(exc: Exception) -> None:
@@ -818,16 +831,26 @@ async def upsert_traffic_meta_config(
         config.page_id = selected_page_id
         if selected_page_id and config.ad_account_id:
             try:
-                client, _meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=config.ad_account_id)
-                page = await _validate_page_access(client, selected_page_id)
+                client, meta = await _client(
+                    db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+                    ad_account_id=config.ad_account_id, allow_admin_fallback=True,
+                )
+                page = await _validate_page_access(
+                    client, selected_page_id, config=config, credential_meta=meta,
+                )
                 config.instagram_account_id = _page_instagram_id(page)
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=sanitize_graph_error(exc)) from exc
     if "instagram_account_id" in fields:
         requested_instagram_id = _clean(payload.instagram_account_id)
         if requested_instagram_id and config.page_id:
-            client, _meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=config.ad_account_id)
-            page = await _validate_page_access(client, config.page_id)
+            client, meta = await _client(
+                db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+                ad_account_id=config.ad_account_id, allow_admin_fallback=True,
+            )
+            page = await _validate_page_access(
+                client, config.page_id, config=config, credential_meta=meta,
+            )
             if _page_instagram_id(page) != requested_instagram_id:
                 raise HTTPException(status_code=409, detail="Instagram selecionado não pertence à Página Facebook configurada.")
         config.instagram_account_id = requested_instagram_id
@@ -840,7 +863,10 @@ async def upsert_traffic_meta_config(
         config.dataset_id = _clean(metadata.get("dataset_id") or metadata.get("meta_dataset_id"))
         if config.page_id and config.ad_account_id:
             try:
-                client, _meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=config.ad_account_id)
+                client, _meta = await _client(
+                    db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+                    ad_account_id=config.ad_account_id, allow_admin_fallback=True,
+                )
                 await _validate_page_whatsapp_compatibility(client, config.ad_account_id, whatsapp, config.page_id)
             except HTTPException:
                 raise
@@ -870,10 +896,13 @@ async def get_meta_asset_graph(
     if not config or not config.ad_account_id:
         raise HTTPException(status_code=409, detail="Conta de anúncios não vinculada para esta empresa.")
     ad_account_id = _current_configured_ad_account_id(config)
-    client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id)
+    client, meta = await _client(
+        db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+        ad_account_id=ad_account_id, allow_admin_fallback=True,
+    )
     ad_account = await client.validate_ad_account(ad_account_id)
     business = ad_account.get("business") if isinstance(ad_account.get("business"), dict) else {}
-    pages = await client.list_pages()
+    pages = await _tenant_pages(client, config, meta)
     selected_page = next((page for page in pages if str(page.get("id") or "").strip() == str(config.page_id or "").strip()), None)
     active_whatsapps = await _active_campaign_whatsapp_connections(db, empresa_uuid)
     compatible: list[dict[str, Any]] = []
@@ -1431,8 +1460,18 @@ def _phone_number_id_from_connection(connection: Conexao, config: TrafficMetaCon
     return _connection_phone_number_id(connection) or _clean(config.phone_number_id)
 
 
-async def _validate_page_access(client: MetaMarketingApiClient, page_id: str) -> dict[str, Any]:
-    pages = await client.list_pages()
+async def _validate_page_access(
+    client: MetaMarketingApiClient,
+    page_id: str,
+    *,
+    config: TrafficMetaConfig | None = None,
+    credential_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pages = (
+        await _tenant_pages(client, config, credential_meta or {})
+        if config is not None
+        else await client.list_pages()
+    )
     for page in pages:
         if str(page.get("id") or "").strip() == str(page_id or "").strip():
             return page
@@ -1709,6 +1748,7 @@ async def _campaign_conversion_readiness(
         whatsapp_connection_id=whatsapp_connection_id,
         client=client,
         ad_account=ad_account,
+        credential_meta=meta,
     )
     empresa = (await session.execute(select(Empresa).where(Empresa.id == empresa_id))).scalars().first()
     empresa_name = str(getattr(empresa, "nome_empresa", "") or "Empresa").strip() or "Empresa"
@@ -2079,6 +2119,7 @@ async def create_full_paused_campaign(
         whatsapp_connection_id=selected_whatsapp_id,
         client=client,
         ad_account=ad_account,
+        credential_meta=meta,
     )
     readiness = await _campaign_conversion_readiness(
         db,
@@ -2594,6 +2635,7 @@ async def create_paused_campaign_and_adset(
         whatsapp_connection_id=selected_whatsapp_id,
         client=client,
         ad_account=ad_account,
+        credential_meta=meta,
     )
     readiness = await _campaign_conversion_readiness(
         db,
@@ -2834,6 +2876,13 @@ async def list_ad_accounts(
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     _ensure_ad_account_binding_admin(current_user, empresa_uuid)
     try:
+        config = await _get_config(db, empresa_uuid)
+        if config and config.ad_account_id:
+            client, meta = await _client(
+                db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+                ad_account_id=config.ad_account_id, allow_admin_fallback=True,
+            )
+            return {"credential": meta, "adaccounts": [await client.validate_ad_account(config.ad_account_id)]}
         client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ)
         return {"credential": meta, "adaccounts": await client.list_ad_accounts()}
     except Exception as exc:
@@ -2853,7 +2902,11 @@ async def validate_ad_account(
     if config and config.ad_account_id and normalize_ad_account_id(config.ad_account_id) != normalize_ad_account_id(ad_account_id):
         raise HTTPException(status_code=403, detail="Ad Account fora do escopo configurado para esta empresa.")
     try:
-        client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ)
+        client, meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+            ad_account_id=config.ad_account_id if config else None,
+            allow_admin_fallback=bool(config and config.ad_account_id),
+        )
         return {"credential": meta, "adaccount": await client.validate_ad_account(ad_account_id)}
     except Exception as exc:
         _raise_marketing_read_error(exc)
@@ -2867,8 +2920,14 @@ async def list_pages(
 ):
     empresa_uuid = _uuid_or_400(empresa_id, "empresa_id")
     try:
-        client, meta = await _client(db, empresa_uuid, MetaMarketingCapability.ADS_READ)
-        return {"credential": meta, "pages": await client.list_pages()}
+        config = await _get_config(db, empresa_uuid)
+        if not config or not config.ad_account_id:
+            raise HTTPException(status_code=409, detail="Ad Account não vinculada para esta empresa.")
+        client, meta = await _client(
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+            ad_account_id=config.ad_account_id, allow_admin_fallback=True,
+        )
+        return {"credential": meta, "pages": await _tenant_pages(client, config, meta)}
     except Exception as exc:
         _raise_marketing_read_error(exc)
 
@@ -2894,9 +2953,10 @@ async def list_existing_ad_posts(
     ad_account_id = _current_configured_ad_account_id(config)
     try:
         client, credential_meta = await _client(
-            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+            ad_account_id=ad_account_id, allow_admin_fallback=True,
         )
-        pages = await client.list_pages()
+        pages = await _tenant_pages(client, config, credential_meta)
         page = next((item for item in pages if str(item.get("id") or "").strip() == page_id), None)
         if not page:
             raise HTTPException(status_code=403, detail="A Página não está vinculada à credencial desta empresa.")
@@ -2979,9 +3039,10 @@ async def preview_existing_post_ad_creative(
         raise HTTPException(status_code=403, detail="A seleção não pertence à conta de anúncios configurada nesta empresa.")
     try:
         client, credential_meta = await _client(
-            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+            ad_account_id=ad_account_id, allow_admin_fallback=True,
         )
-        pages = await client.list_pages()
+        pages = await _tenant_pages(client, config, credential_meta)
         page = next((item for item in pages if str(item.get("id") or "").strip() == claims["page_id"]), None)
         if not page:
             raise HTTPException(status_code=403, detail="A Página não está mais vinculada à credencial desta empresa.")
@@ -3048,7 +3109,8 @@ async def preview_existing_post_campaign(
     selected_whatsapp_id = _uuid_or_400(payload.whatsapp_connection_id, "whatsapp_connection_id") if payload.whatsapp_connection_id else None
     try:
         client, credential_meta = await _client(
-            db, empresa_uuid, MetaMarketingCapability.ADS_READ, ad_account_id=ad_account_id,
+            db, empresa_uuid, MetaMarketingCapability.ADS_READ,
+            ad_account_id=ad_account_id, allow_admin_fallback=True,
         )
         if claims.get("ad_account_id") != ad_account_id:
             raise HTTPException(status_code=403, detail="A seleção não pertence à conta de anúncios configurada nesta empresa.")
@@ -3061,6 +3123,7 @@ async def preview_existing_post_campaign(
             whatsapp_connection_id=selected_whatsapp_id,
             client=client,
             ad_account=ad_account,
+            credential_meta=credential_meta,
         )
     except HTTPException:
         raise

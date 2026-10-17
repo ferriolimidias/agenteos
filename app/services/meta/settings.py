@@ -40,8 +40,9 @@ def _clean_env(name: str) -> str | None:
     return value or None
 
 
-def _env_enabled(name: str) -> bool:
-    return str(os.getenv(name) or "false").strip().lower() in {"1", "true", "yes", "sim", "on"}
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    fallback = "true" if default else "false"
+    return str(os.getenv(name) or fallback).strip().lower() in {"1", "true", "yes", "sim", "on"}
 
 
 def meta_settings() -> MetaAppSettings:
@@ -66,5 +67,5 @@ def meta_settings() -> MetaAppSettings:
         marketing_adset_create_enabled=_env_enabled("META_MARKETING_ADSET_CREATE_ENABLED"),
         marketing_creative_create_enabled=_env_enabled("META_MARKETING_CREATIVE_CREATE_ENABLED"),
         marketing_ad_create_enabled=_env_enabled("META_MARKETING_AD_CREATE_ENABLED"),
-        existing_post_ads_enabled=_env_enabled("META_EXISTING_POST_ADS_ENABLED"),
+        existing_post_ads_enabled=_env_enabled("META_EXISTING_POST_ADS_ENABLED", default=True),
     )

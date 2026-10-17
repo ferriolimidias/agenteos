@@ -23,6 +23,16 @@ from db.models import (
 ADMIN_MARKETING_SOURCE = "admin_managed_marketing_token"
 TENANT_MARKETING_SOURCE = "tenant_marketing_oauth"
 EMBEDDED_SIGNUP_TENANT = "embedded_signup_tenant"  # legacy display/source compatibility only
+META_MARKETING_CHANNEL = "marketing_ads"
+META_MARKETING_PROVIDER = "facebook_marketing"
+META_MARKETING_OAUTH_PERMISSIONS = (
+    "ads_read",
+    "ads_management",
+    "business_management",
+    "pages_show_list",
+    "pages_read_engagement",
+    "instagram_basic",
+)
 
 
 class MetaMarketingCapability(str, enum.Enum):
@@ -139,9 +149,19 @@ class MarketingCredentialResolver:
             raise MetaCredentialResolutionError("BUSINESS_BINDING_REQUIRED")
 
         connection = await self._embedded_connection(session, empresa_id)
-        tenant_credential = self._tenant_marketing_credential(tenant_id, connection, required, business_id, configured_account)
+        tenant_credential = self._tenant_marketing_credential(
+            tenant_id, connection, required, business_id, configured_account
+        )
         if tenant_credential is not None:
             return tenant_credential
+        for legacy_connection in await self._legacy_marketing_connections(session, empresa_id):
+            if connection is not None and legacy_connection.id == connection.id:
+                continue
+            tenant_credential = self._tenant_marketing_credential(
+                tenant_id, legacy_connection, required, business_id, configured_account
+            )
+            if tenant_credential is not None:
+                return tenant_credential
 
         if required != MetaMarketingCapability.ADS_READ or not allow_admin_fallback:
             raise MetaCredentialResolutionError("TENANT_MARKETING_CREDENTIAL_UNAVAILABLE")
@@ -176,7 +196,32 @@ class MarketingCredentialResolver:
         )
 
     async def _embedded_connection(self, session: AsyncSession, empresa_id: Any) -> Conexao | None:
-        result = await session.execute(
+        marketing_result = await session.execute(
+            select(Conexao)
+            .where(
+                Conexao.empresa_id == empresa_id,
+                Conexao.tipo == TipoConexao.META,
+                Conexao.channel == META_MARKETING_CHANNEL,
+                Conexao.provider == META_MARKETING_PROVIDER,
+            )
+            .order_by(Conexao.atualizado_em.desc(), Conexao.id.desc())
+            .limit(1)
+        )
+        marketing_connection = next((
+            connection
+            for connection in marketing_result.scalars().all()
+            if dict(connection.credenciais or {}).get("encrypted_marketing_access_token")
+        ), None)
+        if marketing_connection is not None:
+            return marketing_connection
+        legacy_connections = await self._legacy_marketing_connections(session, empresa_id)
+        return legacy_connections[0] if legacy_connections else None
+
+    async def _legacy_marketing_connections(self, session: AsyncSession, empresa_id: Any) -> list[Conexao]:
+        execute = getattr(session, "execute", None)
+        if execute is None:
+            return []
+        result = await execute(
             select(Conexao)
             .where(
                 Conexao.empresa_id == empresa_id,
@@ -187,7 +232,11 @@ class MarketingCredentialResolver:
             .order_by(Conexao.criado_em.desc(), Conexao.id.desc())
             .limit(1)
         )
-        return result.scalars().first()
+        return [
+            connection
+            for connection in result.scalars().all()
+            if dict(connection.credenciais or {}).get("encrypted_marketing_access_token")
+        ]
 
     def _tenant_marketing_credential(
         self,
@@ -200,6 +249,13 @@ class MarketingCredentialResolver:
         if connection is None:
             return None
         credentials = dict(getattr(connection, "credenciais", None) or {})
+        metadata = dict(getattr(connection, "metadata_json", None) or {})
+        stored_business = str(metadata.get("marketing_business_id") or "").strip()
+        stored_account = _normalize_ad_account_id(metadata.get("marketing_ad_account_id"))
+        if stored_business and stored_business != business_id:
+            return None
+        if stored_account and stored_account != _normalize_ad_account_id(ad_account_id):
+            return None
         # Never use encrypted_access_token: on this connection it belongs to
         # Meta Official WhatsApp, not to Marketing API.
         encrypted = credentials.get("encrypted_marketing_access_token")

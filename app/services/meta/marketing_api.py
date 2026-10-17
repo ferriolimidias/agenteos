@@ -295,6 +295,29 @@ class MetaMarketingApiClient:
         fields = "id,name,tasks,instagram_business_account{id,username},connected_instagram_account{id,username}"
         return sanitize_graph_payload(await self._client()._list_paginated("me/accounts", fields=fields))
 
+    async def list_business_pages(self, business_id: str, *, max_pages: int = 5) -> list[dict[str, Any]]:
+        """List only Pages attached to the authorized tenant Business.
+
+        A process-level Marketing credential can see assets for multiple
+        businesses. Its global ``me/accounts`` list is not a tenant page
+        directory, so admin-managed reads must use the granted Business edges.
+        """
+        business = str(business_id or "").strip()
+        if not business:
+            raise ValueError("BUSINESS_BINDING_REQUIRED")
+        fields = "id,name,tasks,instagram_business_account{id,username},connected_instagram_account{id,username}"
+        graph = self._client()
+        pages: dict[str, dict[str, Any]] = {}
+        for edge in ("owned_pages", "client_pages"):
+            rows = await graph._list_paginated(
+                f"{business}/{edge}", fields=fields, limit=50, max_pages=max_pages,
+            )
+            for row in rows:
+                page_id = str(row.get("id") or "").strip()
+                if page_id:
+                    pages[page_id] = row
+        return sanitize_graph_payload(list(pages.values()))
+
     async def list_page_published_posts(
         self, page_id: str, *, limit: int = 25, after: str | None = None,
     ) -> dict[str, Any]:

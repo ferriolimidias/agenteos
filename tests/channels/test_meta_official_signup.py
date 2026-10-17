@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -9,7 +10,13 @@ import httpx
 
 from fastapi import HTTPException
 
-from app.api.routers.conexoes import _discover_waba_from_token_targets, _ensure_meta_waba_subscription, _resolve_and_persist_meta_number
+from app.api.routers.conexoes import (
+    _discover_waba_from_token_targets,
+    _ensure_meta_waba_subscription,
+    _resolve_and_persist_meta_number,
+    meta_marketing_oauth_session,
+    meta_marketing_oauth_complete,
+)
 from app.services.channels.resolver import context_from_connection
 from app.services.channels.types import Channel, Provider, normalize_provider
 from app.services.meta.credential_crypto import decrypt_meta_secret, encrypt_meta_secret
@@ -68,6 +75,100 @@ class FakeGraphTransport:
 
 
 class MetaOfficialSignupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_marketing_oauth_session_is_independent_of_live_actions_and_whatsapp(self):
+        empresa_id = uuid.uuid4()
+        config = SimpleNamespace(ad_account_id="123", business_id="business-1")
+        empresa = SimpleNamespace(id=empresa_id)
+        user = SimpleNamespace(id=uuid.uuid4(), role="admin_empresa", empresa_id=empresa_id, email="admin@example.test")
+        db = SimpleNamespace(scalar=AsyncMock(return_value=config))
+        settings = SimpleNamespace(
+            app_id="app-id", app_secret="app-secret", credential_encryption_key="configured",
+            redirect_uri="https://example.test/callback", marketing_graph_api_version="v26.0",
+            live_actions_enabled=False,
+        )
+        with patch("app.api.routers.conexoes._buscar_empresa", AsyncMock(return_value=empresa)), \
+             patch("app.api.routers.conexoes._buscar_meta_official_conexao", AsyncMock(side_effect=AssertionError("Marketing OAuth must not depend on WABA"))) as waba_lookup, \
+             patch("app.api.routers.conexoes.meta_settings", return_value=settings), \
+             patch("app.api.routers.conexoes.create_signup_state", return_value="signed-state"), \
+             patch("app.api.routers.conexoes._audit_meta"):
+            response = await meta_marketing_oauth_session(str(empresa_id), db=db, current_user=user)
+        self.assertEqual(response["requested_permissions"], [
+            "ads_read", "ads_management", "business_management", "pages_show_list",
+            "pages_read_engagement", "instagram_basic",
+        ])
+        self.assertEqual(response["state"], "signed-state")
+        waba_lookup.assert_not_awaited()
+
+    async def test_marketing_oauth_stores_scoped_encrypted_credential_without_whatsapp_connection(self):
+        empresa_id = uuid.uuid4()
+        config = SimpleNamespace(ad_account_id="act_123", business_id="business-1")
+        empresa = SimpleNamespace(id=empresa_id)
+        user = SimpleNamespace(id=uuid.uuid4(), role="admin_empresa", empresa_id=empresa_id, email="admin@example.test")
+
+        class FakeDb:
+            def __init__(self):
+                self.scalar = AsyncMock(side_effect=[config, None])
+                self.added = []
+                self.committed = False
+
+            def add(self, item):
+                self.added.append(item)
+
+            async def flush(self):
+                if self.added and getattr(self.added[-1], "id", None) is None:
+                    self.added[-1].id = uuid.uuid4()
+
+            async def commit(self):
+                self.committed = True
+
+        db = FakeDb()
+
+        class FakeMarketingClient:
+            async def get_permissions(self):
+                return {"data": [
+                    {"permission": "ads_read", "status": "granted"},
+                    {"permission": "ads_management", "status": "granted"},
+                ]}
+
+            async def validate_ad_account(self, _account_id):
+                return {"id": "act_123", "account_id": "123", "business": {"id": "business-1"}}
+
+        class FakeGraph:
+            async def exchange_code(self, **_kwargs):
+                return {"access_token": "short-lived-secret", "token_type": "bearer", "expires_in": 3600}
+
+        settings = SimpleNamespace(
+            app_id="app-id", app_secret="app-secret", credential_encryption_key="configured",
+            redirect_uri="https://example.test/callback", marketing_graph_api_version="v26.0",
+            live_actions_enabled=False,
+        )
+        with patch("app.api.routers.conexoes._buscar_empresa", AsyncMock(return_value=empresa)), \
+             patch("app.api.routers.conexoes._buscar_meta_official_conexao", AsyncMock(side_effect=AssertionError("Marketing OAuth must not depend on WABA"))) as waba_lookup, \
+             patch("app.api.routers.conexoes.meta_settings", return_value=settings), \
+             patch("app.api.routers.conexoes.validate_signup_state", AsyncMock()), \
+             patch("app.api.routers.conexoes.MetaGraphClient", return_value=FakeGraph()), \
+             patch("app.api.routers.conexoes.MetaMarketingApiClient", return_value=FakeMarketingClient()), \
+             patch("app.api.routers.conexoes._business_account_binding", AsyncMock(return_value=(True, "business_owner"))), \
+             patch("app.api.routers.conexoes.encrypt_meta_secret", return_value="encrypted-token"), \
+             patch("app.api.routers.conexoes.utc_now_iso", return_value="2026-10-17T00:00:00+00:00"), \
+             patch("app.api.routers.conexoes._audit_meta"):
+            response = await meta_marketing_oauth_complete(
+                str(empresa_id),
+                type("Payload", (), {"state": "signed-state", "code": "one-time-code"})(),
+                db=db,
+                current_user=user,
+            )
+        self.assertTrue(db.committed)
+        self.assertEqual(len(db.added), 1)
+        credential_connection = db.added[0]
+        self.assertEqual(credential_connection.channel, "marketing_ads")
+        self.assertEqual(credential_connection.provider, "facebook_marketing")
+        self.assertEqual(credential_connection.credenciais["encrypted_marketing_access_token"], "encrypted-token")
+        self.assertNotIn("short-lived-secret", str(credential_connection.credenciais))
+        self.assertEqual(credential_connection.metadata_json["marketing_ad_account_id"], "123")
+        self.assertEqual(response["permissions"], {"ads_read": True, "ads_management": True})
+        waba_lookup.assert_not_awaited()
+
     async def test_waba_target_discovery_requires_one_phone_match(self):
         class FakeClient:
             access_token = "token"

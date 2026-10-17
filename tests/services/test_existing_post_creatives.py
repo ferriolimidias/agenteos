@@ -10,6 +10,7 @@ from app.api.routers.traffic_meta import (
     TrafficMetaExistingPostCampaignPreviewRequest,
     TrafficMetaExistingPostPreviewRequest,
     list_existing_ad_posts,
+    _tenant_pages,
     preview_existing_post_campaign,
     preview_existing_post_ad_creative,
     _raise_existing_post_read_error,
@@ -22,6 +23,7 @@ from app.services.meta.existing_post_creatives import (
 )
 from app.services.meta.graph_client import MetaGraphError
 from app.services.meta.marketing_api import MetaMarketingApiClient
+from app.services.meta.marketing_credentials import ADMIN_MARKETING_SOURCE
 from app.services.meta.settings import meta_settings
 
 
@@ -32,7 +34,7 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
         self.page_id = "page_123"
         self.ig_account_id = "ig_456"
         self.ad_account_id = "987654"
-        self.config = SimpleNamespace(ad_account_id=self.ad_account_id, page_id=self.page_id)
+        self.config = SimpleNamespace(ad_account_id=self.ad_account_id, page_id=self.page_id, business_id="business_test")
         self.admin = SimpleNamespace(role="admin_empresa", empresa_id=self.tenant_id, email="operator@example.test")
 
     def _token(self, *, platform="instagram", source_id="ig_media_456", media_type="VIDEO", product="REELS", tenant=None):
@@ -47,7 +49,9 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
             media_product_type=product,
         )
 
-    def test_existing_posts_feature_flag_defaults_off(self):
+    def test_existing_posts_feature_is_enabled_by_default_but_can_be_emergency_disabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(meta_settings().existing_post_ads_enabled)
         with patch.dict(os.environ, {"META_EXISTING_POST_ADS_ENABLED": "false"}, clear=False):
             self.assertFalse(meta_settings().existing_post_ads_enabled)
         with patch.dict(os.environ, {"META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False):
@@ -152,6 +156,45 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[1].args[1], f"{self.ig_account_id}/media")
         self.assertEqual(calls[1].kwargs["params"]["limit"], 7)
 
+    async def test_business_pages_query_only_tenant_edges_and_deduplicates(self):
+        graph = SimpleNamespace(_list_paginated=AsyncMock(side_effect=[
+            [{"id": "page-1", "name": "One"}, {"id": "page-2", "name": "Two"}],
+            [{"id": "page-2", "name": "Two"}, {"id": "page-3", "name": "Three"}],
+        ]))
+        client = MetaMarketingApiClient("opaque", graph_version="v26.0")
+        with patch.object(MetaMarketingApiClient, "_client", return_value=graph):
+            pages = await client.list_business_pages("business-tenant", max_pages=2)
+        self.assertEqual({item["id"] for item in pages}, {"page-1", "page-2", "page-3"})
+        self.assertEqual([call.args[0] for call in graph._list_paginated.await_args_list], [
+            "business-tenant/owned_pages", "business-tenant/client_pages",
+        ])
+        self.assertTrue(all(call.kwargs["max_pages"] == 2 for call in graph._list_paginated.await_args_list))
+        with self.assertRaisesRegex(ValueError, "BUSINESS_BINDING_REQUIRED"):
+            await client.list_business_pages(" ")
+
+    async def test_page_listing_is_scoped_to_the_verified_tenant_business(self):
+        scoped_page = {"id": "tenant-page", "name": "Tenant Page"}
+        client = SimpleNamespace(
+            list_business_pages=AsyncMock(return_value=[scoped_page]),
+            list_pages=AsyncMock(side_effect=AssertionError("global page directory must not be used")),
+        )
+        config = SimpleNamespace(business_id="verified-business")
+        result = await _tenant_pages(client, config, {"credential_source": ADMIN_MARKETING_SOURCE})
+        self.assertEqual(result, [scoped_page])
+        client.list_business_pages.assert_awaited_once_with("verified-business")
+        client.list_pages.assert_not_awaited()
+
+    async def test_tenant_oauth_page_listing_is_also_business_scoped(self):
+        client = SimpleNamespace(
+            list_business_pages=AsyncMock(return_value=[]),
+            list_pages=AsyncMock(side_effect=AssertionError("global page directory must not be used")),
+        )
+        config = SimpleNamespace(business_id="verified-business")
+        result = await _tenant_pages(client, config, {"credential_source": "tenant_marketing_oauth"})
+        self.assertEqual(result, [])
+        client.list_business_pages.assert_awaited_once_with("verified-business")
+        client.list_pages.assert_not_awaited()
+
     async def test_mock_flow_lists_tenant_post_then_returns_preview_without_meta_write(self):
         page = {
             "id": self.page_id,
@@ -160,7 +203,8 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
         }
 
         class Client:
-            async def list_pages(inner_self):
+            async def list_business_pages(inner_self, business_id):
+                self.assertEqual(business_id, "business_test")
                 return [page]
 
             async def list_instagram_media_page(inner_self, account_id, *, limit, after):
@@ -197,6 +241,7 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["preview"]["meta_write_performed"])
         self.assertEqual(result["preview"]["creative_payload_preview"]["source_instagram_media_id"], "ig_media_456")
         self.assertEqual(get_client.await_count, 2)
+        self.assertTrue(get_client.await_args_list[0].kwargs["allow_admin_fallback"])
 
     async def test_tenant_cannot_reuse_another_tenants_signed_selection(self):
         with patch.dict(os.environ, {"SECRET_KEY": "a" * 48, "META_EXISTING_POST_ADS_ENABLED": "true"}, clear=False):
@@ -221,8 +266,8 @@ class ExistingPostCreativeTests(unittest.IsolatedAsyncioTestCase):
                 calls.append(("GET", "validate_ad_account", account_id))
                 return {"id": account_id, "business": {"id": "business_test"}}
 
-            async def list_pages(inner_self):
-                calls.append(("GET", "list_pages"))
+            async def list_business_pages(inner_self, business_id):
+                calls.append(("GET", "list_business_pages", business_id))
                 return [page]
 
             async def get_instagram_media(inner_self, media_id):

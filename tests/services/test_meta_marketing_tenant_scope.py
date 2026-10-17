@@ -97,6 +97,50 @@ class MarketingCredentialScopeTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaisesRegex(MetaCredentialResolutionError, "TENANT_MARKETING_CREDENTIAL_UNAVAILABLE"):
                         await self.resolver.resolve(self.session(self.grant), self.tenant_id, "ads_management", allow_admin_fallback=True)
 
+    async def test_separate_marketing_oauth_credential_is_bound_to_its_business_and_account(self):
+        matching = type("Connection", (), {
+            "id": uuid.uuid4(),
+            "credenciais": {"encrypted_marketing_access_token": "marketing-encrypted", "marketing_granted_permissions": ["ads_management"]},
+            "metadata_json": {"marketing_business_id": "business-tenant-a", "marketing_ad_account_id": "12345"},
+        })()
+        with patch("app.services.meta.marketing_credentials.decrypt_meta_secret", return_value="tenant-token"):
+            credential = self.resolver._tenant_marketing_credential(
+                str(self.tenant_id), matching, MetaMarketingCapability.ADS_MANAGEMENT,
+                "business-tenant-a", "12345",
+            )
+            wrong_account = self.resolver._tenant_marketing_credential(
+                str(self.tenant_id), matching, MetaMarketingCapability.ADS_READ,
+                "business-tenant-a", "99999",
+            )
+            wrong_business = self.resolver._tenant_marketing_credential(
+                str(self.tenant_id), matching, MetaMarketingCapability.ADS_READ,
+                "business-tenant-b", "12345",
+            )
+        self.assertEqual(credential.access_token, "tenant-token")
+        self.assertFalse(credential.read_only)
+        self.assertIsNone(wrong_account)
+        self.assertIsNone(wrong_business)
+
+    async def test_marketing_oauth_missing_write_scope_falls_back_to_legacy_marketing_token(self):
+        newer_read_only = type("Connection", (), {
+            "id": uuid.uuid4(),
+            "credenciais": {"encrypted_marketing_access_token": "read-only-encrypted", "marketing_granted_permissions": ["ads_read"]},
+            "metadata_json": {"marketing_business_id": "business-tenant-a", "marketing_ad_account_id": "12345"},
+        })()
+        legacy_write = type("Connection", (), {
+            "id": uuid.uuid4(),
+            "credenciais": {("encrypted_" + "marketing_access_token"): "fixture-encrypted", "marketing_granted_permissions": ["ads_management"]},
+            "metadata_json": {},
+        })()
+        session = self.session(self.grant)
+        with patch.object(self.resolver, "_tenant_config", AsyncMock(return_value=self.config)):
+            with patch.object(self.resolver, "_embedded_connection", AsyncMock(return_value=newer_read_only)):
+                with patch.object(self.resolver, "_legacy_marketing_connections", AsyncMock(return_value=[legacy_write])):
+                    with patch("app.services.meta.marketing_credentials.decrypt_meta_secret", return_value="legacy-write-token"):
+                        credential = await self.resolver.resolve(session, self.tenant_id, "ads_management")
+        self.assertEqual(credential.access_token, "legacy-write-token")
+        self.assertFalse(credential.read_only)
+
     async def test_admin_read_only_client_blocks_create_even_if_environment_flags_are_on(self):
         client = MetaMarketingApiClient("opaque-token", read_only=True)
         with patch.dict(os.environ, {

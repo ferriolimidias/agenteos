@@ -12,6 +12,7 @@ from app.services.meta.conversion_credentials import MetaCredentialResolutionErr
 from app.services.meta.marketing_api import MetaMarketingApiClient, normalize_ad_account_id
 from app.services.meta.marketing_credentials import (
     ADMIN_MARKETING_SOURCE,
+    META_MARKETING_OAUTH_PERMISSIONS,
     MetaMarketingCredentialResolver,
     supports_ads_read,
 )
@@ -89,14 +90,17 @@ async def marketing_ads_readiness(
     tenant_id = uuid.UUID(str(empresa_id))
     config = await session.scalar(select(TrafficMetaConfig).where(TrafficMetaConfig.empresa_id == tenant_id))
     settings = meta_settings()
-    oauth_enabled = bool(settings.app_id and settings.app_secret and settings.credential_encryption_key and settings.live_actions_enabled)
+    oauth_enabled = bool(
+        settings.app_id and settings.app_secret and settings.credential_encryption_key and settings.redirect_uri
+    )
     oauth_config = {
         "configured": bool(settings.app_id and settings.app_secret and settings.credential_encryption_key),
         "enabled": oauth_enabled,
+        "action_required": None if oauth_enabled else "A autorização da Marketing API aguarda a configuração do retorno OAuth pela administração da plataforma.",
         "app_id": settings.app_id,
         "graph_api_version": settings.marketing_graph_api_version,
         "sdk_url": "https://connect.facebook.net/pt_BR/sdk.js",
-        "requested_permission": "ads_read",
+        "requested_permissions": list(META_MARKETING_OAUTH_PERMISSIONS),
     }
     last_sync, stored_rows = (await session.execute(select(
         func.max(MetaAdsInsightDaily.fetched_at), func.count(MetaAdsInsightDaily.id),
@@ -109,7 +113,7 @@ async def marketing_ads_readiness(
         "token_source": None,
         "credential_source": None,
         "token_type": None,
-        "permissions": {"ads_read": False, "ads_management": False, "business_management": False},
+        "permissions": {name: False for name in META_MARKETING_OAUTH_PERMISSIONS},
         "asset_access": {"ad_account": False, "campaigns": False, "adsets": False, "ads": False},
         "insights": {"preflight": "not_run", "rows_returned": None, "date": None},
         "ad_account_configured": bool(config and config.ad_account_id),
@@ -172,9 +176,7 @@ async def marketing_ads_readiness(
     try:
         permissions = granted_permissions(await client.get_permissions())
         base["permissions"] = {
-            "ads_read": "ads_read" in permissions,
-            "ads_management": "ads_management" in permissions,
-            "business_management": "business_management" in permissions,
+            name: name in permissions for name in META_MARKETING_OAUTH_PERMISSIONS
         }
         if not supports_ads_read(permissions):
             base["marketing_readiness_status"] = "PERMISSION_DENIED"
