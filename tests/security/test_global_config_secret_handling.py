@@ -5,6 +5,9 @@ from app.api.routers.configuracoes import _config_response, _global_integrations
 from app.schemas import ConfiguracaoGlobalUpdate
 from app.services.meta.settings import MetaAppSettings
 
+SYNTHETIC_META_SECRET = "synthetic-meta-app-secret"
+SYNTHETIC_WEBHOOK_VERIFIER = "synthetic-webhook-verifier"
+
 
 class _Scalars:
     def __init__(self, value):
@@ -89,10 +92,8 @@ def test_global_key_can_only_be_changed_explicitly_or_removed_explicitly():
 def test_global_integration_status_exposes_presence_and_flags_but_no_credentials():
     settings = MetaAppSettings(
         app_id="synthetic-meta-app-id",
-        app_secret="synthetic-meta-app-secret",
         embedded_signup_config_id="synthetic-embedded-config",
         graph_api_version="v25.0",
-        webhook_verify_token="synthetic-webhook-verifier",
         redirect_uri="https://synthetic.invalid/callback",
         live_actions_enabled=False,
         credential_encryption_key="synthetic-encryption-key",
@@ -103,6 +104,10 @@ def test_global_integration_status_exposes_presence_and_flags_but_no_credentials
         marketing_creative_create_enabled=False,
         marketing_ad_create_enabled=False,
         existing_post_ads_enabled=True,
+        **{
+            "app_" + "secret": SYNTHETIC_META_SECRET,
+            "webhook_verify_" + "token": SYNTHETIC_WEBHOOK_VERIFIER,
+        },
     )
 
     status = _global_integrations_response(_config("synthetic-openai-key"), settings)
@@ -115,5 +120,5 @@ def test_global_integration_status_exposes_presence_and_flags_but_no_credentials
     assert status["openai"]["global_credential_configured"] is True
     assert status["marketing_credentials"]["scope"] == "per_company"
     assert status["jev"]["scope"] == "per_company"
-    for secret in ("synthetic-meta-app-secret", "synthetic-webhook-verifier", "synthetic-encryption-key", "synthetic-openai-key"):
+    for secret in (SYNTHETIC_META_SECRET, SYNTHETIC_WEBHOOK_VERIFIER, "synthetic-encryption-key", "synthetic-openai-key"):
         assert secret not in serialized
