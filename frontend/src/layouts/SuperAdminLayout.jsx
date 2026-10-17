@@ -1,9 +1,10 @@
 import React, { useCallback, useState, useEffect, useRef } from "react";
-import { Navigate, Outlet, NavLink, Link, useLocation } from "react-router-dom";
-import { BrainCircuit, Settings, Building, LogOut, ShieldCheck, Menu, X } from "lucide-react";
+import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
+import { Activity, Building, Building2, CreditCard, LogOut, MessageSquare, PlugZap, Settings, ShieldCheck, ShoppingBag, Users, Menu, X } from "lucide-react";
 import api from "../services/api";
 import { shellStyles } from "../utils/uiStyles";
 import { getStoredUser } from "../utils/auth";
+import { COMPANY_ADMIN_SECTIONS, resolveCompanyAdminSection } from "../utils/superAdminNavigation";
 import "../styles/admin-navigation.css";
 
 export default function SuperAdminLayout() {
@@ -11,12 +12,23 @@ export default function SuperAdminLayout() {
   const isSuperAdmin = user?.role === "super_admin";
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
-  const companiesActive = location.pathname.replace(/\/$/, "") === "/admin" || location.pathname.startsWith("/admin/empresas/");
   const companyPage = location.pathname.startsWith("/admin/empresas/");
-  const companyAiPage = companyPage && location.pathname.includes("/atendimento-ia");
-  const companyMetaPage = companyPage && (location.pathname.includes("/meta") || location.pathname.includes("/instagram"));
-  const jevPage = location.pathname.startsWith("/admin/configuracoes/integracoes/jev");
-  const contextTitle = companyAiPage ? "Atendimento e IA" : companyMetaPage ? "Canais e campanhas" : companyPage ? "Detalhes da empresa" : jevPage ? "Integração JEV" : location.pathname.startsWith("/admin/configuracoes") ? "Configurações globais" : location.pathname.startsWith("/admin/agentes") ? "Agentes por empresa" : "Empresas";
+  const companiesReturn = /^\/admin(?:\?|$)/.test(location.state?.companiesReturn || "") ? location.state.companiesReturn : "/admin";
+  const companySection = companyPage ? resolveCompanyAdminSection(location) : null;
+  const companySectionLabel = COMPANY_ADMIN_SECTIONS.find(({ id }) => id === companySection)?.label || "Visão geral";
+  const globalLinks = [
+    { to: "/admin", label: "Empresas", icon: Building, active: location.pathname === "/admin" || location.pathname === "/admin/" },
+    { to: "/admin/operacao", label: "Operação e saúde", icon: Activity, active: location.pathname.startsWith("/admin/operacao") },
+    { to: "/admin/integracoes", label: "Integrações", icon: PlugZap, active: location.pathname.startsWith("/admin/integracoes") || location.pathname.startsWith("/admin/configuracoes/integracoes") },
+    { to: "/admin/seguranca", label: "Segurança e auditoria", icon: ShieldCheck, active: location.pathname.startsWith("/admin/seguranca") },
+    { to: "/admin/configuracoes", label: "Configurações da plataforma", icon: Settings, active: location.pathname === "/admin/configuracoes" },
+  ];
+  const contextTitle = companyPage ? companySectionLabel
+    : location.pathname.startsWith("/admin/operacao") ? "Operação e saúde"
+      : location.pathname.startsWith("/admin/integracoes") || location.pathname.startsWith("/admin/configuracoes/integracoes") ? "Integrações"
+        : location.pathname.startsWith("/admin/seguranca") ? "Segurança e auditoria"
+          : location.pathname.startsWith("/admin/configuracoes") ? "Configurações da plataforma"
+            : location.pathname.startsWith("/admin/agentes") ? "Agentes por empresa" : "Empresas";
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
 
@@ -112,25 +124,23 @@ export default function SuperAdminLayout() {
           </span>
         </div>
         
-        <nav className="fm-sidebar-nav" aria-label="Menu principal" onClick={(event) => { if (event.target.closest("a")) setMenuOpen(false); }}>
-          <p className={shellStyles.navSection}>Gestão</p>
-          <Link to="/admin/" aria-current={companiesActive ? "page" : undefined} className={`${shellStyles.navItem} ${companiesActive ? shellStyles.navActive : shellStyles.navInactive}`}>
-            <Building size={16} aria-hidden="true" />
-            <span>Empresas</span>
-          </Link>
-          <NavLink to="/admin/agentes" className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
-            <BrainCircuit size={16} />
-            <span>Agentes por empresa</span>
-          </NavLink>
-          <p className={shellStyles.navSection}>Sistema e integrações</p>
-          <NavLink to="/admin/configuracoes" aria-current={jevPage ? "location" : "page"} className={({ isActive }) => `${shellStyles.navItem} ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
-            <Settings size={16} />
-            <span>Configurações Globais</span>
-          </NavLink>
-          <NavLink to="/admin/configuracoes/integracoes/jev" className={({ isActive }) => `${shellStyles.navItem} fm-admin-nav-child ${isActive ? shellStyles.navActive : shellStyles.navInactive}`}>
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>Integração JEV</span>
-          </NavLink>
+        <nav className="fm-sidebar-nav" aria-label={companyPage ? "Navegação da empresa" : "Navegação global"} onClick={(event) => { if (event.target.closest("a")) setMenuOpen(false); }}>
+          {companyPage ? <>
+            <Link to={companiesReturn} className={`${shellStyles.navItem} ${shellStyles.navInactive} fm-admin-back-link`}><Building size={16} aria-hidden="true" /><span>Voltar às empresas</span></Link>
+            <p className={shellStyles.navSection}>Administração da empresa</p>
+            {COMPANY_ADMIN_SECTIONS.map(({ id, label, href }) => {
+              const active = id === companySection;
+              const Icon = ({ "visao-geral": Building2, "atendimento-ia": MessageSquare, "crm-regras": Users, canais: PlugZap, "campanhas-meta": ShoppingBag, pagamentos: CreditCard, usuarios: Users, diagnosticos: ShieldCheck })[id];
+              return <Link key={id} to={href(location.pathname.split("/")[3])} state={{ ...location.state, companiesReturn }} aria-current={active ? "page" : undefined} className={`${shellStyles.navItem} ${active ? shellStyles.navActive : shellStyles.navInactive}`}>
+                <Icon size={16} aria-hidden="true" /><span>{label}</span>
+              </Link>;
+            })}
+          </> : <>
+            <p className={shellStyles.navSection}>Plataforma Ferrioli</p>
+            {globalLinks.map(({ to, label, icon, active }) => <Link key={to} to={to} aria-current={active ? "page" : undefined} className={`${shellStyles.navItem} ${active ? shellStyles.navActive : shellStyles.navInactive}`}>
+              {React.createElement(icon, { size: 16, "aria-hidden": true })}<span>{label}</span>
+            </Link>)}
+          </>}
         </nav>
         
         <div className="fm-sidebar-footer">
@@ -151,9 +161,14 @@ export default function SuperAdminLayout() {
         <div id="admin-content" tabIndex={-1} className={shellStyles.content}>
           <nav className="fm-admin-breadcrumbs" aria-label="Caminho da página">
             <ol>
-              <li>{contextTitle === "Empresas" ? <span aria-current="page">Empresas</span> : <Link to="/admin">Empresas</Link>}</li>
-              {jevPage && <li><Link to="/admin/configuracoes">Configurações globais</Link></li>}
-              {contextTitle !== "Empresas" && <li><span aria-current="page">{contextTitle}</span></li>}
+              {companyPage ? <>
+                <li><Link to={companiesReturn}>Empresas</Link></li>
+                <li><Link to={`/admin/empresas/${location.pathname.split("/")[3]}`} state={{ ...location.state, companiesReturn }}>Empresa</Link></li>
+                <li><span aria-current="page">{contextTitle}</span></li>
+              </> : <>
+                <li>{contextTitle === "Empresas" ? <span aria-current="page">Plataforma</span> : <Link to="/admin">Plataforma</Link>}</li>
+                {contextTitle !== "Empresas" && <li><span aria-current="page">{contextTitle}</span></li>}
+              </>}
             </ol>
           </nav>
           <Outlet />

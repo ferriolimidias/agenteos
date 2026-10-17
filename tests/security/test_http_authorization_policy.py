@@ -532,6 +532,17 @@ def test_sensitive_routes_declare_expected_scope_and_super_admin_policy():
     assert policies[("POST", "/api/empresas/{empresa_id}/inbox/{telefone}/send_media")] == "TENANT_WRITE"
     assert policies[("POST", "/api/empresas/{empresa_id}/inbox/{telefone}/pausar_bot")] == "TENANT_WRITE"
     assert policies[("POST", "/api/empresas/{empresa_id}/inbox/{telefone}/reativar_bot")] == "TENANT_WRITE"
+    assert policies[("GET", "/api/admin/security/overview")] == "SUPER_ADMIN_ONLY"
+    assert policies[("GET", "/api/admin/configuracoes")] == "SUPER_ADMIN_ONLY"
+    assert policies[("PUT", "/api/admin/configuracoes")] == "SUPER_ADMIN_ONLY"
+    assert policies[("GET", "/api/admin/integrations/global-status")] == "SUPER_ADMIN_ONLY"
+    assert policies[("GET", "/api/admin/empresas/{empresa_id}/openai-models")] == "SUPER_ADMIN_ONLY"
+    prompt_optimizer_policies = [
+        policy for (_method, path), policy in policies.items()
+        if path.startswith("/api/empresas/{empresa_id}/prompt-optimizer")
+    ]
+    assert prompt_optimizer_policies
+    assert set(prompt_optimizer_policies) == {"SUPER_ADMIN_ONLY"}
 
 
 def test_simulator_redis_keys_are_tenant_scoped():

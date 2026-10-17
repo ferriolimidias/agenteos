@@ -6,6 +6,7 @@ const pageSource = readFileSync(new URL("./EmpresaDetalhes.jsx", import.meta.url
 const companiesSource = readFileSync(new URL("./Empresas.jsx", import.meta.url), "utf8");
 const managerSource = readFileSync(new URL("../../components/EmpresaConexoesManager.jsx", import.meta.url), "utf8");
 const paymentManagerSource = readFileSync(new URL("../../components/EmpresaPaymentManager.jsx", import.meta.url), "utf8");
+const navigationSource = readFileSync(new URL("../../utils/superAdminNavigation.js", import.meta.url), "utf8");
 
 test("super admin uses operational WhatsApp status instead of Evolution-only status", () => {
   assert.match(pageSource, /\/whatsapp\/status/);
@@ -35,7 +36,7 @@ test("agent configuration loads and saves allowed tag UUIDs separately from conv
 });
 
 test("company management exposes tenant-scoped Mercado Pago configuration without revealing saved secrets", () => {
-  assert.match(pageSource, /id: "pagamentos", label: "Pagamentos"/);
+  assert.match(navigationSource, /id: "pagamentos", label: "Pagamentos"/);
   assert.match(pageSource, /tabAtiva === "pagamentos"/);
   assert.match(pageSource, /EmpresaPaymentManager/);
   assert.match(paymentManagerSource, /\/admin\/empresas\/\$\{empresaId\}\/payments\/mercado-pago/);
@@ -62,9 +63,49 @@ test("main model select uses canonical IDs and friendly labels", () => {
   assert.match(pageSource, /Este modelo é compartilhado pelo atendimento e pelo Monitor de Conversão/);
   assert.match(modelBlock, /aria-label="Buscar modelos OpenAI"/);
   // UX03 removed the unreachable duplicate list modal; the canonical select stays in details.
-  assert.match(companiesSource, /tab=agente/);
+  assert.match(companiesSource, /atendimento-ia\/prompts/);
   assert.doesNotMatch(companiesSource, /showConfigIAModal/);
   assert.doesNotMatch(selectBlock, /<input/);
+});
+
+test("Super Admin replaces the horizontal tabs with contextual global and company navigation", () => {
+  const layoutSource = readFileSync(new URL("../../layouts/SuperAdminLayout.jsx", import.meta.url), "utf8");
+  const globalSecuritySource = readFileSync(new URL("./SegurancaAuditoria.jsx", import.meta.url), "utf8");
+  const operationSource = readFileSync(new URL("./AdminOperacaoSaude.jsx", import.meta.url), "utf8");
+  const integrationSource = readFileSync(new URL("./IntegracoesGlobais.jsx", import.meta.url), "utf8");
+  assert.match(layoutSource, /Operação e saúde/);
+  assert.match(layoutSource, /Integrações/);
+  assert.match(layoutSource, /Segurança e auditoria/);
+  assert.match(pageSource, /tabAtiva === "crm-regras"/);
+  assert.match(pageSource, /tabAtiva === "diagnosticos"/);
+  assert.match(pageSource, /<Instagram adminCredentials \/>/);
+  assert.doesNotMatch(pageSource, /<Tabs /);
+  assert.doesNotMatch(pageSource, /Agenda e Automações|Imagens \/ Visão/);
+  const aiLayoutSource = readFileSync(new URL("./AdminAtendimentoIA.jsx", import.meta.url), "utf8");
+  const simulatorSource = readFileSync(new URL("../tenant/Simulador.jsx", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../../App.jsx", import.meta.url), "utf8");
+  assert.match(aiLayoutSource, /Simular atendimento/);
+  assert.match(appSource, /<Route path="simulador" element=\{<Simulador adminMode \/>\}/);
+  assert.match(pageSource, /navigate\(`\/admin\/empresas\/\$\{empresaId\}\/atendimento-ia\/simulador`\)/);
+  assert.match(simulatorSource, /adminMode \? String\(adminEmpresaId/);
+  assert.match(simulatorSource, /Voltar para atendimento e IA/);
+  assert.match(simulatorSource, /if \(adminMode\) \{/);
+  assert.match(globalSecuritySource, /\/admin\/security\/overview/);
+  assert.match(operationSource, /\/admin\/workers\/status/);
+  assert.match(integrationSource, /Consultas à Meta são limitadas a uma empresa/);
+  assert.match(integrationSource, /sem expor tokens/);
+});
+
+test("Meta technical credentials and campaign operations use the same existing feature in separate company areas", () => {
+  const metaRouteSource = readFileSync(new URL("./AdminMetaEmpresa.jsx", import.meta.url), "utf8");
+  const trafficMetaSource = readFileSync(new URL("../tenant/TrafficMeta.jsx", import.meta.url), "utf8");
+  assert.match(pageSource, /<TrafficMeta adminTools adminToolsView="credentials" \/>/);
+  assert.match(metaRouteSource, /<TrafficMeta adminTools adminToolsView="campaigns" \/>/);
+  assert.match(trafficMetaSource, /adminToolsView !== "campaigns"/);
+  assert.match(trafficMetaSource, /adminToolsView !== "credentials"/);
+  assert.match(trafficMetaSource, /if \(!draftReady \|\| !empresaId \|\| !showMetaCampaigns\)/);
+  assert.match(trafficMetaSource, /if \(!showMetaCampaigns \|\| !showNewCampaign \|\| !empresaId\)/);
+  assert.doesNotMatch(pageSource, /"Campanhas e integrações Meta"[^]*Abrir canais e campanhas/);
 });
 
 test("reasoning effort options come from backend capabilities and incompatible values block save", () => {

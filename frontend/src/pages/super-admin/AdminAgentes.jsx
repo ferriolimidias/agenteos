@@ -46,7 +46,7 @@ export default function AdminAgentes() {
         <ul className="fm-admin-company-picker">
           {visible.map(company => <li key={company.id}>
             <div><h2>{company.nome_empresa || "Empresa sem nome"}</h2><p className="fm-helper">ID {company.id}</p></div>
-            <Link className="fm-button fm-button-secondary" to={`/admin/empresas/${company.id}?tab=agente`} aria-label={`Configurar agente de ${company.nome_empresa || `empresa ${company.id}`}`}>Configurar agente</Link>
+            <Link className="fm-button fm-button-secondary" to={`/admin/empresas/${company.id}?area=atendimento-ia`} aria-label={`Configurar atendimento de ${company.nome_empresa || `empresa ${company.id}`}`}>Atendimento e IA</Link>
           </li>)}
         </ul>
       </>}

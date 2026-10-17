@@ -1,14 +1,15 @@
 import "../../styles/ux05-tools.css";
 import React, { useState, useRef, useEffect } from "react";
 import { Send, Bot, RefreshCw, FlaskConical, XCircle } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { clearImpersonation, getActiveEmpresaId } from "../../utils/auth";
 import api from "../../services/api";
 
 const POLL_INTERVAL_MS = 15000;
 
-export default function Simulador() {
+export default function Simulador({ adminMode = false }) {
   const navigate = useNavigate();
+  const { empresaId: adminEmpresaId } = useParams();
   const [searchParams] = useSearchParams();
   const [messages, setMessages] = useState([]);
   const [inputStr, setInputStr] = useState("");
@@ -19,7 +20,7 @@ export default function Simulador() {
 
   const empresaIdFromQuery = String(searchParams.get("empresaId") || "").trim();
   const empresaNomeTeste = String(localStorage.getItem("impersonating_empresa") || "").trim();
-  const empresaId = empresaIdFromQuery || getActiveEmpresaId() || "";
+  const empresaId = adminMode ? String(adminEmpresaId || "").trim() : empresaIdFromQuery || getActiveEmpresaId() || "";
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -114,6 +115,10 @@ export default function Simulador() {
   };
 
   const encerrarTeste = () => {
+    if (adminMode) {
+      navigate(`/admin/empresas/${empresaId}/atendimento-ia/prompts`);
+      return;
+    }
     clearImpersonation();
     navigate("/admin");
   };
@@ -135,7 +140,7 @@ export default function Simulador() {
               className="ux05-simulator-exit inline-flex items-center gap-1 rounded-md border border-violet-300/30 bg-violet-700/20 px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-700/30"
             >
               <XCircle size={12} />
-              Encerrar Teste
+              {adminMode ? "Voltar para atendimento e IA" : "Encerrar Teste"}
             </button>
           </div>
         </div>

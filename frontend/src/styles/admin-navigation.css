@@ -1,4 +1,7 @@
 .fm-admin-nav-child { margin-left: var(--fm-space-4); }
+.fm-admin-back-link { margin-bottom: var(--fm-space-2); }
+.fm-sidebar-nav { min-width: 0; }
+.fm-sidebar-nav .fm-nav-item { white-space: normal; line-height: 1.35; }
 .fm-admin-breadcrumbs { margin-bottom: var(--fm-space-5); color: var(--fm-muted); font-size: var(--fm-text-sm); }
 .fm-admin-breadcrumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fm-space-2); }
 .fm-admin-breadcrumbs li { display: inline-flex; align-items: center; gap: var(--fm-space-2); min-width: 0; }

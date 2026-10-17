@@ -32,6 +32,7 @@ from db.models import (
     CampanhaDisparo,
     CampanhaDisparoStatus,
     Empresa,
+    A11PromptAudit,
     EmpresaUnidade,
     Conhecimento,
     Usuario,
@@ -118,6 +119,12 @@ logger = logging.getLogger(__name__)
 admin_router = APIRouter(
     prefix="/admin/empresas",
     tags=["Admin Empresas"],
+)
+
+security_router = APIRouter(
+    prefix="/admin",
+    tags=["Segurança e auditoria"],
+    dependencies=[Depends(require_super_admin)],
 )
 
 SIMULADOR_LEAD_ID = "ID_TESTE_SIMULADOR"
@@ -606,6 +613,86 @@ async def listar_usuarios_empresa_admin(
     )
     usuarios = result.scalars().all()
     return [_serializar_usuario_empresa(usuario) for usuario in usuarios if not is_super_admin_role(usuario.role)]
+
+
+@security_router.get("/security/overview", status_code=status.HTTP_200_OK)
+async def obter_visao_seguranca_admin(db: AsyncSession = Depends(get_db)):
+    """Return a sanitized, read-only access inventory and the existing A11 prompt audit trail."""
+    company_rows = (await db.execute(
+        select(Empresa.id, Empresa.nome_empresa)
+        .order_by(Empresa.nome_empresa.asc())
+    )).all()
+    user_rows = (await db.execute(
+        select(
+            Usuario.id,
+            Usuario.empresa_id,
+            Usuario.nome,
+            Usuario.email,
+            Usuario.role,
+            Usuario.ativo,
+        )
+        .where(Usuario.empresa_id.is_not(None))
+        .order_by(Usuario.nome.asc(), Usuario.email.asc())
+    )).all()
+    company_names = {str(company_id): str(name or "Empresa sem nome") for company_id, name in company_rows}
+    users = [
+        {
+            "id": str(user_id),
+            "company_id": str(company_id),
+            "company_name": company_names.get(str(company_id), "Empresa não identificada"),
+            "name": str(name or "Usuário sem nome"),
+            "email": str(email or ""),
+            "role": str(role or "unknown"),
+            "active": bool(active),
+        }
+        for user_id, company_id, name, email, role, active in user_rows
+        if not is_super_admin_role(role) and not is_root_admin_email(email)
+    ]
+
+    audit_rows = (await db.execute(
+        select(
+            A11PromptAudit.empresa_id,
+            Empresa.nome_empresa,
+            A11PromptAudit.actor_id,
+            A11PromptAudit.action,
+            A11PromptAudit.object_type,
+            A11PromptAudit.object_id,
+            A11PromptAudit.created_at,
+        )
+        .join(Empresa, Empresa.id == A11PromptAudit.empresa_id)
+        .order_by(A11PromptAudit.created_at.desc())
+        .limit(100)
+    )).all()
+    prompt_audits = [
+        {
+            "company_id": str(company_id),
+            "company_name": str(company_name or "Empresa sem nome"),
+            "actor_id": str(actor_id) if actor_id is not None else None,
+            "action": str(action),
+            "object_type": str(object_type),
+            "object_id": str(object_id) if object_id is not None else None,
+            "created_at": created_at.isoformat() if created_at else None,
+        }
+        for company_id, company_name, actor_id, action, object_type, object_id, created_at in audit_rows
+    ]
+
+    company_counts: dict[str, int] = {}
+    for user in users:
+        company_counts[user["company_id"]] = company_counts.get(user["company_id"], 0) + 1
+    return {
+        "companies": [
+            {"id": str(company_id), "name": str(name or "Empresa sem nome"), "user_count": company_counts.get(str(company_id), 0)}
+            for company_id, name in company_rows
+        ],
+        "users": users,
+        "prompt_audit": {
+            "scope": "Ações de governança de prompts registradas pelo Prompt Optimizer A11.",
+            "items": prompt_audits,
+            "returned": len(prompt_audits),
+            "limit": 100,
+        },
+        "general_admin_audit_available": False,
+    }
 
 
 @admin_router.post("/{empresa_id}/usuarios", status_code=status.HTTP_201_CREATED)

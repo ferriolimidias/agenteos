@@ -165,10 +165,10 @@ export default function Empresas() {
             <td><div className="fm-company-identity">{emp.logo_url ? <img src={emp.logo_url} alt={`Logo de ${emp.nome_empresa}`} /> : <Building size={22} aria-hidden="true" />}<div><Link className="fm-company-name" to={`/admin/empresas/${emp.id}`} state={{companiesReturn:`/admin${searchParams.size ? `?${searchParams}` : ""}`}}>{emp.nome_empresa}</Link><p>{emp.area_atuacao || "Área não informada"}</p><span className="fm-company-id">{emp.id}</span></div></div></td>
             <td><StatusBadge tone={state.tone}>{state.label}</StatusBadge></td>
             <td><div className="fm-company-actions"><ActionButton type="button" variant="secondary" icon={ArrowRight} onClick={()=>navigate(`/admin/empresas/${emp.id}`,{state:{companiesReturn:`/admin${searchParams.size ? `?${searchParams}` : ""}`}})}>Gerenciar</ActionButton><details className="fm-company-menu"><summary aria-label={`Ações de ${emp.nome_empresa}`}>Mais ações</summary><div className="fm-company-menu-items">
-              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=usuarios`}><Users size={16} aria-hidden="true" />Usuários e acessos</Link>
-              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=agente`}><Brain size={16} aria-hidden="true" />Configuração do agente</Link>
-              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=conhecimento`}><FileText size={16} aria-hidden="true" />Base de conhecimento</Link>
-              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?tab=canais`}><KeyRound size={16} aria-hidden="true" />Canais e credenciais</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?area=usuarios`}><Users size={16} aria-hidden="true" />Usuários e permissões</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}/atendimento-ia/prompts`}><Brain size={16} aria-hidden="true" />Atendimento e IA</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?area=crm-regras`}><FileText size={16} aria-hidden="true" />CRM e regras comerciais</Link>
+              <Link state={companyLinkState} to={`/admin/empresas/${emp.id}?area=canais`}><KeyRound size={16} aria-hidden="true" />Canais e credenciais</Link>
               <Link to={`/admin/configuracoes/integracoes/jev?empresa=${encodeURIComponent(emp.id)}`}><Settings size={16} aria-hidden="true" />Integração JEV</Link>
               <ActionButton type="button" variant="ghost" icon={Pencil} onClick={()=>openForm(emp)}>Editar cliente</ActionButton>
               <ActionButton type="button" variant="ghost" icon={UserCheck} onClick={()=>prepareAction("impersonate",emp)}>Acessar painel da empresa</ActionButton>

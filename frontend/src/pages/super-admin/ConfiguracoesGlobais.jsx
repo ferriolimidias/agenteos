@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { Save, Settings } from "lucide-react";
 import api from "../../services/api";
 import { ActionButton, InfoBanner, Input, LoadingState, PageHeader, SectionCard } from "../../components/ui";
@@ -9,11 +8,13 @@ export default function ConfiguracoesGlobais() {
     nome_sistema: "",
     cor_primaria: "#6366f1",
     openai_key_global: "",
+    remover_openai_key_global: false,
     favicon_base64: "",
     logo_base64: "",
   });
   const [loading, setLoading] = useState(true);
   const [savedData, setSavedData] = useState(null);
+  const [openaiKeyConfigured, setOpenaiKeyConfigured] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -28,12 +29,14 @@ export default function ConfiguracoesGlobais() {
         const loadedData = {
           nome_sistema: response.data.nome_sistema || "",
           cor_primaria: response.data.cor_primaria || "#6366f1",
-          openai_key_global: response.data.openai_key_global || "",
+          openai_key_global: "",
+          remover_openai_key_global: false,
           favicon_base64: response.data.favicon_base64 || "",
           logo_base64: response.data.logo_base64 || "",
         };
         setFormData(loadedData);
         setSavedData(loadedData);
+        setOpenaiKeyConfigured(Boolean(response.data.openai_key_global_configurada));
       } catch (error) {
         const backendMessage = error?.response?.data?.detail || error?.message || "Falha ao carregar configurações.";
         setErrorMessage(`Erro ao carregar configurações: ${backendMessage}`);
@@ -47,7 +50,7 @@ export default function ConfiguracoesGlobais() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({ ...prev, [name]: value, ...(name === "openai_key_global" && value ? { remover_openai_key_global: false } : {}) }));
   };
 
   const handleFaviconUpload = (e) => {
@@ -93,7 +96,11 @@ export default function ConfiguracoesGlobais() {
     setSuccessMessage("");
     try {
       await api.put("/admin/configuracoes", formData);
-      setSavedData({ ...formData });
+      const next = { ...formData, openai_key_global: "", remover_openai_key_global: false };
+      setFormData(next);
+      setSavedData(next);
+      if (formData.remover_openai_key_global) setOpenaiKeyConfigured(false);
+      else if (String(formData.openai_key_global || "").trim()) setOpenaiKeyConfigured(true);
       setSuccessMessage("Configurações salvas com sucesso.");
       window.dispatchEvent(new Event("configuracoesUpdated"));
     } catch (error) {
@@ -114,12 +121,6 @@ export default function ConfiguracoesGlobais() {
   return (
     <div className="fm-admin-page fm-admin-settings">
       <PageHeader title="Configurações globais" description="Gerencie a identidade visual da plataforma e a credencial global de fallback de IA." icon={Settings} eyebrow="Super Admin" />
-      <SectionCard title="Integrações por empresa" description="As configurações JEV, os usuários, os agentes e as demais integrações pertencem a cada empresa.">
-        <div className="fm-actions">
-          <Link to="/admin/configuracoes/integracoes/jev" className="fm-button fm-button-secondary">Configurar integração JEV · SHADOW</Link>
-          <Link to="/admin" className="fm-button fm-button-ghost">Gerenciar empresas e acessos</Link>
-        </div>
-      </SectionCard>
       {loading && <LoadingState label="Carregando configurações..." />}
       {errorMessage && <div role="alert"><InfoBanner tone="danger">{errorMessage}</InfoBanner></div>}
       {successMessage && <div role="status" aria-live="polite"><InfoBanner tone="success">{successMessage}</InfoBanner></div>}
@@ -153,10 +154,12 @@ export default function ConfiguracoesGlobais() {
                 </div>
               </div>
             </SectionCard>
-            <SectionCard title="Credencial global de IA" description="Chave utilizada como fallback global. O campo permanece protegido.">
+            <SectionCard title="Credencial global de IA" description="Chave de fallback compartilhada. O valor salvo nunca é devolvido pela API.">
               <div className="fm-admin-field">
                 <label htmlFor="global-openai-key">Chave OpenAI global (fallback)</label>
-                <Input id="global-openai-key" type="password" autoComplete="new-password" name="openai_key_global" value={formData.openai_key_global} onChange={handleChange} placeholder="sk-..." />
+                <p className="fm-helper" role="status">{openaiKeyConfigured ? "Credencial configurada. Deixe o campo vazio para preservá-la." : "Credencial não configurada."}</p>
+                <Input id="global-openai-key" type="password" autoComplete="new-password" name="openai_key_global" value={formData.openai_key_global} onChange={handleChange} placeholder={openaiKeyConfigured ? "Nova chave para substituição explícita" : "Informe uma chave para configurar"} />
+                {openaiKeyConfigured && <label className="flex items-center gap-2"><input type="checkbox" name="remover_openai_key_global" checked={formData.remover_openai_key_global} onChange={(event) => setFormData((current) => ({ ...current, remover_openai_key_global: event.target.checked, openai_key_global: "" }))} />Remover a credencial global</label>}
               </div>
             </SectionCard>
             <div className="fm-admin-form-actions">

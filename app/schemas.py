@@ -486,6 +486,7 @@ class ConfiguracaoGlobalUpdate(BaseModel):
     nome_sistema: str
     cor_primaria: str
     openai_key_global: str | None = None
+    remover_openai_key_global: bool = False
     favicon_base64: str | None = None
     logo_base64: str | None = None
 
@@ -494,7 +495,7 @@ class ConfiguracaoGlobalResponse(BaseModel):
     id: int
     nome_sistema: str
     cor_primaria: str
-    openai_key_global: str | None = None
+    openai_key_global_configurada: bool = False
     favicon_base64: str | None = None
     logo_base64: str | None = None
     model_config = ConfigDict(from_attributes=True)

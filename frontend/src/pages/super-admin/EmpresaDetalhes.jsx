@@ -4,11 +4,9 @@ import {
   ArrowLeft,
   BrainCircuit,
   Building2,
-  CalendarDays,
   Columns3,
   CreditCard,
   Database,
-  Image as ImageIcon,
   KeyRound,
   Link2,
   MessageSquare,
@@ -19,13 +17,12 @@ import {
   RefreshCw,
   Search,
   Save,
-  Settings2,
   ShieldCheck,
   Sparkles,
   UserCog,
 } from "lucide-react";
 
-import { ActionButton, EmptyState, ErrorState, InfoBanner, LoadingState, MetricCard, PageHeader, SectionCard, StatusBadge, Tabs } from "../../components/ui";
+import { ActionButton, EmptyState, ErrorState, InfoBanner, LoadingState, MetricCard, PageHeader, SectionCard, StatusBadge } from "../../components/ui";
 import AdminDialog from "../../components/admin/AdminDialog";
 import "./EmpresaDetalhes.css";
 
@@ -34,19 +31,19 @@ import EmpresaConexoesManager from "../../components/EmpresaConexoesManager";
 import EmpresaCrmEtapasManager from "../../components/EmpresaCrmEtapasManager";
 import EmpresaPaymentManager from "../../components/EmpresaPaymentManager";
 import RAGManager from "../../components/RAGManager";
+import Instagram from "../tenant/Instagram";
+import TrafficMeta from "../tenant/TrafficMeta";
+import { COMPANY_ADMIN_SECTIONS, resolveCompanyAdminSection } from "../../utils/superAdminNavigation";
 
-const TABS = [
-  { id: "visao-geral", label: "Visão Geral", icon: Building2 },
-  { id: "usuarios", label: "Usuários", icon: UserCog },
-  { id: "agente", label: "Atendimento e IA", icon: BrainCircuit },
-  { id: "regras", label: "Regras Comerciais", icon: Columns3 },
-  { id: "conhecimento", label: "Base de Conhecimento", icon: Database },
-  { id: "canais", label: "Canais e Credenciais", icon: Link2 },
-  { id: "pagamentos", label: "Pagamentos", icon: CreditCard },
-  { id: "agenda-automacoes", label: "Agenda e Automações", icon: CalendarDays },
-  { id: "imagens", label: "Imagens / Visão", icon: ImageIcon },
-  { id: "diagnostico", label: "Diagnóstico", icon: ShieldCheck },
-];
+const COMPANY_SECTION_DESCRIPTIONS = {
+  "visao-geral": "Resumo operacional e dados principais da empresa.",
+  "atendimento-ia": "Configuração do atendimento, conhecimento e modelo da empresa.",
+  "crm-regras": "Etapas e regras comerciais do CRM desta empresa.",
+  canais: "Conexões e credenciais administradas pela Ferrioli, separadas por finalidade.",
+  pagamentos: "Configuração do provedor de pagamentos desta empresa.",
+  usuarios: "Acessos e perfis de usuário vinculados a esta empresa.",
+  diagnosticos: "Sinais operacionais observados e ferramentas de diagnóstico da empresa.",
+};
 
 const IA_CONFIG_DEFAULT = {
   ia_personalidade: "",
@@ -109,8 +106,8 @@ export default function EmpresaDetalhes() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [empresa, setEmpresa] = useState(null);
   const [loading, setLoading] = useState(true);
-  const requestedTab = searchParams.get("tab");
-  const tabAtiva = TABS.some((tab) => tab.id === requestedTab) ? requestedTab : "visao-geral";
+  const tabAtiva = resolveCompanyAdminSection(location);
+  const activeSectionLabel = COMPANY_ADMIN_SECTIONS.find(({ id }) => id === tabAtiva)?.label || "Visão geral";
   const [loadError, setLoadError] = useState("");
   const [usuariosError, setUsuariosError] = useState("");
   const [usuarioError, setUsuarioError] = useState("");
@@ -178,10 +175,11 @@ export default function EmpresaDetalhes() {
     return selected && !matching.some((item) => item.id === selected.id) ? [selected, ...matching] : matching;
   }, [modelOptions, modelSearch, selectedModelId]);
 
-  const alterarTab = (tabId) => {
+  const alterarTab = (sectionId) => {
     const next = new URLSearchParams(searchParams);
-    if (tabId === "visao-geral") next.delete("tab");
-    else next.set("tab", tabId);
+    next.delete("tab");
+    if (sectionId === "visao-geral") next.delete("area");
+    else next.set("area", sectionId);
     setSearchParams(next, { state: location.state });
   };
 
@@ -567,10 +565,8 @@ export default function EmpresaDetalhes() {
   };
 
   const irParaTesteAgente = () => {
-    localStorage.setItem("impersonated_empresa_id", String(empresaId));
-    const params = new URLSearchParams();
-    params.set("empresaId", String(empresaId));
-    navigate(`/painel/simulador?${params.toString()}`);
+    setConfirmarTeste(false);
+    navigate(`/admin/empresas/${empresaId}/atendimento-ia/simulador`);
   };
 
   if (loading) return <LoadingState label="Carregando dados da empresa..." />;
@@ -580,32 +576,36 @@ export default function EmpresaDetalhes() {
   return (
     <div className="admin-company-details space-y-6">
       <Link to={companiesReturn} className="admin-company-back"><ArrowLeft size={16} aria-hidden="true" /> Voltar para empresas</Link>
-      <PageHeader title={empresaNome} icon={Building2} eyebrow="Gestão de empresas" description="Gerencie acessos, agente, canais e configurações desta empresa." actions={<StatusBadge tone="info">Empresa selecionada</StatusBadge>} />
-      <Tabs items={TABS.map((tab) => ({ ...tab, panelId: `company-panel-${tab.id}` }))} value={tabAtiva} onChange={alterarTab} label="Seções da empresa" className="admin-company-tabs" />
-      <div role="tabpanel" id={`company-panel-${tabAtiva}`} aria-label={TABS.find((tab) => tab.id === tabAtiva)?.label} tabIndex={0} className="admin-company-panel">
+      <PageHeader title={empresaNome} icon={Building2} eyebrow="Gestão da empresa" description={COMPANY_SECTION_DESCRIPTIONS[tabAtiva] || "Administre esta empresa no contexto selecionado."} actions={<StatusBadge tone="info">{activeSectionLabel}</StatusBadge>} />
+      <section aria-label={activeSectionLabel} tabIndex={-1} className="admin-company-panel">
       {tabAtiva === "visao-geral" && (
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <MetricCard label="Conexão WhatsApp" value={overviewLoading ? "Consultando…" : overview.whatsappStatusLabel} helper={overviewLoading ? "Consultando a conexão da empresa." : overview.whatsappProviderLabel} icon={MessageSquare} tone={overview.whatsappOnline ? "success" : "warning"} />
             <MetricCard label="Interações registradas" value={overviewLoading ? "Consultando…" : overview.totalInteracoes ?? "Não disponível"} helper="Histórico real de mensagens da empresa." icon={Database} />
-            <SectionCard title="Acesso rápido" description="Configure a empresa ou teste o atendimento no contexto do cliente.">
+            <SectionCard title="Acesso rápido" description="Configure a empresa ou simule o atendimento com as definições atuais.">
               <div className="fm-actions">
-                <ActionButton type="button" onClick={() => setConfirmarTeste(true)} icon={BrainCircuit}>Testar Agente</ActionButton>
+                <ActionButton type="button" onClick={() => setConfirmarTeste(true)} icon={BrainCircuit}>Testar atendimento</ActionButton>
                 <ActionButton type="button" variant="secondary" onClick={() => alterarTab("canais")} icon={Link2}>Gerenciar canais</ActionButton>
               </div>
             </SectionCard>
           </div>
           {!overviewLoading && (overview.whatsappStatus === "unknown" || overview.totalInteracoes === null) ? <InfoBanner tone="warning">Parte dos indicadores não pôde ser consultada. A informação indisponível não representa ausência de conexão ou de mensagens.</InfoBanner> : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Nome</p>
-              <p className="mt-2 text-sm text-slate-700">{empresa.nome_empresa}</p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Tenant ID</p>
-              <p className="mt-2 break-all text-xs font-mono text-slate-600">{empresa.id}</p>
-            </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <form onSubmit={salvarEmpresa} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Building2 size={16} />Dados da empresa</h3>
+              <div><label htmlFor="company-field-12" className="mb-1 block text-xs text-slate-500">Nome</label><input id="company-field-12" value={editEmpresa.nome_empresa} onChange={(e) => setEditEmpresa((p) => ({ ...p, nome_empresa: e.target.value }))} className="fm-field" /></div>
+              <div><label htmlFor="company-field-13" className="mb-1 block text-xs text-slate-500">Área de atuação</label><input id="company-field-13" value={editEmpresa.area_atuacao} onChange={(e) => setEditEmpresa((p) => ({ ...p, area_atuacao: e.target.value }))} className="fm-field" /></div>
+              <p className="fm-helper">Identificador da empresa: <span className="break-all font-mono">{empresa.id}</span></p>
+              <ActionButton type="submit" disabled={savingEmpresa}><Save size={14} />{savingEmpresa ? "Salvando..." : "Salvar dados"}</ActionButton>
+            </form>
+            <SectionCard title="Atalhos operacionais" description="Abra a área de administração necessária para este cliente.">
+              <div className="fm-actions">
+                <ActionButton type="button" variant="secondary" onClick={() => alterarTab("atendimento-ia")} icon={BrainCircuit}>Atendimento e IA</ActionButton>
+                <ActionButton type="button" variant="secondary" onClick={() => alterarTab("crm-regras")} icon={Columns3}>CRM e regras</ActionButton>
+                <ActionButton type="button" variant="secondary" onClick={() => alterarTab("usuarios")} icon={UserCog}>Usuários e permissões</ActionButton>
+              </div>
+            </SectionCard>
           </div>
         </div>
       )}
@@ -719,7 +719,7 @@ export default function EmpresaDetalhes() {
         </div>
       )}
 
-      {tabAtiva === "agente" && (
+      {tabAtiva === "atendimento-ia" && (
         <form onSubmit={salvarIaConfig} className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -738,7 +738,7 @@ export default function EmpresaDetalhes() {
                 to={`/admin/empresas/${empresaId}/atendimento-ia`}
                 className="inline-flex min-h-11 items-center rounded-lg border border-indigo-200 bg-white px-3.5 py-2 text-sm font-semibold text-indigo-800 transition-colors hover:bg-indigo-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700"
               >
-                Prompts e diagnósticos
+                Prompts, versões e diagnósticos
               </Link>
             </div>
           </div>
@@ -988,7 +988,7 @@ export default function EmpresaDetalhes() {
         </form>
       )}
 
-      {tabAtiva === "regras" && (
+      {tabAtiva === "crm-regras" && (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
@@ -1003,81 +1003,25 @@ export default function EmpresaDetalhes() {
         </div>
       )}
 
-      {tabAtiva === "conhecimento" && (
+      {tabAtiva === "atendimento-ia" && (
         <SectionCard title="Base de conhecimento" description="Gerencie as informações que apoiam as respostas do agente desta empresa." icon={Database}>
           <RAGManager empresaId={String(empresa.id)} />
         </SectionCard>
       )}
 
+      {tabAtiva === "atendimento-ia" && (
+        <form onSubmit={salvarOpenAI} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Sparkles size={16} />Credencial OpenAI desta empresa</h3>
+          <p className="text-xs text-slate-500">{openaiKeyConfigured ? "Credencial configurada. Digite outra somente para substituí-la; o campo vazio preserva a atual." : "Nenhuma credencial por empresa está configurada. O catálogo usa a chave associada a este tenant."}</p>
+          <label htmlFor="company-field-14" className="block text-xs text-slate-500">Chave OpenAI</label>
+          <input id="company-field-14" type="password" autoComplete="new-password" value={openaiApiKey} onChange={(e) => setOpenaiApiKey(e.target.value)} placeholder={openaiKeyConfigured ? "Nova chave para substituição explícita" : "Informe a chave OpenAI desta empresa"} className="fm-field" />
+          <ActionButton type="submit" disabled={savingCredenciais}><Save size={14} />{savingCredenciais ? "Salvando..." : "Salvar credencial"}</ActionButton>
+        </form>
+      )}
+
       {tabAtiva === "canais" && (
         <div className="space-y-4">
-          <SectionCard title="Campanhas e integrações Meta" description="A equipe Ferrioli administra credenciais e ativos de anúncios desta empresa." icon={Link2} actions={<Link to={`/admin/empresas/${empresaId}/meta`} className="inline-flex min-h-11 items-center rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">Abrir canais e campanhas</Link>} />
-          <SectionCard title="Automação do Instagram" description="Credencial técnica administrada pelo Super Admin; publicações e regras ficam na área de campanhas do cliente." icon={Link2} actions={<Link to={`/admin/empresas/${empresaId}/instagram`} className="inline-flex min-h-11 items-center rounded-lg border border-indigo-200 bg-white px-4 py-2 text-sm font-semibold text-indigo-800 hover:bg-indigo-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">Gerenciar conexão Instagram</Link>} />
-          <div className="grid gap-4 lg:grid-cols-2">
-          <form
-            onSubmit={salvarEmpresa}
-            className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-              <Settings2 size={16} />
-              Dados da Empresa
-            </h3>
-            <div>
-              <label htmlFor="company-field-12" className="mb-1 block text-xs text-slate-500">Nome</label>
-              <input id="company-field-12"
-                value={editEmpresa.nome_empresa}
-                onChange={(e) => setEditEmpresa((p) => ({ ...p, nome_empresa: e.target.value }))}
-                className="fm-field"
-              />
-            </div>
-            <div>
-              <label htmlFor="company-field-13" className="mb-1 block text-xs text-slate-500">Área de atuação</label>
-              <input id="company-field-13"
-                value={editEmpresa.area_atuacao}
-                onChange={(e) => setEditEmpresa((p) => ({ ...p, area_atuacao: e.target.value }))}
-                className="fm-field"
-              />
-            </div>
-            <ActionButton
-              type="submit"
-              disabled={savingEmpresa}
-            >
-              <Save size={14} />
-              {savingEmpresa ? "Salvando..." : "Salvar dados"}
-            </ActionButton>
-          </form>
-
-          <form
-            onSubmit={salvarOpenAI}
-            className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-              <Sparkles size={16} />
-              Credencial OpenAI por Tenant
-            </h3>
-            <p className="text-xs text-slate-500">
-              {openaiKeyConfigured ? "Credencial OpenAI configurada para este tenant. Digite uma nova chave somente para substituí-la; o campo vazio preserva a atual." : "Nenhuma credencial OpenAI configurada para este tenant. O catálogo exige uma chave associada a esta empresa."}
-            </p>
-            <div>
-              <label htmlFor="company-field-14" className="mb-1 block text-xs text-slate-500">OPENAI API Key</label>
-              <input id="company-field-14"
-                type="password"
-                value={openaiApiKey}
-                onChange={(e) => setOpenaiApiKey(e.target.value)}
-                placeholder={openaiKeyConfigured ? "Nova chave para substituição explícita" : "Informe a chave OpenAI deste tenant"}
-                className="fm-field"
-              />
-            </div>
-            <ActionButton
-              type="submit"
-              disabled={savingCredenciais}
-            >
-              <Save size={14} />
-              {savingCredenciais ? "Salvando..." : "Salvar credencial"}
-            </ActionButton>
-          </form>
-        </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionCard title="Conexões de atendimento" description="WhatsApp Oficial e providers auxiliares permanecem associados aos seus contratos próprios.">
             <EmpresaConexoesManager
               empresaId={empresa.id}
               empresaNome={empresa.nome_empresa}
@@ -1086,7 +1030,11 @@ export default function EmpresaDetalhes() {
               disparoDelayMax={empresa.disparo_delay_max}
               onConexaoDisparoUpdated={carregarEmpresa}
             />
-          </div>
+          </SectionCard>
+          <SectionCard title="Automação do Instagram" description="Gerencie a conexão usando a credencial própria deste canal, sem reutilizar o token da Marketing API.">
+            <Instagram adminCredentials />
+          </SectionCard>
+          <TrafficMeta adminTools adminToolsView="credentials" />
         </div>
       )}
 
@@ -1094,47 +1042,7 @@ export default function EmpresaDetalhes() {
         <div className="space-y-4"><SectionCard title="Pagamentos" description="Configure o provedor de pagamentos e suas credenciais para esta empresa." icon={CreditCard} /><EmpresaPaymentManager empresaId={String(empresa.id)} onNotify={setToast} /></div>
       )}
 
-      {tabAtiva === "agenda-automacoes" && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-              <CalendarDays size={16} />
-              Agenda
-            </h3>
-            <p className="mt-2 text-sm text-slate-500">
-              A agenda operacional permanece no painel cliente, mas políticas de como o agente coleta dados e confirma
-              visitas ficam na configuração do agente pelo Super Admin.
-            </p>
-            <ActionButton type="button" variant="secondary" onClick={() => alterarTab("agente")}>Configurar agente</ActionButton>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-              <Sparkles size={16} />
-              Automações
-            </h3>
-            <p className="mt-2 text-sm text-slate-500">
-              Follow-ups e campanhas podem ser operados pelo cliente. Configurações técnicas e roteamento permanecem sob
-              responsabilidade do Super Admin.
-            </p>
-            <ActionButton type="button" variant="secondary" onClick={() => alterarTab("agente")}>Configurar automações do agente</ActionButton>
-          </div>
-        </div>
-      )}
-
-      {tabAtiva === "imagens" && (
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-            <ImageIcon size={16} />
-            Imagens / Visão
-          </h3>
-          <p className="mt-2 text-sm text-slate-500">
-            A capacidade de análise de imagem é genérica da plataforma. Provider, modelo, BYOK, fallback e confirmação
-            humana devem ser administrados aqui pelo Super Admin quando houver UI dedicada.
-          </p>
-        </div>
-      )}
-
-      {tabAtiva === "diagnostico" && (
+      {tabAtiva === "diagnosticos" && (
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
@@ -1149,7 +1057,7 @@ export default function EmpresaDetalhes() {
               type="button"
               onClick={() => setConfirmarTeste(true)}
             >
-              Testar Agente
+              Testar atendimento
             </ActionButton>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1163,15 +1071,15 @@ export default function EmpresaDetalhes() {
         </div>
       )}
 
-      </div>
+      </section>
       {toast ? <div className="admin-company-toast" role={/^(Falha|Não foi possível)/.test(toast) ? "alert" : "status"} aria-live="polite">{toast}</div> : null}
 
       <AdminDialog open={Boolean(statusUsuario)} title={statusUsuario?.ativo ? "Desativar usuário" : "Ativar usuário"} busy={savingStatusUsuario} onClose={() => setStatusUsuario(null)} footer={<><ActionButton type="button" variant="secondary" disabled={savingStatusUsuario} onClick={() => setStatusUsuario(null)}>Cancelar</ActionButton><ActionButton type="button" disabled={savingStatusUsuario} onClick={async () => { setSavingStatusUsuario(true); try { await alternarStatusUsuario(statusUsuario); } finally { setSavingStatusUsuario(false); setStatusUsuario(null); } }}>{savingStatusUsuario ? "Aguarde..." : "Confirmar alteração de acesso"}</ActionButton></>}>
         <InfoBanner tone="warning">{statusUsuario?.ativo ? "O acesso será desativado para" : "O acesso será reativado para"} <strong>{statusUsuario?.nome}</strong> nesta empresa. O perfil de acesso será preservado.</InfoBanner>
       </AdminDialog>
 
-      <AdminDialog open={confirmarTeste} title="Acessar o contexto da empresa" onClose={() => setConfirmarTeste(false)} footer={<><ActionButton type="button" variant="secondary" onClick={() => setConfirmarTeste(false)}>Cancelar</ActionButton><ActionButton type="button" onClick={irParaTesteAgente}>Continuar para o simulador</ActionButton></>}>
-        <InfoBanner tone="warning">Você acessará o simulador como <strong>{empresaNome}</strong>. As ações no painel usam o contexto desta empresa. Use “Encerrar Teste” para retornar à administração.</InfoBanner>
+      <AdminDialog open={confirmarTeste} title="Testar atendimento" onClose={() => setConfirmarTeste(false)} footer={<><ActionButton type="button" variant="secondary" onClick={() => setConfirmarTeste(false)}>Cancelar</ActionButton><ActionButton type="button" onClick={irParaTesteAgente}>Abrir simulador</ActionButton></>}>
+        <InfoBanner tone="warning">O simulador usará as configurações de atendimento de <strong>{empresaNome}</strong> e manterá você na administração da Ferrioli. O teste pode consumir tokens do provider configurado; use apenas conteúdo sintético.</InfoBanner>
       </AdminDialog>
 
       <AdminDialog open={Boolean(senhaExibida)} title="Senha temporária" onClose={() => setSenhaExibida(null)} footer={<><ActionButton type="button" variant="secondary" onClick={copiarSenhaExibida}>Copiar</ActionButton><ActionButton type="button" onClick={() => setSenhaExibida(null)}>Entendi</ActionButton></>}>

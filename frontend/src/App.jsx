@@ -6,6 +6,7 @@ import { LoadingState } from "./components/ui";
 const Login = lazy(() => import("./pages/Login"));
 const SuperAdminLayout = lazy(() => import("./layouts/SuperAdminLayout"));
 const AdminAtendimentoIA = lazy(() => import("./pages/super-admin/AdminAtendimentoIA"));
+const Simulador = lazy(() => import("./pages/tenant/Simulador"));
 const AdminMetaEmpresa = lazy(() => import("./pages/super-admin/AdminMetaEmpresa"));
 const AdminInstagramEmpresa = lazy(() => import("./pages/super-admin/AdminInstagramEmpresa"));
 const TenantLayout = lazy(() => import("./layouts/TenantLayout"));
@@ -13,6 +14,9 @@ const Empresas = lazy(() => import("./pages/super-admin/Empresas"));
 const AdminAgentes = lazy(() => import("./pages/super-admin/AdminAgentes"));
 const ConfiguracoesGlobais = lazy(() => import("./pages/super-admin/ConfiguracoesGlobais"));
 const JevIntegration = lazy(() => import("./pages/super-admin/JevIntegration"));
+const AdminOperacaoSaude = lazy(() => import("./pages/super-admin/AdminOperacaoSaude"));
+const IntegracoesGlobais = lazy(() => import("./pages/super-admin/IntegracoesGlobais"));
+const SegurancaAuditoria = lazy(() => import("./pages/super-admin/SegurancaAuditoria"));
 const EmpresaDetalhes = lazy(() => import("./pages/super-admin/EmpresaDetalhes"));
 const FunnelDashboard = lazy(() => import("./pages/tenant/FunnelDashboard"));
 const QualityDashboard = lazy(() => import("./pages/tenant/QualityDashboard"));
@@ -96,11 +100,15 @@ function App() {
           <Route path="agentes" element={<AdminAgentes />} />
           <Route path="agente" element={<Navigate to="/admin/agentes" replace />} />
           <Route path="orquestrador" element={<Navigate to="/admin/agentes" replace />} />
+        <Route path="operacao" element={<AdminOperacaoSaude />} />
+        <Route path="integracoes" element={<IntegracoesGlobais />} />
+        <Route path="seguranca" element={<SegurancaAuditoria />} />
           <Route path="empresas/:empresaId" element={<EmpresaDetalhes />} />
           <Route path="empresas/:empresaId/atendimento-ia" element={<AdminAtendimentoIA />}>
             <Route index element={<Navigate to="prompts" replace />} />
             <Route path="prompts" element={<PromptOptimizer />} />
             <Route path="jev" element={<JevDiagnostics />} />
+            <Route path="simulador" element={<Simulador adminMode />} />
           </Route>
           <Route path="empresas/:empresaId/meta" element={<AdminMetaEmpresa />} />
           <Route path="empresas/:empresaId/instagram" element={<AdminInstagramEmpresa />} />

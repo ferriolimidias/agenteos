@@ -22,6 +22,7 @@
     "validate:artifacts": "node scripts/validate-panel-artifacts.mjs --root dist",
     "test:artifacts": "node --test scripts/validate-panel-artifacts.test.mjs",
     "test:panel-smoke": "node scripts/smoke-panel.cjs",
+    "test:ux3-smoke": "node scripts/smoke-ux3-super-admin.cjs",
     "test:sender-operations": "node --test src/utils/conversionOperations.test.js",
     "test:journey": "node --test src/utils/commercialJourney.test.js",
     "test:funnel": "node --test src/utils/commercialFunnel.test.js",

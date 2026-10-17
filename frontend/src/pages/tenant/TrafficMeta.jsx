@@ -316,9 +316,11 @@ function conversionHistoryTone(status) {
   return "default";
 }
 
-export default function TrafficMeta({ adminTools = false } = {}) {
+export default function TrafficMeta({ adminTools = false, adminToolsView = "full" } = {}) {
   const { empresaId: routedEmpresaId } = useParams();
   const empresaId = adminTools ? routedEmpresaId : getActiveEmpresaId();
+  const showMetaCredentials = adminTools && adminToolsView !== "campaigns";
+  const showMetaCampaigns = !adminTools || adminToolsView !== "credentials";
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1033,7 +1035,10 @@ export default function TrafficMeta({ adminTools = false } = {}) {
 
   useEffect(() => {
     let active = true;
-    if (!empresaId) return undefined;
+    if (!empresaId || !showMetaCampaigns) {
+      setDraftReady(false);
+      return undefined;
+    }
     loadCampaignDraft(empresaId).then((draft) => {
       if (!active || !draft) return;
       const stale = draft.createdStructure?.partial || ["partial_error", "error"].includes(draft.createdStructure?.status);
@@ -1048,19 +1053,19 @@ export default function TrafficMeta({ adminTools = false } = {}) {
       }
     }).finally(() => { if (active) setDraftReady(true); });
     return () => { active = false; };
-  }, [empresaId]);
+  }, [empresaId, showMetaCampaigns]);
 
   useEffect(() => {
-    if (!draftReady || !empresaId) return undefined;
+    if (!draftReady || !empresaId || !showMetaCampaigns) return undefined;
     const timer = window.setTimeout(() => saveCampaignDraft(empresaId, { campaignForm, createdStructure }), 250);
     return () => window.clearTimeout(timer);
-  }, [campaignForm, createdStructure, draftReady, empresaId]);
+  }, [campaignForm, createdStructure, draftReady, empresaId, showMetaCampaigns]);
 
   useEffect(() => {
-    if (!showNewCampaign || !empresaId) return undefined;
+    if (!showMetaCampaigns || !showNewCampaign || !empresaId) return undefined;
     const timer = window.setTimeout(() => loadCampaignReadiness(campaignForm), 250);
     return () => window.clearTimeout(timer);
-  }, [showNewCampaign, empresaId, campaignForm.page_id, campaignForm.whatsapp_connection_id, assetForm.page_id, assetForm.whatsapp_connection_id, config.page_id, config.whatsapp_connection_id]);
+  }, [showMetaCampaigns, showNewCampaign, empresaId, campaignForm.page_id, campaignForm.whatsapp_connection_id, assetForm.page_id, assetForm.whatsapp_connection_id, config.page_id, config.whatsapp_connection_id]);
 
   const visibleCreationItems = createdStructure?.pipeline?.ads?.length
     ? createdStructure.pipeline.ads.map((item, index) => ({ ...item, sequence: item.sequence || index + 1 }))
@@ -1078,8 +1083,8 @@ export default function TrafficMeta({ adminTools = false } = {}) {
   return (
     <div className="ux05-analytics ux05-meta space-y-6">
       <PageHeader
-        title={adminTools ? "Canais e campanhas Meta" : "Anúncios Meta"}
-        description={adminTools ? "Administre a configuração técnica e acompanhe campanhas desta empresa." : "Prepare anúncios para levar novos clientes à conversa oficial do WhatsApp."}
+        title={adminTools ? adminToolsView === "credentials" ? "Marketing API, ativos e conversões" : adminToolsView === "campaigns" ? "Campanhas Meta" : "Canais e campanhas Meta" : "Anúncios Meta"}
+        description={adminTools ? adminToolsView === "credentials" ? "Estado real das credenciais, permissões, ativos e mensuração da empresa." : adminToolsView === "campaigns" ? "Consulte campanhas e prepare uma nova campanha somente após verificar a elegibilidade." : "Administre a configuração técnica e acompanhe campanhas desta empresa." : "Prepare anúncios para levar novos clientes à conversa oficial do WhatsApp."}
         icon={BarChart3}
         actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadStatus}>Atualizar</ActionButton>}
       />
@@ -1088,7 +1093,7 @@ export default function TrafficMeta({ adminTools = false } = {}) {
 
       {!adminTools ? <InfoBanner tone="info" icon={ShieldCheck}>As conexões e permissões técnicas são administradas pela Ferrioli. Aqui você pode preparar campanhas usando os ativos autorizados para sua empresa.</InfoBanner> : null}
 
-      {adminTools ? <SectionCard title="Status da integração" icon={ShieldCheck} className="ux05-integration-overview">
+      {showMetaCredentials ? <SectionCard title="Status da integração" icon={ShieldCheck} className="ux05-integration-overview">
         <div className="ux05-meta-status grid gap-4 lg:grid-cols-4">
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between gap-3">
@@ -1192,7 +1197,7 @@ export default function TrafficMeta({ adminTools = false } = {}) {
         </div>
       </SectionCard> : null}
 
-      {adminTools ? <SectionCard
+      {showMetaCredentials ? <SectionCard
         title="Conta de anúncios Meta"
         description="Informe a conta de anúncios utilizada por esta empresa."
       >
@@ -1260,7 +1265,7 @@ export default function TrafficMeta({ adminTools = false } = {}) {
         )}
       </SectionCard> : null}
 
-      {adminTools ? <SectionCard
+      {showMetaCredentials ? <SectionCard
         title="Ativos Meta da empresa"
         description="Estes ativos formam o grafo usado para criar Campaign, AdSet, Creative e Ad."
         icon={ShieldCheck}
@@ -1323,7 +1328,7 @@ export default function TrafficMeta({ adminTools = false } = {}) {
         </div>
       </SectionCard> : null}
 
-      {adminTools ? <SectionCard
+      {showMetaCredentials ? <SectionCard
         title="Conversões Meta / WhatsApp"
         description="Status de mensuração, readiness e mappings. A credencial vem da conexão Meta oficial da empresa."
         icon={ShieldCheck}
@@ -1441,7 +1446,7 @@ export default function TrafficMeta({ adminTools = false } = {}) {
         </div>
       </SectionCard> : null}
 
-      <SectionCard
+      {showMetaCampaigns ? <SectionCard
         title={adminTools ? "Campanha WhatsApp de Conversão" : "Anúncios para WhatsApp"}
         description={adminTools ? "Campaign, AdSet, Creatives e Ads são preparados pausados apenas quando a conta estiver elegível para conversão." : "Crie uma campanha para iniciar conversas no WhatsApp oficial. Uma pessoa precisa revisar e confirmar a criação; o anúncio começa pausado."}
         actions={writesEnabled || adminTools ? <ActionButton icon={Plus} onClick={openNewCampaign}>Nova campanha</ActionButton> : null}
@@ -1637,9 +1642,9 @@ export default function TrafficMeta({ adminTools = false } = {}) {
             ) : null}
           </div>
         )}
-      </SectionCard>
+      </SectionCard> : null}
 
-      <SectionCard className="ux05-existing-campaigns" title="Campanhas existentes" actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadCampaigns}>Atualizar</ActionButton>}>
+      {showMetaCampaigns ? <SectionCard className="ux05-existing-campaigns" title="Campanhas existentes" actions={<ActionButton variant="secondary" icon={RefreshCw} onClick={loadCampaigns}>Atualizar</ActionButton>}>
           <div className="space-y-3">
             <select className="fm-field w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" value={selectedCampaignId} onChange={(e) => selectExistingCampaign(e.target.value)}>
               <option value="">Selecione uma campanha</option>
@@ -1685,9 +1690,9 @@ export default function TrafficMeta({ adminTools = false } = {}) {
               ) : null}
             </div>
           </div>
-      </SectionCard>
+      </SectionCard> : null}
 
-      {adminTools && inspection ? (
+      {adminTools && adminToolsView !== "credentials" && inspection ? (
         <SectionCard title="Dados reais da campanha">
           <div className="space-y-4 text-sm text-slate-700">
             <div className="rounded-lg border border-slate-200 p-4">
@@ -1760,10 +1765,10 @@ export default function TrafficMeta({ adminTools = false } = {}) {
               </div>
             ) : null}
           </div>
-        </SectionCard>
+      </SectionCard>
       ) : null}
 
-      {adminTools && inspection ? (
+      {adminTools && adminToolsView !== "credentials" && inspection ? (
         <SectionCard title="Diagnóstico avançado">
           <JsonPreview value={inspection} />
         </SectionCard>

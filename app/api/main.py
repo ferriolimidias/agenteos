@@ -221,6 +221,7 @@ async def restrict_meta_reviewer_surface(request: Request, call_next):
 app.include_router(websockets.router, prefix="/api", tags=["websockets"])
 app.include_router(empresas.router, prefix="/api")
 app.include_router(empresas.admin_router, prefix="/api")
+app.include_router(empresas.security_router, prefix="/api")
 app.include_router(agentes.router, prefix="/api")
 app.include_router(api_connections.router, prefix="/api")
 app.include_router(orquestrador.router, prefix="/api/admin", dependencies=[Depends(auth.require_super_admin)])
